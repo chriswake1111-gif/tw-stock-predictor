@@ -1,12 +1,36 @@
 /**
  * 杜金龍台股量化預測 - 機構級金融終端 Frontend App
- * 整合 TradingView Lightweight Charts 與 FastAPI REST API
+ * 整合 TradingView Lightweight Charts (相容 v3.8 / v4 / v5 API) 與 FastAPI REST API
  */
 
 let chart = null;
 let candlestickSeries = null;
 let volumeSeries = null;
 let maSeriesMap = {};
+
+// 跨版本系列建立輔助函式
+function createSeries(chartObj, typeStr, options) {
+    if (typeStr === 'Candlestick') {
+        if (chartObj.addCandlestickSeries) {
+            return chartObj.addCandlestickSeries(options);
+        } else if (chartObj.addSeries && LightweightCharts.CandlestickSeries) {
+            return chartObj.addSeries(LightweightCharts.CandlestickSeries, options);
+        }
+    } else if (typeStr === 'Histogram') {
+        if (chartObj.addHistogramSeries) {
+            return chartObj.addHistogramSeries(options);
+        } else if (chartObj.addSeries && LightweightCharts.HistogramSeries) {
+            return chartObj.addSeries(LightweightCharts.HistogramSeries, options);
+        }
+    } else if (typeStr === 'Line') {
+        if (chartObj.addLineSeries) {
+            return chartObj.addLineSeries(options);
+        } else if (chartObj.addSeries && LightweightCharts.LineSeries) {
+            return chartObj.addSeries(LightweightCharts.LineSeries, options);
+        }
+    }
+    throw new Error(`無法建立 TradingView 系列: ${typeStr}`);
+}
 
 // 初始化 TradingView 圖表
 function initTradingViewChart() {
@@ -40,7 +64,7 @@ function initTradingViewChart() {
     });
 
     // 1. K 線 Candlestick Series
-    candlestickSeries = chart.addCandlestickSeries({
+    candlestickSeries = createSeries(chart, 'Candlestick', {
         upColor: '#ef4444',
         downColor: '#22c55e',
         borderUpColor: '#ef4444',
@@ -50,7 +74,7 @@ function initTradingViewChart() {
     });
 
     // 2. 成交量 Volume Series
-    volumeSeries = chart.addHistogramSeries({
+    volumeSeries = createSeries(chart, 'Histogram', {
         color: '#3b82f6',
         priceFormat: { type: 'volume' },
         priceScaleId: '',
@@ -61,7 +85,7 @@ function initTradingViewChart() {
     const maColors = { 8: '#22d3ee', 13: '#fb923c', 21: '#e879f9', 55: '#34d399', 144: '#3b82f6' };
     maSeriesMap = {};
     for (const p of [8, 13, 21, 55, 144]) {
-        maSeriesMap[p] = chart.addLineSeries({
+        maSeriesMap[p] = createSeries(chart, 'Line', {
             color: maColors[p],
             lineWidth: 1.5,
             title: `SMA${p}`,
