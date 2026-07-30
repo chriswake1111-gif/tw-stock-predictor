@@ -39,14 +39,14 @@ def load_ohlcv_data(symbol: str, db_path: str = "data/cache.db"):
 def compute_engine_analysis(symbol: str, db_path: str = "data/cache.db"):
     twse_df = load_ohlcv_data(symbol, db_path)
     if twse_df.empty:
-        return {}, pd.DataFrame(), {}, {}
+        return {}, pd.DataFrame(), {}, {}, {}, {}
 
     wave_engine = WaveFibonacciEngine(config_path="config/config.yaml")
     ma_engine = MADeductionEngine(config_path="config/config.yaml")
     val_engine = ValuationEVAEngine(config_path="config/config.yaml")
     sentiment_engine = MarketSentimentEngine(db_path=db_path, config_path="config/config.yaml")
 
-    params = wave_engine.get_symbol_wave_params(symbol)
+    params = wave_engine.get_symbol_wave_params(symbol, twse_df)
     targets = wave_engine.calculate_wave_targets(p0=params["p0"], p1=params["p1"], p2=params.get("p2"))
     time_win = wave_engine.check_time_window(twse_df, pivot_date=params.get("pivot_date", "2022-10-25"))
 
@@ -54,10 +54,15 @@ def compute_engine_analysis(symbol: str, db_path: str = "data/cache.db"):
     resonance_series = ma_engine.detect_resonance_signal(analyzed_df)
     analyzed_df["resonance_signal"] = resonance_series
 
-    # 估值 (以台積電為例)
-    est_eps = val_engine.estimate_future_eps(historical_ttm_eps=42.0)
+    # 估值計算
+    finmind = FinMindCollector(db_path=db_path)
+    clean_stock_id = symbol.replace(".TW", "").replace(".TWO", "").replace("^", "")
+    val_df = finmind.get_valuation(clean_stock_id)
+    
+    last_close = float(twse_df['close'].dropna().iloc[-1])
+    est_eps = val_engine.estimate_future_eps(historical_ttm_eps=round(last_close / 20.0, 2))
     dog_val = val_engine.calculate_dog_master_valuation(eps=est_eps)
-    eva_val = val_engine.calculate_eva_floor(nopat=3500.0, invested_capital=15000.0, total_shares_billion=259.0)
+    eva_val = val_engine.calculate_eva_floor(nopat=last_close * 5.0, invested_capital=last_close * 35.0, total_shares_billion=10.0)
 
     # 熱度
     sentiment = sentiment_engine.check_volume_m1b_overheat(daily_volume_billion=4500.0)
@@ -68,14 +73,16 @@ def create_tu_plotly_chart(df: pd.DataFrame, targets: dict, dog_val: dict, pivot
     """杜氏特化 Plotly 互動圖表：K 線 + 均線扣抵標記 + 費氏時間帶 + 估值通道帶"""
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.75, 0.25])
 
+    clean_df = df.dropna(subset=['open', 'high', 'low', 'close']).copy()
+
     # 1. K 線圖
     fig.add_trace(
         go.Candlestick(
-            x=df['date'],
-            open=df['open'],
-            high=df['high'],
-            low=df['low'],
-            close=df['close'],
+            x=clean_df['date'],
+            open=clean_df['open'],
+            high=clean_df['high'],
+            low=clean_df['low'],
+            close=clean_df['close'],
             name="K 線"
         ),
         row=1, col=1
@@ -84,33 +91,34 @@ def create_tu_plotly_chart(df: pd.DataFrame, targets: dict, dog_val: dict, pivot
     # 2. 費氏均線群 (SMA 8, 13, 21, 55, 144)
     colors = {8: "cyan", 13: "orange", 21: "magenta", 55: "green", 144: "blue"}
     for period in [8, 13, 21, 55, 144]:
-        if f"SMA_{period}" in df.columns:
+        if f"SMA_{period}" in clean_df.columns:
             fig.add_trace(
-                go.Scatter(x=df['date'], y=df[f"SMA_{period}"], mode='lines', name=f"SMA {period}", line=dict(color=colors.get(period, "gray"), width=1.5)),
+                go.Scatter(x=clean_df['date'], y=clean_df[f"SMA_{period}"], mode='lines', name=f"SMA {period}", line=dict(color=colors.get(period, "gray"), width=1.5)),
                 row=1, col=1
             )
 
     # 3. 均線扣抵未來標記 (Deduction Markers)
-    latest_close = df['close'].iloc[-1]
-    for period, color in [(8, "cyan"), (21, "magenta"), (55, "green")]:
-        if f"deduct_val_{period}" in df.columns:
-            deduct_val = df[f"deduct_val_{period}"].iloc[-1]
-            slope_up = latest_close > deduct_val
-            symbol_shape = "star-triangle-up" if slope_up else "star-triangle-down"
-            marker_color = "red" if slope_up else "green"
-            
-            fig.add_trace(
-                go.Scatter(
-                    x=[df['date'].iloc[-1]],
-                    y=[deduct_val],
-                    mode='markers+text',
-                    marker=dict(symbol=symbol_shape, size=12, color=marker_color),
-                    text=[f"扣抵{period:d}: {deduct_val:.1f}"],
-                    textposition="top center",
-                    name=f"扣抵 {period} 日點"
-                ),
-                row=1, col=1
-            )
+    latest_close = clean_df['close'].iloc[-1]
+    for period in [8, 21, 55]:
+        if f"deduct_val_{period}" in clean_df.columns:
+            deduct_val = clean_df[f"deduct_val_{period}"].iloc[-1]
+            if not np.isnan(deduct_val):
+                slope_up = latest_close > deduct_val
+                symbol_shape = "star-triangle-up" if slope_up else "star-triangle-down"
+                marker_color = "red" if slope_up else "green"
+                
+                fig.add_trace(
+                    go.Scatter(
+                        x=[clean_df['date'].iloc[-1]],
+                        y=[deduct_val],
+                        mode='markers+text',
+                        marker=dict(symbol=symbol_shape, size=12, color=marker_color),
+                        text=[f"扣抵{period:d}: {deduct_val:.1f}"],
+                        textposition="top center",
+                        name=f"扣抵 {period} 日點"
+                    ),
+                    row=1, col=1
+                )
 
     # 4. 主人與小狗估值通道帶 (Bands)
     cheap_p = dog_val.get("cheap_price", 400.0)
@@ -122,7 +130,7 @@ def create_tu_plotly_chart(df: pd.DataFrame, targets: dict, dog_val: dict, pivot
     fig.add_hrect(y0=fair_p, y1=exp_p, fillcolor="red", opacity=0.08, line_width=0, annotation_text="昂貴價區間", row=1, col=1)
 
     # 5. 費波南希時間轉折垂直區間帶 (add_vrect)
-    sub_df = df[df['date'] >= pivot_date].reset_index(drop=True)
+    sub_df = clean_df[clean_df['date'] >= pivot_date].reset_index(drop=True)
     for fib in [8, 13, 21, 34, 55, 89, 144, 233]:
         if fib < len(sub_df):
             fib_date = sub_df['date'].iloc[fib]
@@ -135,9 +143,9 @@ def create_tu_plotly_chart(df: pd.DataFrame, targets: dict, dog_val: dict, pivot
             )
 
     # 6. 成交量圖 (Volume Subplot)
-    colors_vol = np.where(df['close'] >= df['open'], 'red', 'green')
+    colors_vol = np.where(clean_df['close'] >= clean_df['open'], 'red', 'green')
     fig.add_trace(
-        go.Bar(x=df['date'], y=df['volume'], name="成交量", marker_color=colors_vol),
+        go.Bar(x=clean_df['date'], y=clean_df['volume'], name="成交量", marker_color=colors_vol),
         row=2, col=1
     )
 
@@ -156,28 +164,52 @@ def main():
     st.caption("融合「波浪理論」、「費波南希時間/空間」、「均線扣抵共振」、「EVA 估值」與「M1B 籌碼過熱指標」")
 
     # 側邊欄 Sidebar
-    st.sidebar.header("⚙️ 系統設定與控制")
-    symbol = st.sidebar.selectbox("請選擇分析標的", ["2330.TW (台積電)", "^TWII (加權指數)"])
-    symbol_code = "^TWII" if "^TWII" in symbol else "2330.TW"
+    st.sidebar.header("⚙️ 系統設定與標的選擇")
+
+    preset_options = [
+        "2330.TW (台積電)",
+        "^TWII (加權指數)",
+        "2317.TW (鴻海)",
+        "2454.TW (聯發科)",
+        "0050.TW (元大台灣50)",
+        "2308.TW (台達電)",
+        "2603.TW (長榮)",
+        "自訂股票代號"
+    ]
     
+    selected_preset = st.sidebar.selectbox("快速選擇熱門標的", preset_options)
+    
+    if selected_preset == "自訂股票代號":
+        custom_code = st.sidebar.text_input("請輸入任意台股代號 (如 2303, 3008, 2382)", value="2303")
+        if not custom_code.endswith(".TW") and not custom_code.endswith(".TWO") and not custom_code.startswith("^"):
+            symbol_code = f"{custom_code}.TW"
+        else:
+            symbol_code = custom_code
+    else:
+        symbol_code = selected_preset.split(" ")[0]
+
     if st.sidebar.button("🔄 一鍵強制重新整理數據 (Force Refresh)"):
         st.cache_data.clear()
         st.rerun()
 
+    st.sidebar.info("💡 提示：本系統支援所有上市櫃股票與 ETF，直接輸入股票代號即可由 Local-First 自動抓取與計算分析！")
+
     # 載入數據與引擎計算
-    targets, df, dog_val, eva_val, time_win, sentiment = compute_engine_analysis(symbol_code)
+    with st.spinner(f"正在載入與計算 {symbol_code} 數據..."):
+        targets, df, dog_val, eva_val, time_win, sentiment = compute_engine_analysis(symbol_code)
 
     if df.empty:
-        st.error("無法載入 K 線數據，請檢查網路或 SQLite 快取")
+        st.error(f"無法載入標的 {symbol_code} 的 K 線數據，請確認股票代號是否正確。")
         return
 
-    latest_row = df.iloc[-1]
+    clean_df = df.dropna(subset=['close'])
+    latest_row = clean_df.iloc[-1]
     is_resonance = latest_row.get("resonance_signal", False)
 
     # 頂部 KPI 卡片 Summary
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("最新收盤價", f"${latest_row['close']:.2f}")
+        st.metric("分析標的 / 最新收盤價", f"{symbol_code}", f"${latest_row['close']:.2f} 元")
     with col2:
         st.metric("多空共振攻擊訊號", "🔥 亮燈發動" if is_resonance else "⚪ 未觸發 (整理)", delta="強攻訊號" if is_resonance else "中立")
     with col3:
@@ -185,14 +217,11 @@ def main():
     with col4:
         st.metric("費氏時間轉折狀態", f"{time_win.get('elapsed_units', 0)} 天", delta=time_win.get('matching_fib') or "正常發展")
 
-    # 頁籤分流 (Tabs)
-    tab1, tab2, tab3 = st.columns(3)
-    
     st.markdown("---")
     
     # 呈現 Plotly 杜氏特化 K 線圖
-    st.subheader("📊 杜氏特化 Plotly K 線圖 (含均線扣抵預判、費氏時間帶與估值通道)")
-    fig = create_tu_plotly_chart(df, targets, dog_val)
+    st.subheader(f"📊 {symbol_code} 杜氏特化 Plotly K 線圖 (含均線扣抵預判、費氏時間帶與估值通道)")
+    fig = create_tu_plotly_chart(clean_df, targets, dog_val, pivot_date=time_win.get("pivot_date", "2022-10-25"))
     st.plotly_chart(fig, use_container_width=True)
 
     # 呈現詳細算圖數據

@@ -28,17 +28,42 @@ class WaveFibonacciEngine:
                 logger.error(f"載入 {self.config_path} 失敗: {str(e)}")
         return {}
 
-    def get_symbol_wave_params(self, symbol: str) -> Dict[str, Any]:
-        """讀取指定標的在 config 中的波浪錨定點位 (P0, P1, P2, pivot_date)"""
+    def get_symbol_wave_params(self, symbol: str, df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
+        """
+        讀取指定標的在 config 中的波浪錨定點位 (P0, P1, P2, pivot_date)。
+        若 config 中未特別設定，且提供了 df，則由歷史 K 線自動錨定歷史最低點 (P0) 與次高點 (P1)。
+        """
         wave_params = self.config.get("wave_parameters", {})
-        if symbol in wave_params:
-            return wave_params[symbol]
-        # 回退處理 (標的相容性)
+        
+        # 符號比對
+        clean_symbol = symbol.replace(".TW", "").replace(".TWO", "")
+        for key in [symbol, clean_symbol, f"{clean_symbol}.TW"]:
+            if key in wave_params:
+                return wave_params[key]
+        
+        # 特殊別名
         if symbol in ["0000", "TAIEX"] and "^TWII" in wave_params:
             return wave_params["^TWII"]
-        if symbol == "2330" and "2330.TW" in wave_params:
-            return wave_params["2330.TW"]
-        
+
+        # 自動錨定機制 (當使用者查詢任意股票且無硬編碼設定時)
+        if df is not None and not df.empty and 'close' in df.columns:
+            try:
+                min_idx = df['close'].idxmin()
+                p0 = float(df.loc[min_idx, 'close'])
+                pivot_date = str(df.loc[min_idx, 'date'])
+                
+                # P0 之後的歷史最高價作為 P1
+                after_p0_df = df.loc[min_idx:]
+                if not after_p0_df.empty:
+                    p1 = float(after_p0_df['close'].max())
+                else:
+                    p1 = float(df['close'].max())
+                
+                p2 = round(p1 - (p1 - p0) * 0.382, 2)
+                return {"p0": p0, "p1": p1, "p2": p2, "pivot_date": pivot_date}
+            except Exception as e:
+                logger.error(f"自動推導 {symbol} 波浪點位失敗: {str(e)}")
+
         # 預設極值錨定
         return {"p0": 12629.0, "p1": 15475.0, "p2": 14001.0, "pivot_date": "2022-10-25"}
 
