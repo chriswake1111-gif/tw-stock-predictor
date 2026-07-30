@@ -46,7 +46,7 @@ def compute_engine_analysis(symbol: str, db_path: str = "data/cache.db"):
     val_engine = ValuationEVAEngine(config_path="config/config.yaml")
     sentiment_engine = MarketSentimentEngine(db_path=db_path, config_path="config/config.yaml")
 
-    params = wave_engine.get_symbol_wave_params(symbol, twse_df)
+    params = wave_engine.get_symbol_wave_params(symbol, df=twse_df)
     targets = wave_engine.calculate_wave_targets(p0=params["p0"], p1=params["p1"], p2=params.get("p2"))
     time_win = wave_engine.check_time_window(twse_df, pivot_date=params.get("pivot_date", "2022-10-25"))
 
