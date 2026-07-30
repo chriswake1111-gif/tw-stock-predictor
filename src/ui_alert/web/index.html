@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>杜金龍台股量化預測 - 機構級金融終端 (Institutional Terminal)</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 500: '#3b82f6', 600: '#2563eb' },
+                        darkbg: '#0f172a',
+                        cardbg: '#1e293b'
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- TradingView Lightweight Charts -->
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 min-h-screen transition-colors duration-200">
+
+    <!-- Navbar 頂部導覽列 -->
+    <header class="border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 backdrop-blur sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center space-x-3">
+                <div class="w-9 h-9 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white font-bold text-lg shadow-lg">
+                    TU
+                </div>
+                <div>
+                    <h1 class="font-bold text-lg leading-tight">杜金龍台股量化預測機構級終端</h1>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Anti-Gravity TU-System v1.0 (FastAPI + TradingView Engine)</p>
+                </div>
+            </div>
+
+            <!-- 搜尋與快速按鈕 -->
+            <div class="flex items-center space-x-2">
+                <div class="relative">
+                    <input type="text" id="symbol-input" placeholder="輸入代號 (如 2330, ^TWII)..." 
+                           class="w-48 sm:w-64 px-3 py-1.5 text-sm rounded-md border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <button id="search-btn" class="absolute right-1 top-1 text-xs px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium">
+                        搜尋
+                    </button>
+                </div>
+
+                <!-- 深色 / 淺色 主題切換 -->
+                <button id="theme-toggle" class="p-2 rounded-md border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 transition">
+                    <span id="theme-icon">🌙</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- 快速選股 Tag 列 -->
+    <div class="max-w-7xl mx-auto px-4 py-2 flex items-center space-x-2 text-xs overflow-x-auto">
+        <span class="text-slate-500 font-medium">熱門標的:</span>
+        <button class="quick-symbol px-2.5 py-1 rounded bg-slate-200 dark:bg-slate-800 hover:bg-blue-600 hover:text-white transition" data-symbol="2330">2330 台積電</button>
+        <button class="quick-symbol px-2.5 py-1 rounded bg-slate-200 dark:bg-slate-800 hover:bg-blue-600 hover:text-white transition" data-symbol="^TWII">^TWII 加權指數</button>
+        <button class="quick-symbol px-2.5 py-1 rounded bg-slate-200 dark:bg-slate-800 hover:bg-blue-600 hover:text-white transition" data-symbol="2317">2317 鴻海</button>
+        <button class="quick-symbol px-2.5 py-1 rounded bg-slate-200 dark:bg-slate-800 hover:bg-blue-600 hover:text-white transition" data-symbol="2454">2454 聯發科</button>
+        <button class="quick-symbol px-2.5 py-1 rounded bg-slate-200 dark:bg-slate-800 hover:bg-blue-600 hover:text-white transition" data-symbol="0050">0050 元大台灣50</button>
+    </div>
+
+    <!-- 主內容區塊 -->
+    <main class="max-w-7xl mx-auto px-4 py-4 space-y-6">
+
+        <!-- 1. KPI 頂部摘要卡片 -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <!-- 卡片 1: 最新收盤價 -->
+            <div class="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/60 shadow-sm">
+                <div class="text-xs font-medium text-slate-500 dark:text-slate-400">當前標的 / 最新收盤價</div>
+                <div class="flex items-baseline space-x-2 mt-2">
+                    <div id="kpi-symbol" class="text-lg font-bold text-blue-500">2330.TW</div>
+                    <div id="kpi-price" class="text-2xl font-extrabold">$925.00</div>
+                </div>
+            </div>
+
+            <!-- 卡片 2: 多空共振攻擊燈號 -->
+            <div class="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/60 shadow-sm">
+                <div class="text-xs font-medium text-slate-500 dark:text-slate-400">多空共振攻擊訊號</div>
+                <div id="kpi-resonance" class="text-lg font-bold mt-2 flex items-center space-x-2 text-emerald-500">
+                    <span class="w-3 h-3 rounded-full bg-emerald-500 animate-ping"></span>
+                    <span>🔥 亮燈發動中</span>
+                </div>
+            </div>
+
+            <!-- 卡片 3: M1B 成交量過熱比率 -->
+            <div class="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/60 shadow-sm">
+                <div class="text-xs font-medium text-slate-500 dark:text-slate-400">大盤成交金額 / M1B 頭部過熱比率</div>
+                <div id="kpi-m1b" class="text-xl font-bold mt-2 text-slate-800 dark:text-slate-100">1.67% (正常適中)</div>
+            </div>
+
+            <!-- 卡片 4: 費氏時間轉折狀態 -->
+            <div class="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/60 shadow-sm">
+                <div class="text-xs font-medium text-slate-500 dark:text-slate-400">費波南希時間轉折視窗</div>
+                <div id="kpi-fib-window" class="text-xl font-bold mt-2 text-purple-500">485 個交易日</div>
+            </div>
+        </div>
+
+        <!-- 2. TradingView Lightweight Charts 容器區塊 -->
+        <div class="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/60 shadow-md">
+            <div class="flex items-center justify-between mb-3">
+                <h2 class="font-bold text-base flex items-center space-x-2">
+                    <span>📊 TradingView K 線圖 (含費氏均線、扣抵點預判與時間帶)</span>
+                </h2>
+                <div id="chart-legend" class="text-xs space-x-3 text-slate-500 dark:text-slate-400">
+                    <span class="inline-flex items-center"><span class="w-2.5 h-2.5 rounded-full bg-cyan-400 mr-1"></span>SMA8</span>
+                    <span class="inline-flex items-center"><span class="w-2.5 h-2.5 rounded-full bg-orange-400 mr-1"></span>SMA13</span>
+                    <span class="inline-flex items-center"><span class="w-2.5 h-2.5 rounded-full bg-fuchsia-400 mr-1"></span>SMA21</span>
+                    <span class="inline-flex items-center"><span class="w-2.5 h-2.5 rounded-full bg-emerald-400 mr-1"></span>SMA55</span>
+                    <span class="inline-flex items-center"><span class="w-2.5 h-2.5 rounded-full bg-blue-500 mr-1"></span>SMA144</span>
+                </div>
+            </div>
+            
+            <div id="chart-container" class="w-full h-[520px] rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700/50"></div>
+        </div>
+
+        <!-- 3. 詳細算圖表格與估值資料 Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <!-- 波浪目標價推導表 -->
+            <div class="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/60 shadow-sm space-y-3">
+                <h3 class="font-bold text-base text-blue-500 flex items-center space-x-2">
+                    <span>🎯 杜氏波浪價格空間滿足點推導</span>
+                </h3>
+                <div class="text-xs text-slate-500 flex space-x-4">
+                    <span>浪1底 (P0): <strong id="wave-p0" class="text-slate-800 dark:text-slate-200">12629</strong></span>
+                    <span>浪1頂 (P1): <strong id="wave-p1" class="text-slate-800 dark:text-slate-200">15475</strong></span>
+                    <span>浪2底 (P2): <strong id="wave-p2" class="text-slate-800 dark:text-slate-200">14001</strong></span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs">
+                        <thead class="bg-slate-100 dark:bg-slate-700/50 text-slate-500">
+                            <tr>
+                                <th class="p-2">波浪階段</th>
+                                <th class="p-2">黃金分割比率</th>
+                                <th class="p-2 text-right">目標推導價位</th>
+                            </tr>
+                        </thead>
+                        <tbody id="wave-table-body" class="divide-y divide-slate-100 dark:divide-slate-700/30">
+                            <!-- JS 動態填入 -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 主人與小狗估值與 EVA 底盤 -->
+            <div class="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/60 shadow-sm space-y-3">
+                <h3 class="font-bold text-base text-purple-500 flex items-center space-x-2">
+                    <span>🐶 主人與小狗估值 & EVA 長線底盤</span>
+                </h3>
+                <div class="text-xs text-slate-500">
+                    預估未來一年 EPS: <strong id="val-eps" class="text-slate-800 dark:text-slate-200">46.2 元</strong> (雙軌備援)
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs">
+                        <thead class="bg-slate-100 dark:bg-slate-700/50 text-slate-500">
+                            <tr>
+                                <th class="p-2">估值分類</th>
+                                <th class="p-2">本益比/算式</th>
+                                <th class="p-2 text-right">估計目標價</th>
+                            </tr>
+                        </thead>
+                        <tbody id="val-table-body" class="divide-y divide-slate-100 dark:divide-slate-700/30">
+                            <!-- JS 動態填入 -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>
