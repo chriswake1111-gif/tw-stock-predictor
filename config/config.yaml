@@ -1,0 +1,25 @@
+# 杜金龍台股量化預測系統 - 系統配置檔
+
+app:
+  name: "tw-stock-tu-system"
+  version: "1.0.0"
+  db_path: "data/cache.db"
+
+collectors:
+  default_symbols:
+    taiex: "^TWII"         # yfinance 加權指數代號
+    taiex_code: "0000"     # 證交所加權指數代號
+    tsmc: "2330.TW"        # 台積電 yfinance 代號
+    tsmc_code: "2330"      # 台積電證交所/FinMind 代號
+  retry_count: 3
+  request_timeout: 15
+
+fibonacci:
+  numbers: [8, 13, 21, 34, 55, 89, 144, 233]
+  ratios: [0.382, 0.5, 0.618, 1.0, 1.382, 1.618, 2.0, 2.618]
+
+valuation:
+  pe_min: 10
+  pe_max: 25
+  pb_max: 1.5
+  yield_min: 0.04
