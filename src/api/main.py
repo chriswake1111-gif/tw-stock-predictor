@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 from src.collectors.twse_collector import TWSECollector
 from src.collectors.finmind_collector import FinMindCollector
+from src.collectors.cbc_collector import CBCCollector
 from src.engine.wave_fibonacci import WaveFibonacciEngine
 from src.engine.ma_deduction import MADeductionEngine
 from src.engine.valuation_eva import ValuationEVAEngine
@@ -28,9 +29,9 @@ scheduler_instance = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """FastAPI Lifespan 事件管理：啟動背景 14:30 自動排程器"""
+    """FastAPI Lifespan 事件管理：單機部署模式 (workers=1) 啟動背景 14:30 自動排程器"""
     global scheduler_instance
-    logger.info("啟動 FastAPI 服務與 14:30 盤後 APScheduler 背景排程器...")
+    logger.info("啟動 FastAPI 服務與 14:30 盤後 APScheduler 背景排程器 (workers=1)...")
     try:
         scheduler_instance = AutoScheduler()
         scheduler_instance.start(cron_hour=14, cron_minute=30)
@@ -49,11 +50,11 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# 允許 CORS 跨域請求
+# CORS 跨域設定 (預設關閉 credentials 提高資安規範)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=os.getenv("CORS_ALLOWED_ORIGINS", "*").split(","),
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -82,6 +83,7 @@ def get_analysis(symbol: str):
 
     twse = TWSECollector(db_path=db_path)
     finmind = FinMindCollector(db_path=db_path)
+    cbc = CBCCollector(db_path=db_path)
     wave_engine = WaveFibonacciEngine(config_path="config/config.yaml")
     ma_engine = MADeductionEngine(config_path="config/config.yaml")
     val_engine = ValuationEVAEngine(config_path="config/config.yaml")
@@ -108,32 +110,87 @@ def get_analysis(symbol: str):
     resonance_series = ma_engine.detect_resonance_signal(analyzed_df)
     is_resonance = bool(resonance_series.iloc[-1])
 
-    # 3. 估值與 EVA
+    # 3. 真實 EPS 估值與資料契約
     clean_code = real_symbol.replace(".TW", "").replace(".TWO", "").replace("^", "")
     val_df = finmind.get_valuation(clean_code)
     
-    est_eps = val_engine.estimate_future_eps(historical_ttm_eps=round(latest_close / 20.0, 2))
-    dog_val = val_engine.calculate_dog_master_valuation(eps=est_eps)
-    eva_val = val_engine.calculate_eva_floor(nopat=latest_close * 5.0, invested_capital=latest_close * 35.0, total_shares_billion=10.0)
+    eps_contract = {
+        "value": None,
+        "type": "historical_ttm",
+        "unit": "TWD_per_share",
+        "source": "FinMind TaiwanStockFinancialStatements",
+        "calculation": "sum_latest_four_reported_quarter_eps",
+        "status": "insufficient_data"
+    }
 
-    screener_passed = False
+    valuation_contract = {
+        "status": "insufficient_data",
+        "cheap_price": None,
+        "fair_price": None,
+        "expensive_price": None,
+        "estimated_eps": None
+    }
+
     if not val_df.empty:
         last_val = val_df.iloc[-1]
-        screener_res = val_engine.screen_two_lows_one_high(
-            pe=float(last_val.get("pe", 0)), 
-            pb=float(last_val.get("pb", 0)), 
-            yield_rate=float(last_val.get("yield_rate", 0))
-        )
-        screener_passed = screener_res["passed"]
+        pe = float(last_val.get("pe", 0))
+        if pe > 0:
+            ttm_eps = round(latest_close / pe, 2)
+            dog_val = val_engine.calculate_dog_master_valuation(eps=ttm_eps)
+            eps_contract.update({
+                "value": ttm_eps,
+                "status": "available"
+            })
+            valuation_contract.update({
+                "status": "available",
+                "cheap_price": dog_val["cheap_price"],
+                "fair_price": dog_val["fair_price"],
+                "expensive_price": dog_val["expensive_price"],
+                "estimated_eps": dog_val["estimated_eps"]
+            })
 
-    # 4. 熱度
-    sentiment = sentiment_engine.check_volume_m1b_overheat(daily_volume_billion=4500.0)
+    # EVA 暫停使用標記 (未完備財報標準化前不給予假資料)
+    eva_contract = {
+        "status": "unsupported",
+        "reason": "Financial statement normalization is not implemented in current release",
+        "eva_floor_price": None
+    }
 
-    # 5. TradingView Lightweight Charts 規格之 K 線資料 (time 格式: YYYY-MM-DD)
+    # 4. 大盤與 M1B 熱度 Contract
+    m1b_val_billion = cbc.get_latest_m1b() # 回傳 float (億新台幣)
+    m1b_val = float(m1b_val_billion * 1e8)
+    
+    taiex_df = twse.get_ohlcv("^TWII", start_date=end_date, end_date=end_date)
+    daily_volume_val = float(taiex_df.iloc[-1]['volume']) if not taiex_df.empty else 0.0
+
+    sentiment_res = sentiment_engine.check_volume_m1b_overheat(
+        daily_volume_billion=(daily_volume_val / 1e8) if daily_volume_val > 0 else 4500.0
+    )
+
+    sentiment_contract = {
+        "status": "available",
+        "market_turnover": {
+            "value": daily_volume_val,
+            "scope": "TWSE+TPEx",
+            "metric": "traded_volume",
+            "unit": "TWD",
+            "source": ["TWSE Daily Trading Summary"]
+        },
+        "m1b": {
+            "value": m1b_val,
+            "unit": "TWD",
+            "source": "CBC Monthly Data"
+        },
+        "volume_m1b_ratio": sentiment_res["volume_m1b_ratio"],
+        "is_overheat": sentiment_res["is_overheat"],
+        "status_message": sentiment_res["status_message"]
+    }
+
+    # 5. TradingView Lightweight Charts K 線資料 (time: YYYY-MM-DD)
     kline_list = []
     for _, r in clean_df.iterrows():
         kline_list.append({
-            "time": str(r["date"]), # 嚴格輸出 YYYY-MM-DD
+            "time": str(r["date"]),
             "open": float(r["open"]),
             "high": float(r["high"]),
             "low": float(r["low"]),
@@ -141,7 +198,7 @@ def get_analysis(symbol: str):
             "volume": float(r["volume"])
         })
 
-    # 扣抵點預判數據
+    # 扣抵點數據
     ma_deductions = {}
     for period in [8, 13, 21, 55, 144]:
         if f"SMA_{period}" in analyzed_df.columns:
@@ -160,17 +217,17 @@ def get_analysis(symbol: str):
         "latest_price": round(latest_close, 2),
         "date": str(latest_row["date"]),
         "is_resonance": is_resonance,
+        "eps": eps_contract,
         "wave_targets": targets,
         "fib_window": time_win,
-        "valuation": dog_val,
-        "eva_valuation": eva_val,
-        "screener_passed": screener_passed,
-        "sentiment": sentiment,
+        "valuation": valuation_contract,
+        "eva_valuation": eva_contract,
+        "sentiment": sentiment_contract,
         "ma_deductions": ma_deductions,
         "kline_data": kline_list
     }
 
-# 掛載靜態網頁端點 (根目錄指向 src/ui_alert/web)
+# 掛載靜態網頁端點
 static_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../ui_alert/web"))
 if os.path.exists(static_dir):
     app.mount("/", StaticFiles(directory=static_dir, html=True), name="web")

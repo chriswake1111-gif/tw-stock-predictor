@@ -1,216 +1,251 @@
 import os
+import yaml
 import logging
-import pandas as pd
-import numpy as np
 import backtrader as bt
-from datetime import datetime
-from typing import Dict, Any
+import pandas as pd
+from typing import Dict, Any, Optional
 
-from src.engine.ma_deduction import MADeductionEngine
-from src.engine.wave_fibonacci import WaveFibonacciEngine
 from src.strategy.capital_allocation import CapitalAllocator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-class TWSalesTaxCommissionScheme(bt.CommInfoBase):
-    """
-    台股真實交易手續費與證交稅計算模型：
-    1. 買進與賣出均扣券商手續費 (0.1425% * 60% 打折)
-    2. 賣出時額外扣取證交稅 0.3% (0.003)
-    """
+class TWSalesTaxCommissionScheme(bt.CommissionInfo):
+    """台股交易成本 Scheme: 手續費 0.1425% (含打折) + 賣出證交稅 0.3%"""
     params = (
+        ('stamp_duty', 0.003),       # 賣出證交稅 0.3%
+        ('commission', 0.001425),     # 手續費率 0.1425%
+        ('discount', 0.6),            # 手續費打折 (如 6 折)
         ('stocklike', True),
-        ('commtype', bt.CommInfoBase.COMM_PERC),
-        ('commission', 0.001425 * 0.6), # 手續費 0.1425% 打 6 折
-        ('tax', 0.003),                  # 賣出證交稅 0.3%
-        ('discount', 0.6),
+        ('commtype', bt.CommissionInfo.COMM_PERC),
     )
 
     def _getcommission(self, size, price, pseudoexec):
-        amount = abs(size) * price
-        comm = amount * self.p.commission
-        if size < 0: # 賣出時加算證交稅
-            comm += amount * self.p.tax
+        value = abs(size) * price
+        comm = value * self.p.commission * self.p.discount
+        if size < 0: # 賣出時外加證交稅
+            comm += value * self.p.stamp_duty
         return comm
 
-
 class TuStrategy(bt.Strategy):
-    """杜金龍波浪與扣抵共振事件驅動回測策略"""
-
+    """杜金龍 20/30/50 浪 3 主升段量化回測策略 (含異步生命週期與資金基準鎖)"""
+    
     params = (
+        ('gap_threshold', -0.015),
         ('config_path', 'config/config.yaml'),
-        ('symbol', '2330.TW'),
     )
 
     def __init__(self):
-        self.dataclose = self.datas[0].close
-        self.dataopen = self.datas[0].open
-        self.datavol = self.datas[0].volume
-        
-        self.ma_engine = MADeductionEngine(config_path=self.p.config_path)
-        self.allocator = CapitalAllocator(total_cash=self.broker.getvalue(), config_path=self.p.config_path)
-        
-        # 建立均線指標
-        self.sma8 = bt.indicators.SMA(self.datas[0], period=8)
-        self.sma13 = bt.indicators.SMA(self.datas[0], period=13)
-        self.sma21 = bt.indicators.SMA(self.datas[0], period=21)
-        self.sma55 = bt.indicators.SMA(self.datas[0], period=55)
-        self.sma144 = bt.indicators.SMA(self.datas[0], period=144)
+        # 均線指標
+        self.sma8 = bt.indicators.SimpleMovingAverage(self.data.close, period=8)
+        self.sma13 = bt.indicators.SimpleMovingAverage(self.data.close, period=13)
+        self.sma21 = bt.indicators.SimpleMovingAverage(self.data.close, period=21)
+        self.sma55 = bt.indicators.SimpleMovingAverage(self.data.close, period=55)
+        self.sma144 = bt.indicators.SimpleMovingAverage(self.data.close, period=144)
+        self.sma20_vol = bt.indicators.SimpleMovingAverage(self.data.volume, period=20)
 
-        self.stage = 0 # 建倉階段 (0: 未進場, 1: 已建 20%, 2: 已建 50%, 3: 滿載 100%)
+        # 資金管理器
+        self.allocator = CapitalAllocator(lot_size=1000, cash_buffer_rate=0.005)
+
+        # 訂單異步生命週期鎖
+        self.pending_order = None
+        self.pending_stage = None
+        self.pending_campaign_base_value = None
+
+        # 策略階段與資金基準
+        self.stage = 0
+        self.campaign_base_value = None
+
+        # 浪 3 拉回狀態追蹤
+        self.campaign_high = None
+        self.pre_pullback_high = None
+        self.pullback_low = None
+        self.pullback_detected = False
+        self.pullback_invalidated = False
+
+        # 精確交易日誌
+        self.execution_log = []
+
+    def notify_order(self, order):
+        """Backtrader 訂單狀態變更通知生命週期"""
+        if order.status == order.Completed:
+            # 1. 異步更新 Stage
+            if self.pending_stage is not None:
+                self.stage = self.pending_stage
+            
+            # 2. 資金基準轉正
+            if self.stage == 1:
+                self.campaign_base_value = self.pending_campaign_base_value
+            elif self.stage == 0 and self.position.size == 0:
+                self.reset_campaign_state()
+
+            # 3. 紀錄精確交易日誌
+            dt_str = self.data.datetime.date(0).isoformat()
+            self.execution_log.append({
+                "date": dt_str,
+                "action": "buy" if order.isbuy() else "sell",
+                "stage_after": self.stage,
+                "size": order.executed.size,
+                "price": order.executed.price,
+                "value": order.executed.value,
+                "commission": order.executed.comm
+            })
+
+        # 4. 無論 Completed/Canceled/Margin/Rejected，一律解鎖
+        if order.status in [order.Completed, order.Canceled, order.Margin, order.Rejected]:
+            self.pending_order = None
+            self.pending_stage = None
+            self.pending_campaign_base_value = None
+
+    def reset_campaign_state(self):
+        """平倉完成後清除進場週期狀態"""
+        self.campaign_base_value = None
+        self.campaign_high = None
+        self.pre_pullback_high = None
+        self.pullback_low = None
+        self.pullback_detected = False
+        self.pullback_invalidated = False
 
     def next(self):
-        # 至少需滿 144 日 K 線算均線
-        if len(self) < 144:
+        # 1. 有未完成訂單時，絕不重複送單
+        if self.pending_order is not None:
             return
 
-        close_val = self.dataclose[0]
-        open_val = self.dataopen[0]
-        prev_close = self.dataclose[-1]
+        close_val = self.data.close[0]
+        open_val = self.data.open[0]
+        prev_close = self.data.close[-1]
 
-        # 1. 均線扣抵斜率預判 (向量比對: close > shift(N-1))
-        deduct_8_up = close_val > self.dataclose[-7]
-        deduct_13_up = close_val > self.dataclose[-12]
-        deduct_21_up = close_val > self.dataclose[-20]
-        deduct_55_up = close_val > self.dataclose[-54]
-        deduct_144_up = close_val > self.dataclose[-143]
+        # 開盤跳空防衛
+        open_gap = (open_val - prev_close) / prev_close if prev_close > 0 else 0.0
+        safe_open = open_gap >= self.p.gap_threshold
 
-        # 短天期與中長天期扣抵條件
-        short_deduct_up = deduct_8_up and deduct_13_up and deduct_21_up
-        bullish_alignment = (self.sma8[0] > self.sma13[0] > self.sma21[0])
+        # 均線多空共振
+        is_resonance = (self.sma8[0] > self.sma13[0] > self.sma21[0] > self.sma55[0])
 
-        is_resonance = short_deduct_up and bullish_alignment
+        # 2. 全域風控與退場判定 (跌破 SMA55 或死亡交叉)
+        if self.position.size > 0:
+            stop_loss_triggered = (close_val < self.sma55[0]) or (self.sma8[0] < self.sma21[0])
+            if stop_loss_triggered:
+                self.pending_order = self.close()
+                self.pending_stage = 0
+                return
 
-        # 2. 跳空開盤防禦檢查
-        safe_open = self.allocator.check_gap_down_defense(open_price=open_val, prev_close=prev_close)
-
-        # 3. 策略買賣進場邏輯
-        current_cash = self.broker.getcash()
-        is_index = ("^" in self.p.symbol or "0000" in self.p.symbol)
-        lot_size = 1 if is_index else 1000
-
-        # [Stage 1: 首批 20% 多空共振建倉]
+        # 3. 階段進場與加碼
         if self.stage == 0 and is_resonance and safe_open:
-            size_shares = self.allocator.calculate_position_size(price=close_val, target_ratio=0.20, current_cash=current_cash, lot_size=lot_size)
-            if size_shares > 0:
-                self.buy(size=size_shares)
-                self.stage = 1
+            proposed_base = self.broker.getvalue()
+            size = self.allocator.calculate_order_size(
+                price=close_val,
+                target_cumulative_ratio=0.20,
+                base_value=proposed_base,
+                current_position_size=self.position.size,
+                available_cash=self.broker.getcash()
+            )
+            if size >= 1000:
+                self.pending_campaign_base_value = proposed_base
+                self.pending_order = self.buy(size=size)
+                self.pending_stage = 1
 
-        # [Stage 2: 浪 3 拉回 7%~11% 加碼 30%]
         elif self.stage == 1:
-            highest_since_entry = max(self.dataclose.get(size=20))
-            pullback_pct = (highest_since_entry - close_val) / highest_since_entry
-            if 0.05 <= pullback_pct <= 0.12 and close_val > self.sma55[0]:
-                size_shares = self.allocator.calculate_position_size(price=close_val, target_ratio=0.30, current_cash=current_cash, lot_size=lot_size)
-                if size_shares > 0:
-                    self.buy(size=size_shares)
-                    self.stage = 2
+            # 追蹤浪 3 頂點與拉回幅度
+            self.campaign_high = max(self.campaign_high or self.data.high[0], self.data.high[0])
+            pullback_pct = (self.campaign_high - close_val) / self.campaign_high
 
-        # [出場 / 風控平倉訊號: 當均線跌破 SMA55 或是短均下彎]
-        elif self.position.size > 0:
-            if close_val < self.sma55[0] or self.sma8[0] < self.sma21[0]:
-                self.close()
-                self.stage = 0
+            if pullback_pct > 0.11:
+                self.pullback_invalidated = True
 
+            # 拉回 7%~11% 且守住 SMA55 時加碼 Stage 2
+            if not self.pullback_invalidated and 0.07 <= pullback_pct <= 0.11 and close_val > self.sma55[0]:
+                if not self.pullback_detected:
+                    self.pre_pullback_high = self.campaign_high
+                    self.pullback_detected = True
+
+                size = self.allocator.calculate_order_size(
+                    price=close_val,
+                    target_cumulative_ratio=0.50,
+                    base_value=self.campaign_base_value,
+                    current_position_size=self.position.size,
+                    available_cash=self.broker.getcash()
+                )
+                if size >= 1000:
+                    self.pending_order = self.buy(size=size)
+                    self.pending_stage = 2
+
+        elif self.stage == 2:
+            # 突破凍結前高且量能確認時加碼 Stage 3
+            is_breakout = (self.pre_pullback_high is not None) and (close_val > self.pre_pullback_high)
+            volume_confirm = self.data.volume[0] > self.sma20_vol[0]
+
+            if is_breakout and volume_confirm:
+                size = self.allocator.calculate_order_size(
+                    price=close_val,
+                    target_cumulative_ratio=1.00,
+                    base_value=self.campaign_base_value,
+                    current_position_size=self.position.size,
+                    available_cash=self.broker.getcash()
+                )
+                if size >= 1000:
+                    self.pending_order = self.buy(size=size)
+                    self.pending_stage = 3
 
 class TuBacktester:
-    """Backtrader 事件驅動歷史回測引擎與戰績評估器"""
+    """杜金龍策略歷史回測執行器"""
 
     def __init__(self, initial_cash: float = 1000000.0, config_path: str = "config/config.yaml"):
         self.initial_cash = initial_cash
         self.config_path = config_path
 
-    def run_backtest(self, df: pd.DataFrame, symbol: str = "^TWII") -> Dict[str, Any]:
-        """
-        執行 Backtrader 事件驅動歷史回測
-        :param df: K 線 DataFrame (需包含 date, open, high, low, close, volume)
-        :param symbol: 股票代號
-        """
-        if df.empty:
-            return {"error": "Empty dataframe"}
+    def run_backtest(self, ohlcv_df: pd.DataFrame) -> Dict[str, Any]:
+        if ohlcv_df.empty or len(ohlcv_df) < 144:
+            return {"error": "K線資料不足 (需至少 144 筆以上)"}
 
-        # 過濾包含 NaN 的收盤價/開盤價 (防止未收盤即時 K 線干擾 Backtrader 算數)
-        clean_df = df.dropna(subset=['open', 'high', 'low', 'close']).copy()
-
-        if len(clean_df) < 144:
-            logger.warning("回測資料筆數不足 (最少需 144 筆 K 線資料以計算長天期均線)")
-            return {
-                "symbol": symbol,
-                "initial_cash": self.initial_cash,
-                "final_value": self.initial_cash,
-                "total_return_pct": 0.0,
-                "win_rate_pct": 0.0,
-                "total_trades": 0,
-                "won_trades": 0,
-                "max_drawdown_pct": 0.0,
-                "sharpe_ratio": 0.0,
-                "note": "Insufficient data (< 144 bars)"
-            }
+        df = ohlcv_df.dropna(subset=['open', 'high', 'low', 'close', 'volume']).copy()
+        df['date'] = pd.to_datetime(df['date'])
+        df.set_index('date', inplace=True)
+        df.sort_index(inplace=True)
 
         cerebro = bt.Cerebro()
-
-        # 1. 將 Pandas DataFrame 轉換為 Backtrader DataFeed
-        df_bt = clean_df.copy()
-        df_bt['date'] = pd.to_datetime(df_bt['date'])
-        df_bt = df_bt.set_index('date')
-
-        data = bt.feeds.PandasData(
-            dataname=df_bt,
-            open='open',
-            high='high',
-            low='low',
-            close='close',
-            volume='volume',
-            openinterest=-1
-        )
+        data = bt.feeds.PandasData(dataname=df, datetime=None)
         cerebro.adddata(data)
 
-        # 2. 設置初始資金與台股真實手續費/證交稅模型
+        cerebro.addstrategy(TuStrategy, config_path=self.config_path)
         cerebro.broker.setcash(self.initial_cash)
-        comminfo = TWSalesTaxCommissionScheme()
-        cerebro.broker.addcommissioninfo(comminfo)
-
-        # 3. 掛載策略與分析器 (Analyzers)
-        cerebro.addstrategy(TuStrategy, config_path=self.config_path, symbol=symbol)
         
-        cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name="trade_analyzer")
-        cerebro.addanalyzer(bt.analyzers.DrawDown, _name="drawdown")
-        cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name="sharpe", riskfreerate=0.01)
+        # 掛載台股交易成本 Scheme (手續費 + 證交稅)
+        comm_scheme = TWSalesTaxCommissionScheme()
+        cerebro.broker.addcommissioninfo(comm_scheme)
 
-        # 4. 執行回測
+        # 0.1% 滑價比率設定
+        cerebro.broker.set_slippage_perc(perc=0.001, slip_open=True, slip_match=True)
+
+        # 分析器
+        cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
+        cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trade_analyzer')
+        cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe_ratio', riskfreerate=0.01)
+
         results = cerebro.run()
         strat = results[0]
 
-        # 5. 統計與解析回測績效指標
         final_value = cerebro.broker.getvalue()
-        total_return_pct = round(((final_value - self.initial_cash) / self.initial_cash) * 100, 2)
+        total_return_pct = ((final_value - self.initial_cash) / self.initial_cash) * 100.0
 
-        trade_analysis = strat.analyzers.trade_analyzer.get_analysis()
-        dd_analysis = strat.analyzers.drawdown.get_analysis()
-        sharpe_analysis = strat.analyzers.sharpe.get_analysis()
+        drawdown = strat.analyzers.drawdown.get_analysis()
+        max_drawdown = drawdown.get('max', {}).get('drawdown', 0.0)
 
-        # 勝率計算
-        total_trades = trade_analysis.get("total", {}).get("closed", 0)
-        won_trades = trade_analysis.get("won", {}).get("total", 0)
-        win_rate_pct = round((won_trades / total_trades * 100), 2) if total_trades > 0 else 0.0
+        trade_info = strat.analyzers.trade_analyzer.get_analysis()
+        total_trades = trade_info.get('total', {}).get('closed', 0)
+        won_trades = trade_info.get('won', {}).get('total', 0)
+        win_rate = (won_trades / total_trades * 100.0) if total_trades > 0 else 0.0
 
-        # 最大回撤 (MDD)
-        max_drawdown_pct = round(dd_analysis.get("max", {}).get("drawdown", 0.0), 2)
-        
-        # 夏普比率
-        sharpe_ratio = round(sharpe_analysis.get("sharperatio", 0.0) or 0.0, 2)
-
-        logger.info(f"[{symbol}] 回測完成! 總報酬率: {total_return_pct}% | 勝率: {win_rate_pct}% | MDD: {max_drawdown_pct}% | 夏普比率: {sharpe_ratio}")
+        sharpe_info = strat.analyzers.sharpe_ratio.get_analysis()
+        sharpe_ratio = sharpe_info.get('sharperatio', 0.0)
 
         return {
-            "symbol": symbol,
             "initial_cash": self.initial_cash,
             "final_value": round(final_value, 2),
-            "total_return_pct": total_return_pct,
-            "win_rate_pct": win_rate_pct,
+            "total_return_pct": round(total_return_pct, 2),
+            "max_drawdown_pct": round(max_drawdown, 2),
             "total_trades": total_trades,
-            "won_trades": won_trades,
-            "max_drawdown_pct": max_drawdown_pct,
-            "sharpe_ratio": sharpe_ratio
+            "win_rate_pct": round(win_rate, 2),
+            "sharpe_ratio": round(sharpe_ratio, 2) if sharpe_ratio is not None else 0.0,
+            "execution_log": strat.execution_log
         }

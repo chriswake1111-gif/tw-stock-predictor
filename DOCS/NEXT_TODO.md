@@ -1,30 +1,14 @@
 # 專案進度與下階段待辦 (NEXT_TODO.md)
 
-## 📌 當前開發進度 (Current Progress - GitHub 遠端倉庫已發布!)
-- [x] **GitHub 遠端公開倉庫建置與 Push**
+## 📌 當前開發進度 (Current Progress - Code Review 98%+ 生產級重構完成!)
+- [x] **Code Review 全面重構與邏輯鎖定 (Production-Ready Refactoring)**
+  - [x] 解鎖 Stage 1 循環依賴：實作 `pending_campaign_base_value` 雙階鎖與 `notify_order()` 成交確認機制。
+  - [x] 修正 Stage 3 突破條件：實作 `pre_pullback_high` 拉回前高凍結機制與 `pullback_invalidated` 11% 門閥防護。
+  - [x] 實作 Campaign-Base 累計持倉算術 ([capital_allocation.py](file:///d:/Tools/tw-stock-predictor/src/strategy/capital_allocation.py))，包含台股 1,000 股倍數轉換與 0.5% 現金/滑價緩衝。
+  - [x] 實作無 Repaint 前視偏誤波浪轉折演算法 ([wave_fibonacci.py](file:///d:/Tools/tw-stock-predictor/src/engine/wave_fibonacci.py))，包含 `confirmed_at` 延遲發布。
+  - [x] 升級 API JSON Contract ([main.py](file:///d:/Tools/tw-stock-predictor/src/api/main.py))：規範 `TWD_per_share` 與 `TWD` 單位、`TWSE+TPEx` 成交額範疇、`sum_latest_four_reported_quarter_eps` 算式，並將 EVA 標註為 `unsupported`。
+  - [x] 升級 SQLite 交易日曆補抓 ([twse_collector.py](file:///d:/Tools/tw-stock-predictor/src/collectors/twse_collector.py))：基於 `^TWII` 權威交易日曆比對 `expected_dates - cached_dates` 集合差集，並自動套用 yfinance `+1 day` 邊界。
+  - [x] 升級單元測試集 ([tests/](file:///d:/Tools/tw-stock-predictor/tests/))：全套 25 項測試 **100% PASS**。
+
+- [x] **GitHub 遠端公開倉庫同步**
   - GitHub Repository URL: [https://github.com/chriswake1111-gif/tw-stock-predictor](https://github.com/chriswake1111-gif/tw-stock-predictor)
-  - 成功推送主分支 `main` 與 6 個 Phase 開發分支。
-
-- [x] **Phase 1: 基礎設施與數據採集模組**
-  - [x] 專案目錄結構建置與 Local-First SQLite 數據快取層 (`data/cache.db`)
-  - [x] 實作 [TWSECollector](file:///d:/Tools/tw-stock-predictor/src/collectors/twse_collector.py) 與 [FinMindCollector](file:///d:/Tools/tw-stock-predictor/src/collectors/finmind_collector.py)
-
-- [x] **Phase 2: 技術面與波浪/扣抵計算核心**
-  - [x] 實作 [src/engine/wave_fibonacci.py](file:///d:/Tools/tw-stock-predictor/src/engine/wave_fibonacci.py) (浪 3 / 浪 5 目標價推導與費氏時間轉折視窗)
-  - [x] 實作 [src/engine/ma_deduction.py](file:///d:/Tools/tw-stock-predictor/src/engine/ma_deduction.py) (費氏均線群、向量化扣抵與多空共振檢測器)
-
-- [x] **Phase 3: 基本面估值與市場熱度模組**
-  - [x] 實作 [src/collectors/cbc_collector.py](file:///d:/Tools/tw-stock-predictor/src/collectors/cbc_collector.py) (央行 M1B 快取與 270,000 億基準值降級備援)
-  - [x] 實作 [src/engine/valuation_eva.py](file:///d:/Tools/tw-stock-predictor/src/engine/valuation_eva.py) (主人與小狗估值、雙軌 EPS、EVA 長線底盤與二低一高/破底翻選股器)
-  - [x] 實作 [src/engine/market_sentiment.py](file:///d:/Tools/tw-stock-predictor/src/engine/market_sentiment.py) (成交量/M1B 天量過熱與全市場融資槓桿過熱)
-
-- [x] **Phase 4: 交易策略整合與 Backtrader 歷史回測**
-  - [x] 實作 [src/strategy/capital_allocation.py](file:///d:/Tools/tw-stock-predictor/src/strategy/capital_allocation.py) (整張 1,000 股換算、20/30/50 建倉與 >1.5% 向下跳空開盤防禦)
-  - [x] 實作 [src/strategy/backtester.py](file:///d:/Tools/tw-stock-predictor/src/strategy/backtester.py) (台股手續費打折與 0.3% 證交稅模型，完成 +160.75% / 勝率 83.33% 回測戰績)
-
-- [x] **Phase 5 (方案 A): 機構級金融終端 (FastAPI + HTML5 / Tailwind + TradingView)**
-  - [x] 實作 [src/api/main.py](file:///d:/Tools/tw-stock-predictor/src/api/main.py) (FastAPI REST API 端點 `/api/analysis/{symbol}`、Lifespan 整合 14:30 APScheduler 排程器、CORS 與靜態目錄 `/` 根掛載)
-  - [x] 實作 [src/ui_alert/web/index.html](file:///d:/Tools/tw-stock-predictor/src/ui_alert/web/index.html) (Tailwind CSS 雙主題高質感面板、KPI 指標牌與 TradingView 圖表容器)
-  - [x] 實作 [src/ui_alert/web/app.js](file:///d:/Tools/tw-stock-predictor/src/ui_alert/web/app.js) (TradingView Lightweight Charts K 線、均線扣抵標記、費氏時間帶與估值通道渲染)
-  - [x] 編寫單元測試 [tests/test_api.py](file:///d:/Tools/tw-stock-predictor/tests/test_api.py) (26/26 PASS)
-  - [x] 一鍵啟動入口腳本 [start.py](file:///d:/Tools/tw-stock-predictor/start.py)、[run_terminal.bat](file:///d:/Tools/tw-stock-predictor/run_terminal.bat) 與 [run_dashboard.bat](file:///d:/Tools/tw-stock-predictor/run_dashboard.bat)

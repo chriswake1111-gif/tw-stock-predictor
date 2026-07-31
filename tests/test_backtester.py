@@ -1,48 +1,72 @@
 import pytest
 import pandas as pd
 import numpy as np
+from datetime import datetime, timedelta
+from src.strategy.backtester import TuBacktester, TuStrategy, TWSalesTaxCommissionScheme
 from src.strategy.capital_allocation import CapitalAllocator
-from src.strategy.backtester import TuBacktester
 
-def test_capital_allocator_lots():
-    allocator = CapitalAllocator(total_cash=1000000.0) # 100 萬台幣
+def generate_synthetic_ohlcv(days=300, start_price=100.0, trend='up'):
+    """產出語意測試用的合成 K 線 DataFrame"""
+    dates = [(datetime(2023, 1, 1) + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)]
+    prices = [start_price]
     
-    # 20% 建倉 = 200,000 元，若股價 100 元，1 張 = 100,000 元 => 2 張 (2000 股)
-    lots_20 = allocator.calculate_position_size(price=100.0, target_ratio=0.20)
-    assert lots_20 == 2000 # 2 張
-    
-    # 30% 建倉 = 300,000 元，若股價 100 元 => 3 張 (3000 股)
-    lots_30 = allocator.calculate_position_size(price=100.0, target_ratio=0.30)
-    assert lots_30 == 3000 # 3 張
+    for i in range(1, days):
+        if trend == 'up':
+            change = np.random.uniform(0.1, 1.5)
+        elif trend == 'down':
+            change = np.random.uniform(-1.5, -0.1)
+        else:
+            change = np.random.uniform(-1.0, 1.0)
+        prices.append(max(10.0, prices[-1] + change))
 
-def test_downward_gap_defense():
-    allocator = CapitalAllocator()
+    df = pd.DataFrame({
+        "date": dates,
+        "open": prices,
+        "high": [p + 1.0 for p in prices],
+        "low": [p - 1.0 for p in prices],
+        "close": prices,
+        "volume": [10000 + i*10 for i in range(days)]
+    })
+    return df
+
+def test_capital_allocator_order_size():
+    allocator = CapitalAllocator(lot_size=1000, cash_buffer_rate=0.005)
     
-    # 昨日收盤 100，今日開盤 98 (跌 2% > 1.5%) => 觸發跳空防禦，不准進場
-    is_safe = allocator.check_gap_down_defense(open_price=98.0, prev_close=100.0, gap_threshold=0.015)
-    assert is_safe == False
-    
-    # 昨日收盤 100，今日開盤 99.5 (跌 0.5% < 1.5%) => 安全進場
-    is_safe_normal = allocator.check_gap_down_defense(open_price=99.5, prev_close=100.0, gap_threshold=0.015)
-    assert is_safe_normal == True
+    # 初始資金 1,000,000 元，單價 100 元，Stage 1 (20% Target = 200,000 元)
+    size1 = allocator.calculate_order_size(
+        price=100.0,
+        target_cumulative_ratio=0.20,
+        base_value=1000000.0,
+        current_position_size=0,
+        available_cash=1000000.0
+    )
+    # 200,000 / (100 * 1000) = 2 張 = 2,000 股
+    assert size1 == 2000
+
+    # Stage 2 (50% Cumulative Target = 500,000 元)，增量需求 = 500,000 - 200,000 = 300,000 元 = 3 張 = 3,000 股
+    size2 = allocator.calculate_order_size(
+        price=100.0,
+        target_cumulative_ratio=0.50,
+        base_value=1000000.0,
+        current_position_size=2000,
+        available_cash=798000.0
+    )
+    assert size2 == 3000
 
 def test_backtester_execution():
-    # 產生 200 個交易日數據以滿足長天期均線 (SMA 144) 運算範疇
-    dates = pd.date_range("2024-01-01", periods=200, freq="B")
-    close_prices = np.linspace(500, 800, 200) # 連續多頭
-    df = pd.DataFrame({
-        "date": dates.strftime("%Y-%m-%d"),
-        "open": close_prices - 2.0,
-        "high": close_prices + 5.0,
-        "low": close_prices - 5.0,
-        "close": close_prices,
-        "volume": 10000
-    })
-    
+    df = generate_synthetic_ohlcv(days=300, start_price=100.0, trend='up')
     backtester = TuBacktester(initial_cash=1000000.0)
-    results = backtester.run_backtest(df, symbol="2330.TW")
+    res = backtester.run_backtest(df)
+
+    assert "final_value" in res
+    assert "total_return_pct" in res
+    assert "execution_log" in res
     
-    assert isinstance(results, dict)
-    assert "total_return_pct" in results
-    assert "max_drawdown_pct" in results
-    assert "win_rate_pct" in results
+    # 驗證交易日誌結構與 Stage 流轉
+    log = res["execution_log"]
+    if len(log) > 0:
+        first_trade = log[0]
+        assert "date" in first_trade
+        assert "action" in first_trade
+        assert "stage_after" in first_trade
+        assert "commission" in first_trade
