@@ -1,32 +1,22 @@
-# 杜金龍台股量化預測系統 - 系統配置檔
+# 杜金龍台股量化預測系統 - 全局配置檔 (config.yaml)
 
-app:
-  name: "tw-stock-tu-system"
-  version: "1.0.0"
+database:
   db_path: "data/cache.db"
-
-collectors:
-  default_symbols:
-    taiex: "^TWII"         # yfinance 加權指數代號
-    taiex_code: "0000"     # 證交所加權指數代號
-    tsmc: "2330.TW"        # 台積電 yfinance 代號
-    tsmc_code: "2330"      # 台積電證交所/FinMind 代號
-  retry_count: 3
-  request_timeout: 15
 
 fibonacci:
   numbers: [8, 13, 21, 34, 55, 89, 144, 233]
-  ratios: [0.382, 0.5, 0.618, 1.0, 1.382, 1.618, 2.0, 2.618]
-  ma_periods: [8, 13, 21, 55, 144, 233]
+  ratios: [0.382, 0.5, 0.618, 1.0, 1.382, 1.618, 2.0, 2.618, 3.236]
 
 wave_parameters:
+  # 關鍵波浪點位配置 (Configuration over Hardcoding)
   "^TWII":
-    p0: 12629.0          # 2022/10 波段低點 P0
-    p1: 15475.0          # 浪 1 高點 P1
-    p2: 14001.0          # 浪 2 底點 P2
+    p0: 12629.0          # 浪 1 起點 P0 (2022-10-25 歷史低點 12,629 點)
+    p1: 15475.0          # 浪 1 高點 P1 (浪 1 頂點 15,475 點)
+    p2: 14001.0          # 浪 2 底點 P2 (浪 2 拉回低點 14,001 點)
     pivot_date: "2022-10-25"
+
   "2330.TW":
-    p0: 370.0            # 2022/10 波段低點 P0
+    p0: 370.0            # 浪 1 起點 P0 (台積電歷史低點 370 元)
     p1: 546.0            # 浪 1 高點 P1
     p2: 489.0            # 浪 2 底點 P2
     pivot_date: "2022-10-25"
@@ -44,3 +34,13 @@ sentiment:
   default_m1b_billion: 270000.0  # 央行 M1B 備用基準值 (億新台幣)
   volume_m1b_threshold: 0.020    # 大盤單日成交量 / M1B 頭部過熱臨界比率
   margin_return_threshold: 0.08  # 融資報酬率過熱警示門檻 (8%)
+
+notifier:
+  # LINE Messaging API (LINE Bot) 推播金鑰與 User ID
+  line_token: ""
+  line_user_id: ""
+  # Telegram Bot
+  telegram_token: ""
+  telegram_chat_id: ""
+  # Discord Webhook URL
+  discord_webhook: ""
