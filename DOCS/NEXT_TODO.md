@@ -1,6 +1,10 @@
 # 專案進度與下階段待辦 (NEXT_TODO.md)
 
-## 📌 當前開發進度 (Current Progress - 機構級金融終端全數上線!)
+## 📌 當前開發進度 (Current Progress - GitHub 遠端倉庫已發布!)
+- [x] **GitHub 遠端公開倉庫建置與 Push**
+  - GitHub Repository URL: [https://github.com/chriswake1111-gif/tw-stock-predictor](https://github.com/chriswake1111-gif/tw-stock-predictor)
+  - 成功推送主分支 `main` 與 6 個 Phase 開發分支。
+
 - [x] **Phase 1: 基礎設施與數據採集模組**
   - [x] 專案目錄結構建置與 Local-First SQLite 數據快取層 (`data/cache.db`)
   - [x] 實作 [TWSECollector](file:///d:/Tools/tw-stock-predictor/src/collectors/twse_collector.py) 與 [FinMindCollector](file:///d:/Tools/tw-stock-predictor/src/collectors/finmind_collector.py)
@@ -22,6 +26,5 @@
   - [x] 實作 [src/api/main.py](file:///d:/Tools/tw-stock-predictor/src/api/main.py) (FastAPI REST API 端點 `/api/analysis/{symbol}`、Lifespan 整合 14:30 APScheduler 排程器、CORS 與靜態目錄 `/` 根掛載)
   - [x] 實作 [src/ui_alert/web/index.html](file:///d:/Tools/tw-stock-predictor/src/ui_alert/web/index.html) (Tailwind CSS 雙主題高質感面板、KPI 指標牌與 TradingView 圖表容器)
   - [x] 實作 [src/ui_alert/web/app.js](file:///d:/Tools/tw-stock-predictor/src/ui_alert/web/app.js) (TradingView Lightweight Charts K 線、均線扣抵標記、費氏時間帶與估值通道渲染)
-  - [x] 實作 [src/ui_alert/web/style.css](file:///d:/Tools/tw-stock-predictor/src/ui_alert/web/style.css) (Glassmorphism 視覺美化)
   - [x] 編寫單元測試 [tests/test_api.py](file:///d:/Tools/tw-stock-predictor/tests/test_api.py) (26/26 PASS)
-  - [x] 啟動 uvicorn 高效能 API 伺服器 ([http://localhost:8000](http://localhost:8000))
+  - [x] 一鍵啟動入口腳本 [start.py](file:///d:/Tools/tw-stock-predictor/start.py)、[run_terminal.bat](file:///d:/Tools/tw-stock-predictor/run_terminal.bat) 與 [run_dashboard.bat](file:///d:/Tools/tw-stock-predictor/run_dashboard.bat)
