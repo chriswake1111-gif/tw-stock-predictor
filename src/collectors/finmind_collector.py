@@ -145,7 +145,7 @@ class FinMindCollector:
                 })
 
             if q3:
-                q3_single = q3["raw_val"] - q2["raw_val"] if (q2 and q3["raw_val"] > q2["raw_val"]) else (q3["raw_val"] - q1["raw_val"] if q1 else q3["raw_val"])
+                q3_single = q3["raw_val"] - q2["raw_val"] if q2 else (q3["raw_val"] - q1["raw_val"] if q1 else q3["raw_val"])
                 normalized.append({
                     "period_end": q3["period_end"],
                     "available_at": q3["available_at"],
@@ -155,7 +155,7 @@ class FinMindCollector:
                 })
 
             if q4:
-                q4_single = q4["raw_val"] - q3["raw_val"] if (q3 and q4["raw_val"] > q3["raw_val"]) else q4["raw_val"]
+                q4_single = q4["raw_val"] - q3["raw_val"] if q3 else (q4["raw_val"] - q2["raw_val"] if q2 else (q4["raw_val"] - q1["raw_val"] if q1 else q4["raw_val"]))
                 normalized.append({
                     "period_end": q4["period_end"],
                     "available_at": q4["available_at"],

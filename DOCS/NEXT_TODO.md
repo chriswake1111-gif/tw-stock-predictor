@@ -1,7 +1,11 @@
 # 專案進度與下階段待辦 (NEXT_TODO.md)
 
-## 📌 當前開發進度 (Current Progress - Third Code Review 完成)
-- [x] **第三次 Code Review 全面修復 (Plan 3 Complete)**
+## 📌 當前開發進度 (Current Progress - Fourth Code Review 完成)
+- [x] **第四次 Code Review 全面巡檢與極限邊界優化 (Fourth Code Review Complete)**
+  - [x] **P1: 單季 EPS 負值/單季虧損邊界扣減演算法修復 ([src/collectors/finmind_collector.py](file:///d:/Tools/tw-stock-predictor/src/collectors/finmind_collector.py))**
+    - 修正當公司出現單季虧損或單季 EPS 為負值時，`q3` / `q4` 扣減累計值不會因遞減而誤觸退回全年累積 EPS 的 Edge Case。
+    - 補齊單單元測試 `test_finmind_normalize_quarterly_eps_with_negative_quarter` ([tests/test_collectors.py](file:///d:/Tools/tw-stock-predictor/tests/test_collectors.py))，全套 26 個單元測試 100% 通過。
+  - [x] **第三次 Code Review 全面修復 (Plan 3 Complete)**
   - [x] **P0: 刪除 CBC M1B 所有假資料與預設值 ([src/collectors/cbc_collector.py](file:///d:/Tools/tw-stock-predictor/src/collectors/cbc_collector.py))**
     - 徹底移除 `default_m1b_billion` 與 `270000.0` 預設值，改為回傳 Contract（含 `value`, `period`, `available_at`）。無資料時輸出 `status: "insufficient_data"`。
   - [x] **P0: 實作財報單季 EPS 標準化演算法 `normalize_quarterly_eps` ([src/collectors/finmind_collector.py](file:///d:/Tools/tw-stock-predictor/src/collectors/finmind_collector.py))**
