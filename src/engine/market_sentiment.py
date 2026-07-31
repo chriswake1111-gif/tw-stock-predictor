@@ -1,7 +1,7 @@
 import os
 import yaml
-import sqlite3
 import logging
+import sqlite3
 import pandas as pd
 from typing import Dict, Any, Optional
 
@@ -38,11 +38,14 @@ class MarketSentimentEngine:
         若任一必要資料缺失，絕不使用假值或預設備援，一律回傳 status: "insufficient_data"。
         """
         threshold = self.config.get("sentiment", {}).get("volume_m1b_threshold", 0.020)
+        m1b_contract = None
 
-        # 1. 若未傳入 M1B，嘗試從 CBCCollector 獲取
+        # 1. 若未傳入 M1B，嘗試從 CBCCollector 獲取 Contract
         if m1b_twd is None:
-            m1b_billion = self.cbc_collector.get_latest_m1b()
-            if m1b_billion and m1b_billion > 0:
+            m1b_res = self.cbc_collector.get_latest_m1b()
+            if m1b_res.get("status") == "available":
+                m1b_contract = m1b_res
+                m1b_billion = m1b_res["value"]
                 m1b_twd = m1b_billion * 1e8
 
         # 2. 嚴格檢查資料完整性 (零假資料備援)
@@ -51,7 +54,7 @@ class MarketSentimentEngine:
                 "status": "insufficient_data",
                 "reason": "Latest TWSE+TPEx market turnover or CBC M1B data is unavailable",
                 "market_turnover_twd": market_turnover_twd,
-                "m1b_twd": m1b_twd,
+                "m1b": m1b_contract or {"status": "insufficient_data", "value": None},
                 "turnover_m1b_ratio": None,
                 "is_overheat": None,
                 "status_message": "資料不足：無法取得真實市場總成交金額或 M1B 數據"
@@ -64,7 +67,12 @@ class MarketSentimentEngine:
         return {
             "status": "available",
             "market_turnover_twd": market_turnover_twd,
-            "m1b_twd": m1b_twd,
+            "m1b": m1b_contract or {
+                "status": "available",
+                "value": round(m1b_twd / 1e8, 2),
+                "unit": "TWD_100_million",
+                "source": "CBC"
+            },
             "turnover_m1b_ratio": ratio,
             "threshold": threshold,
             "is_overheat": is_overheat,

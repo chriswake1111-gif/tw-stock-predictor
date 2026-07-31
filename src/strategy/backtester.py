@@ -3,7 +3,7 @@ import yaml
 import logging
 import backtrader as bt
 import pandas as pd
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 from src.strategy.capital_allocation import CapitalAllocator
 
@@ -11,20 +11,20 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class TWSalesTaxCommissionScheme(bt.CommissionInfo):
-    """台股交易成本 Scheme: 手續費 0.1425% (含打折) + 賣出證交稅 0.3%"""
+    """台股真實交易成本 Scheme：買進 0.1425% 手續費，賣出 0.1425% 手續費 + 0.3% 證交稅"""
     params = (
-        ('stamp_duty', 0.003),       # 賣出證交稅 0.3%
-        ('commission', 0.001425),     # 手續費率 0.1425%
-        ('discount', 0.6),            # 手續費打折 (如 6 折)
         ('stocklike', True),
         ('commtype', bt.CommissionInfo.COMM_PERC),
+        ('percabs', True),
+        ('commission', 0.001425),
+        ('tax', 0.003),
     )
 
     def _getcommission(self, size, price, pseudoexec):
         value = abs(size) * price
-        comm = value * self.p.commission * self.p.discount
-        if size < 0: # 賣出時外加證交稅
-            comm += value * self.p.stamp_duty
+        comm = value * self.p.commission
+        if size < 0:
+            comm += value * self.p.tax
         return comm
 
 class TuStrategy(bt.Strategy):
@@ -42,6 +42,9 @@ class TuStrategy(bt.Strategy):
         self.sma21 = bt.indicators.SimpleMovingAverage(self.data.close, period=21)
         self.sma55 = bt.indicators.SimpleMovingAverage(self.data.close, period=55)
         self.sma144 = bt.indicators.SimpleMovingAverage(self.data.close, period=144)
+        
+        # 量能均線指標 (真正 5 日均量與 20 日均量)
+        self.sma5_vol = bt.indicators.SimpleMovingAverage(self.data.volume, period=5)
         self.sma20_vol = bt.indicators.SimpleMovingAverage(self.data.volume, period=20)
 
         # 資金管理器
@@ -171,9 +174,9 @@ class TuStrategy(bt.Strategy):
                     self.pending_stage = 2
 
         elif self.stage == 2:
-            # 突破凍結前高且量能確認時加碼 Stage 3
+            # 突破凍結前高且 5 日均量 > 20 日均量時加碼 Stage 3
             is_breakout = (self.pre_pullback_high is not None) and (close_val > self.pre_pullback_high)
-            volume_confirm = self.data.volume[0] > self.sma20_vol[0]
+            volume_confirm = self.sma5_vol[0] > self.sma20_vol[0]
 
             if is_breakout and volume_confirm:
                 size = self.allocator.calculate_order_size(

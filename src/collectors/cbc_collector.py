@@ -5,70 +5,80 @@ import logging
 import requests
 import pandas as pd
 from datetime import datetime
+from typing import Dict, Any, Optional
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 class CBCCollector:
-    """中央銀行 M1B 貨幣供給數據採集器，支援 Local-First SQLite 與預設基準值降級備援機制。"""
+    """中央銀行 M1B 貨幣供給數據採集器 (零假值、零預設備援)"""
 
     def __init__(self, db_path: str = "data/cache.db", config_path: str = "config/config.yaml"):
         self.db_path = db_path
         self.config_path = config_path
-        self.default_m1b = self._load_default_m1b()
         os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
         self._init_db()
 
-    def _load_default_m1b(self) -> float:
-        """從 YAML 設定檔載入預設 M1B 基準值 (單位: 億新台幣)"""
-        if os.path.exists(self.config_path):
-            try:
-                with open(self.config_path, "r", encoding="utf-8") as f:
-                    cfg = yaml.safe_load(f) or {}
-                    return cfg.get("sentiment", {}).get("default_m1b_billion", 270000.0)
-            except Exception as e:
-                logger.error(f"讀取 {self.config_path} 失敗: {str(e)}")
-        return 270000.0
-
     def _init_db(self):
-        """初始化 M1B SQLite 資料表"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS cbc_m1b (
-                date TEXT PRIMARY KEY,
-                m1b_amount REAL
-            )
-        """)
-        conn.commit()
-        conn.close()
+        """初始化 M1B SQLite 資料表，包含 period 與 available_at 欄位 migration"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS cbc_m1b (
+                    date TEXT PRIMARY KEY,
+                    m1b_amount REAL,
+                    period TEXT,
+                    available_at TEXT
+                )
+            """)
+            cursor.execute("PRAGMA table_info(cbc_m1b)")
+            cols = [col[1] for col in cursor.fetchall()]
+            if "period" not in cols:
+                cursor.execute("ALTER TABLE cbc_m1b ADD COLUMN period TEXT")
+            if "available_at" not in cols:
+                cursor.execute("ALTER TABLE cbc_m1b ADD COLUMN available_at TEXT")
+            conn.commit()
 
-    def get_latest_m1b(self) -> float:
+    def get_latest_m1b(self) -> Dict[str, Any]:
         """
-        獲取最新可用 M1B 貨幣供給量 (單位: 億新台幣)
-        優先尋找本地 SQLite 最新的快取；若無數據則回退至 config 預設基準值。
+        獲取最新可用 M1B 貨幣供給量 Contract。
+        無真實數據時一律回傳 status: "insufficient_data"，絕不安裝假資料或硬編碼預設值。
         """
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT m1b_amount FROM cbc_m1b ORDER BY date DESC LIMIT 1")
-        row = cursor.fetchone()
-        conn.close()
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT date, m1b_amount, period, available_at FROM cbc_m1b ORDER BY date DESC LIMIT 1")
+                row = cursor.fetchone()
 
-        if row and row[0]:
-            logger.info(f"從 SQLite 快取獲取最新 M1B 數據: {row[0]} 億元")
-            return float(row[0])
+            if row and row[1]:
+                date_val, amount_val, period_val, av_at_val = row
+                return {
+                    "status": "available",
+                    "value": float(amount_val),
+                    "period": period_val or date_val[:7],
+                    "available_at": av_at_val or date_val,
+                    "unit": "TWD_100_million",
+                    "source": "CBC"
+                }
+        except Exception as e:
+            logger.error(f"讀取 SQLite M1B 數據失敗: {str(e)}")
 
-        logger.info(f"使用 config.yaml 備用 M1B 基準值: {self.default_m1b} 億元")
-        return self.default_m1b
+        return {
+            "status": "insufficient_data",
+            "value": None,
+            "reason": "No CBC M1B record is available in local cache or remote source"
+        }
 
-    def save_m1b_data(self, date_str: str, m1b_amount: float):
+    def save_m1b_data(self, date_str: str, m1b_amount: float, period_str: Optional[str] = None, available_at_str: Optional[str] = None):
         """手動或爬蟲更新 M1B 數據至 SQLite"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT OR REPLACE INTO cbc_m1b (date, m1b_amount)
-            VALUES (?, ?)
-        """, (date_str, m1b_amount))
-        conn.commit()
-        conn.close()
-        logger.info(f"已更新 SQLite M1B 數據 ({date_str}: {m1b_amount} 億元)")
+        period_val = period_str or date_str[:7]
+        av_at_val = available_at_str or date_str
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO cbc_m1b (date, m1b_amount, period, available_at)
+                VALUES (?, ?, ?, ?)
+            """, (date_str, m1b_amount, period_val, av_at_val))
+            conn.commit()
+        logger.info(f"已更新 SQLite M1B 數據 ({date_str}: {m1b_amount} 億元, period: {period_val})")

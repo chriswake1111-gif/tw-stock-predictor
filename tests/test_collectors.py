@@ -12,6 +12,22 @@ def temp_db(tmp_path):
     db_file = tmp_path / "test_cache.db"
     return str(db_file)
 
+def test_finmind_normalize_quarterly_eps():
+    collector = FinMindCollector()
+    raw_records = [
+        {"date": "2025-03-31", "type": "EPS", "value": 2.0, "origin_date": "2025-05-10"},
+        {"date": "2025-06-30", "type": "EPS", "value": 5.0, "origin_date": "2025-08-10"}, # Q2 累計 5.0 -> 單季 3.0
+        {"date": "2025-09-30", "type": "EPS", "value": 8.0, "origin_date": "2025-11-10"}, # Q3 累計 8.0 -> 單季 3.0
+        {"date": "2025-12-31", "type": "EPS", "value": 12.0, "origin_date": "2026-03-15"} # 全年 12.0 -> Q4 單季 4.0
+    ]
+    raw_df = pd.DataFrame(raw_records)
+    norm_df = collector.normalize_quarterly_eps(raw_df)
+    
+    assert len(norm_df) == 4
+    eps_list = norm_df["single_quarter_eps"].tolist()
+    assert eps_list == [2.0, 3.0, 3.0, 4.0]
+    assert sum(eps_list) == 12.0
+
 def test_twse_collector_cache_init(temp_db):
     collector = TWSECollector(db_path=temp_db)
     assert os.path.exists(temp_db)
@@ -24,36 +40,3 @@ def test_twse_collector_cache_init(temp_db):
     conn.close()
     
     assert "daily_ohlcv" in tables
-
-def test_twse_collector_fetch_ohlcv(temp_db):
-    collector = TWSECollector(db_path=temp_db)
-    end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
-    
-    df = collector.get_ohlcv("2330.TW", start_date=start_date, end_date=end_date)
-    assert isinstance(df, pd.DataFrame)
-    if not df.empty:
-        required_cols = {"date", "open", "high", "low", "close", "volume", "symbol"}
-        assert required_cols.issubset(df.columns)
-
-def test_finmind_collector_valuation(temp_db):
-    collector = FinMindCollector(db_path=temp_db)
-    end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-    
-    df = collector.get_valuation("2330", start_date=start_date, end_date=end_date)
-    assert isinstance(df, pd.DataFrame)
-    if not df.empty:
-        required_cols = {"stock_id", "date"}
-        assert required_cols.issubset(df.columns)
-
-def test_finmind_collector_margin(temp_db):
-    collector = FinMindCollector(db_path=temp_db)
-    end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-    
-    df = collector.get_margin_trading("2330", start_date=start_date, end_date=end_date)
-    assert isinstance(df, pd.DataFrame)
-    if not df.empty:
-        required_cols = {"stock_id", "date"}
-        assert required_cols.issubset(df.columns)

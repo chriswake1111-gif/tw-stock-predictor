@@ -101,16 +101,9 @@ def get_analysis(symbol: str):
     latest_row = clean_df.iloc[-1]
     latest_close = float(latest_row['close'])
 
-    # 1. 波浪分析 (即時無前視 mode: realtime_confirmed 與事後 hindsight 雙軌)
+    # 1. 波浪分析 (realtime_confirmed 與 hindsight_visualization 雙軌分立)
     realtime_wave = wave_engine.get_realtime_confirmed_wave_params(real_symbol, clean_df)
     hindsight_wave = wave_engine.get_hindsight_wave_params(real_symbol, clean_df)
-    
-    p0 = hindsight_wave.get("p0", 370.0) if isinstance(hindsight_wave.get("p0"), float) else 370.0
-    p1 = hindsight_wave.get("p1", 546.0) if isinstance(hindsight_wave.get("p1"), float) else 546.0
-    p2 = hindsight_wave.get("p2", 489.0) if isinstance(hindsight_wave.get("p2"), float) else 489.0
-
-    targets = wave_engine.calculate_wave_targets(p0=p0, p1=p1, p2=p2)
-    time_win = wave_engine.check_time_window(clean_df, pivot_date=hindsight_wave.get("pivot_date", "2022-10-25"))
 
     # 2. 均線扣抵與共振
     analyzed_df = ma_engine.calculate_ma_and_deductions(clean_df)
@@ -156,13 +149,13 @@ def get_analysis(symbol: str):
         "eva_floor_price": None
     }
 
-    # 4. 大盤與 M1B 熱度 Contract (來自 MarketTurnoverCollector)
+    # 4. 大盤與 M1B 熱度 Contract (來自 MarketTurnoverCollector & CBCCollector)
     turnover_res = turnover_collector.get_latest_available_turnover(end_date=end_date)
-    market_turnover_twd = None
-    if turnover_res.get("status") == "available":
-        market_turnover_twd = turnover_res["market_turnover"]["value"]
+    market_turnover_info = turnover_res.get("market_turnover")
+    market_turnover_twd = market_turnover_info.get("value") if market_turnover_info else None
 
     sentiment_res = sentiment_engine.check_turnover_m1b_overheat(market_turnover_twd=market_turnover_twd)
+    sentiment_res["market_turnover_detail"] = market_turnover_info
 
     # 5. TradingView Lightweight Charts K 線資料 (time: YYYY-MM-DD)
     kline_list = []
@@ -200,8 +193,6 @@ def get_analysis(symbol: str):
             "realtime_confirmed": realtime_wave,
             "hindsight_visualization": hindsight_wave
         },
-        "wave_targets": targets,
-        "fib_window": time_win,
         "valuation": valuation_contract,
         "eva_valuation": eva_contract,
         "sentiment": sentiment_res,

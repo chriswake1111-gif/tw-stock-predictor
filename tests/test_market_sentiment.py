@@ -1,9 +1,12 @@
 import pytest
 from src.engine.market_sentiment import MarketSentimentEngine
 
-def test_cbc_collector_m1b_fallback():
+def test_cbc_collector_m1b_contract():
     engine = MarketSentimentEngine(config_path="config/config.yaml")
-    assert engine.cbc_collector.default_m1b == 270000.0
+    m1b_res = engine.cbc_collector.get_latest_m1b()
+    assert "status" in m1b_res
+    if m1b_res["status"] == "insufficient_data":
+        assert m1b_res["value"] is None
 
 def test_turnover_m1b_overheat_signal():
     engine = MarketSentimentEngine(config_path="config/config.yaml")

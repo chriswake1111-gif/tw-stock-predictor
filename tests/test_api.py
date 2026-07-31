@@ -17,8 +17,9 @@ def test_api_analysis_tsmc():
     
     assert data["symbol"] == "2330.TW"
     assert "latest_price" in data
-    assert "wave_targets" in data
     assert "wave_analysis" in data
+    assert "realtime_confirmed" in data["wave_analysis"]
+    assert "hindsight_visualization" in data["wave_analysis"]
     assert "eps" in data
     assert "valuation" in data
     assert "eva_valuation" in data
