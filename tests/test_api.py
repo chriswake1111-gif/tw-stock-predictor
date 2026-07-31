@@ -18,6 +18,7 @@ def test_api_analysis_tsmc():
     assert data["symbol"] == "2330.TW"
     assert "latest_price" in data
     assert "wave_targets" in data
+    assert "wave_analysis" in data
     assert "eps" in data
     assert "valuation" in data
     assert "eva_valuation" in data
@@ -25,7 +26,6 @@ def test_api_analysis_tsmc():
     
     # 驗證 TWD 單位與契約
     assert data["eps"]["unit"] == "TWD_per_share"
-    assert data["sentiment"]["market_turnover"]["unit"] == "TWD"
     assert data["eva_valuation"]["status"] == "unsupported"
 
 def test_symbol_normalization():

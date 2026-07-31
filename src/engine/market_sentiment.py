@@ -1,15 +1,17 @@
 import os
 import yaml
+import sqlite3
 import logging
 import pandas as pd
 from typing import Dict, Any, Optional
+
 from src.collectors.cbc_collector import CBCCollector
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 class MarketSentimentEngine:
-    """總體籌碼與大盤市場過熱風險控管引擎 (M1B 頭部過熱與融資槓桿溫度計)"""
+    """市場過熱與情緒溫度計演算引擎 (零假值與零 fallback 備援保護)"""
 
     def __init__(self, db_path: str = "data/cache.db", config_path: str = "config/config.yaml"):
         self.db_path = db_path
@@ -23,66 +25,101 @@ class MarketSentimentEngine:
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     return yaml.safe_load(f) or {}
             except Exception as e:
-                logger.error(f"讀取 {self.config_path} 失敗: {str(e)}")
+                logger.error(f"載入 {self.config_path} 失敗: {str(e)}")
         return {}
 
-    def check_volume_m1b_overheat(
-        self, 
-        daily_volume_billion: float, 
-        m1b_billion: Optional[float] = None
+    def check_turnover_m1b_overheat(
+        self,
+        market_turnover_twd: Optional[float] = None,
+        m1b_twd: Optional[float] = None
     ) -> Dict[str, Any]:
         """
-        大盤頭部天量預警 (成交總金額 / M1B 比率)：
-        :param daily_volume_billion: 單日上市櫃總成交金額 (億元)
-        :param m1b_billion: 央行最新 M1B 貨幣供給量 (億元)
+        計算大盤成交金額 / M1B 頭部過熱比率 (turnover_m1b_ratio = market_turnover_twd / m1b_twd)
+        若任一必要資料缺失，絕不使用假值或預設備援，一律回傳 status: "insufficient_data"。
         """
-        if m1b_billion is None or m1b_billion <= 0:
+        threshold = self.config.get("sentiment", {}).get("volume_m1b_threshold", 0.020)
+
+        # 1. 若未傳入 M1B，嘗試從 CBCCollector 獲取
+        if m1b_twd is None:
             m1b_billion = self.cbc_collector.get_latest_m1b()
+            if m1b_billion and m1b_billion > 0:
+                m1b_twd = m1b_billion * 1e8
 
-        sentiment_cfg = self.config.get("sentiment", {})
-        threshold_ratio = sentiment_cfg.get("volume_m1b_threshold", 0.020)
+        # 2. 嚴格檢查資料完整性 (零假資料備援)
+        if market_turnover_twd is None or market_turnover_twd <= 0 or m1b_twd is None or m1b_twd <= 0:
+            return {
+                "status": "insufficient_data",
+                "reason": "Latest TWSE+TPEx market turnover or CBC M1B data is unavailable",
+                "market_turnover_twd": market_turnover_twd,
+                "m1b_twd": m1b_twd,
+                "turnover_m1b_ratio": None,
+                "is_overheat": None,
+                "status_message": "資料不足：無法取得真實市場總成交金額或 M1B 數據"
+            }
 
-        # 比率計算
-        ratio = round(daily_volume_billion / m1b_billion, 4)
-        
-        # 單日爆出天量判斷 (例如單日超過 2.5 兆 = 25000 億) 或 比率 > 臨界門檻 (2%)
-        is_extreme_volume = daily_volume_billion >= 25000.0
-        is_ratio_overheat = ratio >= threshold_ratio
-
-        is_overheat = is_extreme_volume or is_ratio_overheat
-
-        status_msg = (
-            f"大盤成交金額 {daily_volume_billion} 億 / M1B {m1b_billion} 億 (比率: {ratio*100:.2f}%) " +
-            ("[警告: 市場陷入極端過熱狂熱狀態!]" if is_overheat else "[正常: 大盤成交量能維繫在適中區間]")
-        )
-
-        return {
-            "daily_volume_billion": daily_volume_billion,
-            "m1b_billion": m1b_billion,
-            "volume_m1b_ratio": ratio,
-            "threshold_ratio": threshold_ratio,
-            "is_overheat": is_overheat,
-            "status_message": status_msg
-        }
-
-    def check_margin_leverage_heat(self, margin_return: float) -> Dict[str, Any]:
-        """
-        槓桿過熱指標 (融資報酬率 / 全市場槓桿溫度計)：
-        當融資報酬率增幅 > 8% 時觸發減碼避險訊號。
-        :param margin_return: 近期融資報酬率 (如 0.10 代表 10%)
-        """
-        sentiment_cfg = self.config.get("sentiment", {})
-        threshold = sentiment_cfg.get("margin_return_threshold", 0.08)
-
-        is_heat_warning = margin_return >= threshold
-        status_msg = (
-            f"全市場融資報酬率增幅: {margin_return*100:.2f}% (門檻: {threshold*100:.2f}%) " +
-            ("[過熱警示: 融資槓桿極度浮濫，觸發分批減碼訊號!]" if is_heat_warning else "[正常: 融資槓桿處於健康風險天數]")
-        )
+        # 3. 計算比率與過熱判定
+        ratio = round(market_turnover_twd / m1b_twd, 6)
+        is_overheat = bool(ratio >= threshold)
 
         return {
-            "margin_return": margin_return,
+            "status": "available",
+            "market_turnover_twd": market_turnover_twd,
+            "m1b_twd": m1b_twd,
+            "turnover_m1b_ratio": ratio,
             "threshold": threshold,
-            "is_heat_warning": is_heat_warning,
-            "status_message": status_msg
+            "is_overheat": is_overheat,
+            "status_message": f"大盤成交金額 / M1B 比率: {ratio*100:.2f}%" + 
+                             (f" [觸發頭部過熱警戒! (≥ {threshold*100:.1f}%)]" if is_overheat else " [正常適中區間]")
         }
+
+    def check_margin_leverage_heat(self, symbol: str = "^TWII") -> Dict[str, Any]:
+        """全市場融資槓桿過熱溫度計"""
+        threshold = self.config.get("sentiment", {}).get("margin_return_threshold", 0.08)
+        
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stock_margin'")
+                if not cursor.fetchone():
+                    return {
+                        "status": "insufficient_data",
+                        "reason": "stock_margin table does not exist in SQLite",
+                        "is_overheat": None,
+                        "status_message": "融資數據表未初始化"
+                    }
+
+                query = "SELECT date, margin_balance FROM stock_margin WHERE stock_id=? ORDER BY date DESC LIMIT 60"
+                df = pd.read_sql_query(query, conn, params=(symbol,))
+                
+            if df.empty or len(df) < 20:
+                return {
+                    "status": "insufficient_data",
+                    "reason": "Margin data points fewer than 20 days",
+                    "is_overheat": None,
+                    "status_message": "融資數據點不足"
+                }
+
+            df.sort_values("date", inplace=True)
+            recent_balance = float(df['margin_balance'].iloc[-1])
+            past_balance = float(df['margin_balance'].iloc[0])
+            
+            growth_rate = (recent_balance - past_balance) / past_balance if past_balance > 0 else 0.0
+            is_overheat = bool(growth_rate >= threshold)
+
+            return {
+                "status": "available",
+                "recent_balance": recent_balance,
+                "margin_growth_rate": round(growth_rate, 4),
+                "threshold": threshold,
+                "is_overheat": is_overheat,
+                "status_message": f"融資餘額增長率: {growth_rate*100:.2f}%" + 
+                                 (f" [過熱警戒! (≥ {threshold*100:.1f}%)]" if is_overheat else " [籌碼面正常]")
+            }
+        except Exception as e:
+            logger.error(f"查詢融資熱度失敗: {str(e)}")
+            return {
+                "status": "insufficient_data",
+                "reason": str(e),
+                "is_overheat": None,
+                "status_message": "融資數據查詢失敗"
+            }

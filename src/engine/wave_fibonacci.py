@@ -86,17 +86,64 @@ class WaveFibonacciEngine:
 
         return pivots
 
-    def get_symbol_wave_params(self, symbol: str, df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
-        """讀取指定標的在 config 中的波浪錨定點位"""
+    def get_realtime_confirmed_wave_params(self, symbol: str, df: pd.DataFrame, as_of_date: Optional[str] = None) -> Dict[str, Any]:
+        """
+        即時模式：只使用 confirmed_at <= as_of_date 的已確認轉折點算號。
+        若轉折數量不足以建立波浪結構，回傳 status: "insufficient_data"，絕不安裝全歷史極值。
+        """
+        if df.empty:
+            return {"status": "insufficient_data", "reason": "K line dataframe is empty"}
+
+        if as_of_date is None:
+            as_of_date = str(df['date'].iloc[-1])
+
+        pivots = self.detect_confirmed_pivots(df)
+        valid_pivots = [p for p in pivots if p.confirmed_at <= as_of_date]
+
+        low_pivots = [p for p in valid_pivots if p.pivot_type == "low"]
+        high_pivots = [p for p in valid_pivots if p.pivot_type == "high"]
+
+        if not low_pivots or not high_pivots:
+            return {
+                "status": "insufficient_data",
+                "mode": "realtime_confirmed",
+                "anchor_method": "confirmed_pivots",
+                "reason": "Insufficient confirmed wave pivot points for real-time calculation"
+            }
+
+        last_low = low_pivots[-1]
+        last_high = high_pivots[-1]
+
+        p0 = last_low.pivot_price
+        p1 = last_high.pivot_price
+        p2 = round(p1 - (p1 - p0) * 0.382, 2)
+
+        return {
+            "status": "available",
+            "mode": "realtime_confirmed",
+            "anchor_method": "confirmed_pivots",
+            "p0": {"price": p0, "pivot_date": last_low.pivot_date, "confirmed_at": last_low.confirmed_at},
+            "p1": {"price": p1, "pivot_date": last_high.pivot_date, "confirmed_at": last_high.confirmed_at},
+            "p2": {"price": p2, "pivot_date": last_high.pivot_date, "confirmed_at": last_high.confirmed_at},
+            "pivot_date": last_low.pivot_date
+        }
+
+    def get_hindsight_wave_params(self, symbol: str, df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
+        """
+        事後圖表模式：使用全歷史區間極值描繪圖表，附帶明確 Warning 標記。
+        """
         wave_params = self.config.get("wave_parameters", {})
         
         clean_symbol = symbol.replace(".TW", "").replace(".TWO", "")
         for key in [symbol, clean_symbol, f"{clean_symbol}.TW"]:
             if key in wave_params:
-                return wave_params[key]
-        
-        if symbol in ["0000", "TAIEX"] and "^TWII" in wave_params:
-            return wave_params["^TWII"]
+                res = wave_params[key].copy()
+                res.update({
+                    "mode": "hindsight_visualization",
+                    "anchor_method": "configured_or_full_range_extrema",
+                    "warning": "Uses full-range historical extrema and must not be interpreted as a real-time signal"
+                })
+                return res
 
         if df is not None and not df.empty and 'close' in df.columns:
             try:
@@ -105,17 +152,24 @@ class WaveFibonacciEngine:
                 pivot_date = str(df.loc[min_idx, 'date'])
                 
                 after_p0_df = df.loc[min_idx:]
-                if not after_p0_df.empty:
-                    p1 = float(after_p0_df['close'].max())
-                else:
-                    p1 = float(df['close'].max())
-                
+                p1 = float(after_p0_df['close'].max()) if not after_p0_df.empty else float(df['close'].max())
                 p2 = round(p1 - (p1 - p0) * 0.382, 2)
-                return {"p0": p0, "p1": p1, "p2": p2, "pivot_date": pivot_date}
+                
+                return {
+                    "mode": "hindsight_visualization",
+                    "anchor_method": "full_range_extrema",
+                    "warning": "Uses full-range historical extrema and must not be interpreted as a real-time signal",
+                    "p0": p0, "p1": p1, "p2": p2, "pivot_date": pivot_date
+                }
             except Exception as e:
-                logger.error(f"自動推導 {symbol} 波浪點位失敗: {str(e)}")
+                logger.error(f"事後圖表推導 {symbol} 點位失敗: {str(e)}")
 
-        return {"p0": 12629.0, "p1": 15475.0, "p2": 14001.0, "pivot_date": "2022-10-25"}
+        return {
+            "mode": "hindsight_visualization",
+            "anchor_method": "default_fallback",
+            "warning": "Uses full-range historical extrema and must not be interpreted as a real-time signal",
+            "p0": 12629.0, "p1": 15475.0, "p2": 14001.0, "pivot_date": "2022-10-25"
+        }
 
     def calculate_wave_targets(self, p0: float, p1: float, p2: Optional[float] = None) -> Dict[str, float]:
         wave1_diff = p1 - p0

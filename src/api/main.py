@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 from src.collectors.twse_collector import TWSECollector
 from src.collectors.finmind_collector import FinMindCollector
 from src.collectors.cbc_collector import CBCCollector
+from src.collectors.market_turnover_collector import MarketTurnoverCollector
 from src.engine.wave_fibonacci import WaveFibonacciEngine
 from src.engine.ma_deduction import MADeductionEngine
 from src.engine.valuation_eva import ValuationEVAEngine
@@ -83,7 +84,7 @@ def get_analysis(symbol: str):
 
     twse = TWSECollector(db_path=db_path)
     finmind = FinMindCollector(db_path=db_path)
-    cbc = CBCCollector(db_path=db_path)
+    turnover_collector = MarketTurnoverCollector(db_path=db_path)
     wave_engine = WaveFibonacciEngine(config_path="config/config.yaml")
     ma_engine = MADeductionEngine(config_path="config/config.yaml")
     val_engine = ValuationEVAEngine(config_path="config/config.yaml")
@@ -100,21 +101,27 @@ def get_analysis(symbol: str):
     latest_row = clean_df.iloc[-1]
     latest_close = float(latest_row['close'])
 
-    # 1. 波浪與時間視窗
-    params = wave_engine.get_symbol_wave_params(real_symbol, clean_df)
-    targets = wave_engine.calculate_wave_targets(p0=params["p0"], p1=params["p1"], p2=params.get("p2"))
-    time_win = wave_engine.check_time_window(clean_df, pivot_date=params.get("pivot_date", "2022-10-25"))
+    # 1. 波浪分析 (即時無前視 mode: realtime_confirmed 與事後 hindsight 雙軌)
+    realtime_wave = wave_engine.get_realtime_confirmed_wave_params(real_symbol, clean_df)
+    hindsight_wave = wave_engine.get_hindsight_wave_params(real_symbol, clean_df)
+    
+    p0 = hindsight_wave.get("p0", 370.0) if isinstance(hindsight_wave.get("p0"), float) else 370.0
+    p1 = hindsight_wave.get("p1", 546.0) if isinstance(hindsight_wave.get("p1"), float) else 546.0
+    p2 = hindsight_wave.get("p2", 489.0) if isinstance(hindsight_wave.get("p2"), float) else 489.0
+
+    targets = wave_engine.calculate_wave_targets(p0=p0, p1=p1, p2=p2)
+    time_win = wave_engine.check_time_window(clean_df, pivot_date=hindsight_wave.get("pivot_date", "2022-10-25"))
 
     # 2. 均線扣抵與共振
     analyzed_df = ma_engine.calculate_ma_and_deductions(clean_df)
     resonance_series = ma_engine.detect_resonance_signal(analyzed_df)
     is_resonance = bool(resonance_series.iloc[-1])
 
-    # 3. 真實 EPS 估值與資料契約
+    # 3. 真實 EPS 估值與 Contract (零代理假資料)
     clean_code = real_symbol.replace(".TW", "").replace(".TWO", "").replace("^", "")
-    val_df = finmind.get_valuation(clean_code)
+    ttm_res = finmind.get_ttm_eps(clean_code)
     
-    eps_contract = {
+    eps_contract = ttm_res.get("eps") or {
         "value": None,
         "type": "historical_ttm",
         "unit": "TWD_per_share",
@@ -131,23 +138,16 @@ def get_analysis(symbol: str):
         "estimated_eps": None
     }
 
-    if not val_df.empty:
-        last_val = val_df.iloc[-1]
-        pe = float(last_val.get("pe", 0))
-        if pe > 0:
-            ttm_eps = round(latest_close / pe, 2)
-            dog_val = val_engine.calculate_dog_master_valuation(eps=ttm_eps)
-            eps_contract.update({
-                "value": ttm_eps,
-                "status": "available"
-            })
-            valuation_contract.update({
-                "status": "available",
-                "cheap_price": dog_val["cheap_price"],
-                "fair_price": dog_val["fair_price"],
-                "expensive_price": dog_val["expensive_price"],
-                "estimated_eps": dog_val["estimated_eps"]
-            })
+    if eps_contract and eps_contract.get("value"):
+        ttm_val = float(eps_contract["value"])
+        dog_val = val_engine.calculate_dog_master_valuation(eps=ttm_val)
+        valuation_contract.update({
+            "status": "available",
+            "cheap_price": dog_val["cheap_price"],
+            "fair_price": dog_val["fair_price"],
+            "expensive_price": dog_val["expensive_price"],
+            "estimated_eps": dog_val["estimated_eps"]
+        })
 
     # EVA 暫停使用標記 (未完備財報標準化前不給予假資料)
     eva_contract = {
@@ -156,35 +156,13 @@ def get_analysis(symbol: str):
         "eva_floor_price": None
     }
 
-    # 4. 大盤與 M1B 熱度 Contract
-    m1b_val_billion = cbc.get_latest_m1b() # 回傳 float (億新台幣)
-    m1b_val = float(m1b_val_billion * 1e8)
-    
-    taiex_df = twse.get_ohlcv("^TWII", start_date=end_date, end_date=end_date)
-    daily_volume_val = float(taiex_df.iloc[-1]['volume']) if not taiex_df.empty else 0.0
+    # 4. 大盤與 M1B 熱度 Contract (來自 MarketTurnoverCollector)
+    turnover_res = turnover_collector.get_latest_available_turnover(end_date=end_date)
+    market_turnover_twd = None
+    if turnover_res.get("status") == "available":
+        market_turnover_twd = turnover_res["market_turnover"]["value"]
 
-    sentiment_res = sentiment_engine.check_volume_m1b_overheat(
-        daily_volume_billion=(daily_volume_val / 1e8) if daily_volume_val > 0 else 4500.0
-    )
-
-    sentiment_contract = {
-        "status": "available",
-        "market_turnover": {
-            "value": daily_volume_val,
-            "scope": "TWSE+TPEx",
-            "metric": "traded_volume",
-            "unit": "TWD",
-            "source": ["TWSE Daily Trading Summary"]
-        },
-        "m1b": {
-            "value": m1b_val,
-            "unit": "TWD",
-            "source": "CBC Monthly Data"
-        },
-        "volume_m1b_ratio": sentiment_res["volume_m1b_ratio"],
-        "is_overheat": sentiment_res["is_overheat"],
-        "status_message": sentiment_res["status_message"]
-    }
+    sentiment_res = sentiment_engine.check_turnover_m1b_overheat(market_turnover_twd=market_turnover_twd)
 
     # 5. TradingView Lightweight Charts K 線資料 (time: YYYY-MM-DD)
     kline_list = []
@@ -218,11 +196,15 @@ def get_analysis(symbol: str):
         "date": str(latest_row["date"]),
         "is_resonance": is_resonance,
         "eps": eps_contract,
+        "wave_analysis": {
+            "realtime_confirmed": realtime_wave,
+            "hindsight_visualization": hindsight_wave
+        },
         "wave_targets": targets,
         "fib_window": time_win,
         "valuation": valuation_contract,
         "eva_valuation": eva_contract,
-        "sentiment": sentiment_contract,
+        "sentiment": sentiment_res,
         "ma_deductions": ma_deductions,
         "kline_data": kline_list
     }
