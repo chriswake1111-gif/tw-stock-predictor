@@ -1,5 +1,74 @@
 # 專案進度與下階段待辦 (NEXT_TODO.md)
 
+## 2026-08-01 研究模式產品邊界與分析核心改進
+
+- [x] 正式建立 `DOCS/PRODUCT_BOUNDARY.md`：僅允許市場研究、歷史回測與虛擬模擬；禁止券商 SDK、真實委託、跟單及客戶資金管理。
+- [x] 新增 `src/analysis_service.py`，統一 FastAPI、Streamlit 與每日排程器的分析契約。
+- [x] 移除固定波浪點、固定成交量、股價推造 EPS/EVA 及前端假預設值；資料不足改回傳 `insufficient_data` / `not_applicable`。
+- [x] 修復即時波浪 `as_of_date` 未完整傳遞到費氏時間窗的未來資料問題。
+- [x] TTM EPS 改為驗證連續四季，並加入 150 日快取新鮮度檢查。
+- [x] 負 EPS 不再產生負的 PE 目標價。
+- [x] FinMind 殖利率加入 `percent` / `ratio` 明確單位 migration，內部統一使用比例。
+- [x] CBC M1B 依 `available_at` 執行 as-of 查詢，不再假設期末日即可取得資料。
+- [x] 均線扣抵欄位不完整時採 fail-closed，不產生共振訊號。
+- [x] Backtrader 進場訊號納入 8/13/21/55/144 日扣抵斜率，結果明示 `historical_backtest_only` 與 `simulated_orders_only`。
+- [x] FastAPI 靜態前端與 Streamlit 均顯示研究模式及非投資建議聲明。
+- [x] 建立離線優先的固定快照與 walk-forward CLI：`tools/run_backtest.py`。
+- [x] 同窗比較 TU 策略、買進持有及 SMA 8/21，納入手續費、證交稅、滑價、整張交易與訊號次日開盤執行。
+- [x] 報告輸出 `report.json`、彙總／視窗／交易／品質 CSV、資料快照及人類可讀摘要；檔名包含資料與設定指紋。
+- [x] 產出基準報告：`reports/backtest/baseline-v2-20260801-5cb3f28be410`（模擬資金 1,000 萬元，未進行參數最佳化）。
+- [x] 驗證：`52 passed`；僅保留既有 FastAPI TestClient 第三方棄用警告。
+- [x] 擴充 2014-01-02 至 2026-07-31 的長期調整價快照，三個標的各約 3,060 筆。
+- [x] 新增 `DOCS/RESEARCH_DATA_CONTRACT.md`，保存來源、套件版本、抓取參數、雙 SHA-256 與供應商資料可變性契約。
+- [x] Walk-forward 擴充為 12 個年度驗證窗，並依同窗 `^TWII` 報酬分為 9 個牛市、1 個熊市、2 個盤整窗。
+- [x] 完成五組訓練窗參數敏感度；排名不套用驗證窗，避免資訊洩漏。
+- [x] 長期報告：`reports/backtest/long-history-v1-20260801-eee3948d6fa6`。
+- [x] 新增固定 snapshot 重播與執行前 SHA-256 驗證，避免供應商回溯修改污染比較。
+- [x] 新增平均資金使用率，區分「有持倉天數」與「實際投入資金比例」。
+- [x] 保留 legacy 訊號，完成訓練窗配置選型 `adaptive v1.1 balanced cap`。
+- [x] adaptive v1.1 長期報告：`reports/backtest/adaptive-v1-1-20260801-193192967aed`。
+- [x] aggressive adaptive v1 因 2330 最差 MDD 達 18.17%，僅保留 `reports/backtest/adaptive-v1-20260801-8353b098396a` 作失敗實驗證據。
+- [x] adaptive v1.1 三標的報酬均高於 legacy，最差 MDD 分別為 4.82%、6.43%、11.63%；僅列為擴大驗證候選，未升格預設。
+- [x] 以 `config/expanded_validation_universe.yaml` 預註冊 Phase A 的 14 檔 TWSE 分層樣本，固定選樣、日期與整體門檻後才執行回測。
+- [x] 初步擴大驗證報告：`reports/backtest/expanded-phase-a-20260801-1c3d9e6d79ab`；未加入官方交易日完整性 gate 時，14 檔皆完成計算、僅 0056 與 006208 通過策略 gate。此報告只保留為前後比較，不作升格證據。
+- [x] 報告新增 `universe_gate.csv` 與類別覆蓋摘要；不可事後移除失敗／缺資料標的，且 `promotion_to_default` 固定為 `false`。
+- [x] 新增 TWSE 月成交唯讀稽核、零量列移除、參考交易日缺口與逐筆官方補值契約；1301 2025-08 與 2317 2018-10 已和官方資料完全對齊。
+- [x] Audited v2 報告：`reports/backtest/expanded-phase-a-audited-v2-20260801-b8e7d89c9854`；14 檔均有尚未完整解釋的長期交易日／零量差異，品質合格可用數為 0，正式結論為 `hold_for_revision`。
+- [x] 建立 Phase 1 TWSE 官方完整性層：以 `FMTQIK` 建立 3,068 個官方成交日，只針對缺口月份抓取 `STOCK_DAY`，並收錄 `TWT49U`／`TWTAUU` 公司行動；407 個請求具備限速、checkpoint 與同 scope 續跑。
+- [x] 完成 14 檔官方對帳報告 `official_integrity_audit_v1.json`；辨識供應商漏掉的補行星期六交易、2317 停牌／未交易日及 006208 官方零量列。既有 `daily_ohlcv` 52,074 筆與 canonical SHA-256 均未改變。
+- [x] 核准並實作 `provider_compatible_adjusted_v1`：同月份、同公司行動區段至少兩個 `1e-6` 唯一共識錨點才可將 TWSE raw OHLC 轉為 parent-compatible adjusted OHLC；volume 不調整。
+- [x] 建立不可變 Phase 2 快照 `phase2-gap-adjusted-v1-20260801-ec781a02134f`：236 個官方缺口中重建 202 筆、34 筆 fail-closed；官方完整性 gate 由 0/14 提升至 12/14，原 audited-v2 未覆寫。
+- [x] Evidence Model v2 Phase 0／1：建立 legacy golden snapshot、證據規則 registry 與 U 級規則 fail-closed。
+- [x] Evidence Model v2 Phase 2：完成 Forward EPS／PE immutable revisions、transactional migration、`knowledge_cutoff_at` as-of 查詢與平行 v2 valuation API。
+- [x] Forward EPS 多來源維持分離，不自動平均；verified matrix 只使用 approved symbol-scope PE，draft／revoked PE 不進入估值。
+- [x] Evidence Model v2 Phase 2 review hardening：寫入預設關閉、管理 API key、draft-only import、immutable approval ledger、U 級 fail-closed、C 級 operationalization 與永久 idempotency ledger。
+- [x] Phase 2 驗收：完整回歸結果與 v1 golden snapshot 證據更新於 `DOCS/evidence-model-v2/PHASE2_ACCEPTANCE_EVIDENCE.md`；未新增外部 Forward EPS Collector。
+- [x] Phase 2 CI／approval follow-up：固定 FastAPI／Starlette／Pydantic／httpx2／pytest 相容組、draft/revoked EPS 狀態、VAL-02／VAL-04 精確核准對應與 backdated decision 防護。
+
+### 尚未完成／不得誤解為已完成
+
+- [ ] CBC M1B 目前只有本地 SQLite 讀取與手動寫入，尚未實作官方遠端自動採集。
+- [ ] EVA 因缺少完整 NOPAT、投入資本與流通股數資料契約，API 明確回傳 `unsupported`。
+- [ ] 融資模組目前只計算觀察期融資餘額成長率；若要實作「融資相對大盤報酬率」，仍需確認正式業務公式。
+- [ ] 長期資料、參數敏感度與行情分層已完成；目前只有一個熊市年度窗，熊市結論仍需更多歷史或其他標的驗證。
+- [ ] yfinance 為非官方供應路徑，實測重新抓取時調整價末位小數可能回溯改變；重現既有結果須使用報告內固定快照。
+- [ ] `^TWII` 無法直接交易，報告使用 ETF 稅率與單位的「指數代理成本模型」，不是可成交商品的精確重現。
+- [ ] 回測尚未納入股利現金流、個股漲跌停、成交量容量與市場衝擊。
+- [ ] adaptive v1.1 已完成 Phase A 計算，但官方完整性 gate 為 0/14 可用；不得視為跨標的驗證完成，legacy 仍是正式預設策略。
+- [ ] Phase 2 已建立 parent-compatible 缺日 adjusted 流程，但仍不是全歷史官方調整價；ETF 分割／反分割、面額變更及股利現金流／總報酬語意仍需獨立的官方全量資料契約。
+- [ ] `006208.TW` 有 32 筆官方成交股數／金額存在但 OHLC 為空，另有 1 筆錨點不足；`2308.TW` 有 1 筆因子共識平手。這 34 筆維持 `insufficient_data`，不得用成交均價或內插補值。
+- [ ] 測試仍有 FastAPI TestClient 對 `httpx` 的第三方棄用警告，暫不影響功能。
+- [ ] Evidence Model v2 尚無外部 Forward EPS Collector；目前只允許人工或已授權來源匯入。
+- [ ] Evidence Model v2 尚未進入 Phase 3 M1B、Phase 4 人工錨點、Phase 5 三等份 planner 與 Phase 7 immutable analysis snapshot。
+
+### 建議下一步
+
+1. 以新固定 snapshot 原樣重跑 Phase A；14 檔預註冊樣本全部保留，006208 與 2308 必須作為品質不合格樣本計入 universe gate，不得事後排除。
+2. 比較新 Phase A 與 audited-v2 的 dataset hash、品質、交易日、報酬與 MDD；不得因結果調整 adaptive profile 或因子門檻。
+3. Phase A 維持至少 10 檔品質合格且原預註冊 gate 通過後，再預註冊 TPEX Phase B 與額外熊市樣本；通過前不得替換 legacy。
+4. 若要建立全歷史官方調整價，須另行處理 ETF 分割／反分割、面額變更與股利現金流，不得將本次 provider-compatible 契約誤稱為官方總報酬。
+5. 完成 CBC 官方資料採集及融資指標的業務公式確認後，再擴充總體／籌碼判定。
+
 ## 📌 當前開發進度 (Current Progress - Fourth Code Review 完成)
 - [x] **第四次 Code Review 全面巡檢與極限邊界優化 (Fourth Code Review Complete)**
   - [x] **P1: 單季 EPS 負值/單季虧損邊界扣減演算法修復 ([src/collectors/finmind_collector.py](file:///d:/Tools/tw-stock-predictor/src/collectors/finmind_collector.py))**

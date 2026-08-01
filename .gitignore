@@ -1,6 +1,14 @@
-__pycache__/
-*.pyc
-*.pyo
+**/__pycache__/
+**/*.py[cod]
+**/*.pyd
 .pytest_cache/
-data/cache.db
+/data/cache.db
 .env
+
+# 可由固定 snapshot 與 CLI 重建的大型研究產物
+reports/backtest/**/report.json
+reports/backtest/**/trades.csv
+reports/backtest/**/windows.csv
+reports/backtest/**/data/
+reports/backtest/**/official_gap_adjustments.csv
+reports/backtest/**/zero_volume_reconciliation.csv

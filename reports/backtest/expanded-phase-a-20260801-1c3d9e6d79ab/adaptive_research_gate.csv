@@ -1,0 +1,15 @@
+symbol,status,passed,promotion_to_default,return_improves_legacy,worst_window_mdd_at_most_12pct,bear_window_present,bear_compounded_return_above_minus_5pct,bear_worst_mdd_at_most_5pct
+0056.TW,candidate_for_broader_validation,True,False,True,True,True,True,True
+006208.TW,candidate_for_broader_validation,True,False,True,True,True,True,True
+2317.TW,hold_for_revision,False,False,False,False,True,True,True
+2454.TW,hold_for_revision,False,False,True,False,True,True,True
+2308.TW,hold_for_revision,False,False,False,False,True,True,True
+2881.TW,hold_for_revision,False,False,False,True,True,False,False
+2882.TW,hold_for_revision,False,False,False,True,True,True,True
+1301.TW,hold_for_revision,False,False,False,False,True,True,True
+2002.TW,hold_for_revision,False,False,True,False,True,True,True
+1101.TW,hold_for_revision,False,False,False,True,True,True,True
+2105.TW,hold_for_revision,False,False,False,True,True,False,False
+1216.TW,hold_for_revision,False,False,False,True,True,True,True
+2412.TW,hold_for_revision,False,False,False,True,True,True,True
+2912.TW,hold_for_revision,False,False,False,True,True,True,True

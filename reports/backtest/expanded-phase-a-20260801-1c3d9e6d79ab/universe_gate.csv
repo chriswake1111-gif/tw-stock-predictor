@@ -1,0 +1,2 @@
+universe_id,preregistration_status,status,passed,promotion_to_default,total_symbols,usable_symbols,passed_symbols,gate_pass_rate,maximum_adaptive_mdd_pct,minimum_usable_symbols_met,minimum_gate_pass_rate_met,maximum_symbol_mdd_met
+twse_stratified_phase_a_2012_anchor,preregistered_before_backtest,hold_for_revision,False,False,14,14,2,0.14285714285714285,23.55,True,False,False

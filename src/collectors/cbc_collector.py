@@ -39,15 +39,25 @@ class CBCCollector:
                 cursor.execute("ALTER TABLE cbc_m1b ADD COLUMN available_at TEXT")
             conn.commit()
 
-    def get_latest_m1b(self) -> Dict[str, Any]:
+    def get_latest_m1b(self, as_of_date: Optional[str] = None) -> Dict[str, Any]:
         """
         獲取最新可用 M1B 貨幣供給量 Contract。
         無真實數據時一律回傳 status: "insufficient_data"，絕不安裝假資料或硬編碼預設值。
         """
         try:
+            cutoff = str(as_of_date or datetime.now().strftime("%Y-%m-%d"))
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT date, m1b_amount, period, available_at FROM cbc_m1b ORDER BY date DESC LIMIT 1")
+                cursor.execute(
+                    """
+                    SELECT date, m1b_amount, period, available_at
+                    FROM cbc_m1b
+                    WHERE available_at IS NOT NULL AND available_at <= ?
+                    ORDER BY available_at DESC, period DESC
+                    LIMIT 1
+                    """,
+                    (cutoff,)
+                )
                 row = cursor.fetchone()
 
             if row and row[1]:
@@ -56,7 +66,7 @@ class CBCCollector:
                     "status": "available",
                     "value": float(amount_val),
                     "period": period_val or date_val[:7],
-                    "available_at": av_at_val or date_val,
+                    "available_at": av_at_val,
                     "unit": "TWD_100_million",
                     "source": "CBC"
                 }
@@ -72,7 +82,7 @@ class CBCCollector:
     def save_m1b_data(self, date_str: str, m1b_amount: float, period_str: Optional[str] = None, available_at_str: Optional[str] = None):
         """手動或爬蟲更新 M1B 數據至 SQLite"""
         period_val = period_str or date_str[:7]
-        av_at_val = available_at_str or date_str
+        av_at_val = available_at_str or datetime.now().strftime("%Y-%m-%d")
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()

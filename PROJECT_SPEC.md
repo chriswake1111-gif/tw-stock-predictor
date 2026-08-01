@@ -1,4 +1,4 @@
-專案開發規格書：杜金龍台股量化預測與分析系統Project Name: tw-stock-tu-systemVersion: 1.0.0Target Platform: Anti-Gravity / Python 3.10+1. 專案總覽與目標 (Overview)本專案旨在將資深證券分析師杜金龍老師的台股分析體系（融合「波浪理論」、「費波南希時間/空間」、「均線扣抵共振」、「基本面 EPS/EVA 估值」以及「M1B 籌碼過熱指標」）進行量化與程式化實作。系統將透過自動化數據管線（Data Pipeline），每日收集台股個股與大盤交易籌碼數據，結合客觀數學公式推導目標價、時間轉折點與風險預警，最後透過視覺化 Dashboard 與自動化告警模組輸出決策建議。2. 專案目錄架構 (Directory Structure)專案目錄需結構化如下，請 Anti-Gravity 依據此目錄進行模組開發：Plaintexttw-stock-tu-system/
+專案開發規格書：杜金龍台股量化預測與分析系統Project Name: tw-stock-tu-systemVersion: 1.0.0Target Platform: Anti-Gravity / Python 3.10+產品安全邊界以 `DOCS/PRODUCT_BOUNDARY.md` 為準：本系統僅供個人市場研究、歷史回測與虛擬模擬，不連接券商帳戶、不送出真實委託。1. 專案總覽與目標 (Overview)本專案旨在將資深證券分析師杜金龍老師的台股分析體系（融合「波浪理論」、「費波南希時間/空間」、「均線扣抵共振」、「基本面 EPS/EVA 估值」以及「M1B 籌碼過熱指標」）進行量化與程式化實作。系統將透過自動化數據管線（Data Pipeline），每日收集台股個股與大盤交易籌碼數據，結合客觀數學公式推導目標價、時間轉折點與風險預警，最後透過視覺化 Dashboard 與自動化告警模組輸出決策建議。2. 專案目錄架構 (Directory Structure)專案目錄需結構化如下，請 Anti-Gravity 依據此目錄進行模組開發：Plaintexttw-stock-tu-system/
 ├── docs/                               # 領域知識與研究報告 (使用者已提供)
 │   ├── 杜金龍超錢部署分析.md
 │   └── 杜金龍台股分析體系與實際趨勢吻合度比對.md

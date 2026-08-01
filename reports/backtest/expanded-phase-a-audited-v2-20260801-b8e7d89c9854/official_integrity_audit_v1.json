@@ -1,0 +1,3093 @@
+{
+  "schema_version": 1,
+  "mode": "official_twse_integrity_audit",
+  "execution_capability": "read_only_market_data_audit",
+  "status": "quality_warning",
+  "requested_start": "2014-01-01",
+  "requested_end": "2026-07-31",
+  "symbol_count": 14,
+  "quality_approved_symbol_count": 0,
+  "quality_warning_symbols": [
+    "0056.TW",
+    "006208.TW",
+    "2317.TW",
+    "2454.TW",
+    "2308.TW",
+    "2881.TW",
+    "2882.TW",
+    "1301.TW",
+    "2002.TW",
+    "1101.TW",
+    "2105.TW",
+    "1216.TW",
+    "2412.TW",
+    "2912.TW"
+  ],
+  "corporate_action_scope": [
+    "TWT49U",
+    "TWTAUU"
+  ],
+  "unsupported_corporate_action_types": [
+    "stock_face_value_change",
+    "etf_split_or_reverse_split"
+  ],
+  "symbol_summaries": [
+    {
+      "symbol": "0056.TW",
+      "official_integrity_status": "quality_warning",
+      "provider_missing_official_trade": 12,
+      "official_trade_without_ohlc": 0,
+      "security_no_trade_or_suspended": 0,
+      "official_zero_volume": 0,
+      "provider_row_on_non_market_day": 0,
+      "corporate_action_count": 22
+    },
+    {
+      "symbol": "006208.TW",
+      "official_integrity_status": "quality_warning",
+      "provider_missing_official_trade": 37,
+      "official_trade_without_ohlc": 32,
+      "security_no_trade_or_suspended": 0,
+      "official_zero_volume": 162,
+      "provider_row_on_non_market_day": 0,
+      "corporate_action_count": 22
+    },
+    {
+      "symbol": "2317.TW",
+      "official_integrity_status": "quality_warning",
+      "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
+      "security_no_trade_or_suspended": 6,
+      "official_zero_volume": 2,
+      "provider_row_on_non_market_day": 0,
+      "corporate_action_count": 14
+    },
+    {
+      "symbol": "2454.TW",
+      "official_integrity_status": "quality_warning",
+      "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
+      "security_no_trade_or_suspended": 0,
+      "official_zero_volume": 1,
+      "provider_row_on_non_market_day": 0,
+      "corporate_action_count": 16
+    },
+    {
+      "symbol": "2308.TW",
+      "official_integrity_status": "quality_warning",
+      "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
+      "security_no_trade_or_suspended": 0,
+      "official_zero_volume": 0,
+      "provider_row_on_non_market_day": 0,
+      "corporate_action_count": 14
+    },
+    {
+      "symbol": "2881.TW",
+      "official_integrity_status": "quality_warning",
+      "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
+      "security_no_trade_or_suspended": 0,
+      "official_zero_volume": 0,
+      "provider_row_on_non_market_day": 0,
+      "corporate_action_count": 18
+    },
+    {
+      "symbol": "2882.TW",
+      "official_integrity_status": "quality_warning",
+      "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
+      "security_no_trade_or_suspended": 0,
+      "official_zero_volume": 0,
+      "provider_row_on_non_market_day": 0,
+      "corporate_action_count": 16
+    },
+    {
+      "symbol": "1301.TW",
+      "official_integrity_status": "quality_warning",
+      "provider_missing_official_trade": 12,
+      "official_trade_without_ohlc": 0,
+      "security_no_trade_or_suspended": 0,
+      "official_zero_volume": 0,
+      "provider_row_on_non_market_day": 0,
+      "corporate_action_count": 13
+    },
+    {
+      "symbol": "2002.TW",
+      "official_integrity_status": "quality_warning",
+      "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
+      "security_no_trade_or_suspended": 0,
+      "official_zero_volume": 0,
+      "provider_row_on_non_market_day": 0,
+      "corporate_action_count": 13
+    },
+    {
+      "symbol": "1101.TW",
+      "official_integrity_status": "quality_warning",
+      "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
+      "security_no_trade_or_suspended": 0,
+      "official_zero_volume": 3,
+      "provider_row_on_non_market_day": 0,
+      "corporate_action_count": 13
+    },
+    {
+      "symbol": "2105.TW",
+      "official_integrity_status": "quality_warning",
+      "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
+      "security_no_trade_or_suspended": 0,
+      "official_zero_volume": 0,
+      "provider_row_on_non_market_day": 0,
+      "corporate_action_count": 13
+    },
+    {
+      "symbol": "1216.TW",
+      "official_integrity_status": "quality_warning",
+      "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
+      "security_no_trade_or_suspended": 0,
+      "official_zero_volume": 1,
+      "provider_row_on_non_market_day": 0,
+      "corporate_action_count": 13
+    },
+    {
+      "symbol": "2412.TW",
+      "official_integrity_status": "quality_warning",
+      "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
+      "security_no_trade_or_suspended": 0,
+      "official_zero_volume": 0,
+      "provider_row_on_non_market_day": 0,
+      "corporate_action_count": 13
+    },
+    {
+      "symbol": "2912.TW",
+      "official_integrity_status": "quality_warning",
+      "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
+      "security_no_trade_or_suspended": 0,
+      "official_zero_volume": 1,
+      "provider_row_on_non_market_day": 0,
+      "corporate_action_count": 13
+    }
+  ],
+  "classifications": [
+    {
+      "symbol": "0056.TW",
+      "date": "2014-12-27",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 273000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "0056.TW",
+      "date": "2016-01-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2561233,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "0056.TW",
+      "date": "2016-06-04",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1852500,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "0056.TW",
+      "date": "2016-09-10",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1461350,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "0056.TW",
+      "date": "2017-02-18",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1108862,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "0056.TW",
+      "date": "2017-06-03",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1636903,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "0056.TW",
+      "date": "2017-09-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1178490,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "0056.TW",
+      "date": "2018-03-31",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 212569,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "0056.TW",
+      "date": "2018-12-22",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1103317,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "0056.TW",
+      "date": "2019-09-09",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 7862097,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "0056.TW",
+      "date": "2021-04-06",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 11917950,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "0056.TW",
+      "date": "2024-01-15",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 59273765,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-02-18",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-02-19",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-03-03",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-03-14",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 45,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-03-18",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-04-29",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-05-05",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-05-13",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-06-03",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-06-05",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-06-11",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-06-12",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-06-24",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-07-09",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-07-14",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-07-22",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-07-24",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-07-29",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-07-30",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-08-04",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-08-06",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-08-07",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-08-08",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-08-14",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-08-18",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-08-20",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-08-25",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-09-04",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-09-11",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-09-16",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-09-18",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-10-01",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-10-02",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-10-14",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-10-23",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-11-11",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-11-13",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-12-04",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-12-05",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-12-11",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-12-25",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-12-26",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-12-27",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2014-12-30",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-01-15",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-01-26",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-02-09",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-03-13",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-03-20",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-03-25",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-03-30",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-03-31",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-04-07",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-04-08",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-04-14",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-04-20",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-05-04",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-05-06",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-05-18",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-05-20",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-06-02",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-06-12",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-06-15",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-06-18",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-06-22",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-07-15",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-08-07",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-09-18",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-11-12",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-11-24",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-12-03",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-12-21",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-12-22",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2015-12-29",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-01-04",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-01-22",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-01-27",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-01-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-02-18",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-02-23",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-02-24",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-03-08",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-03-09",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-03-10",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-03-18",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-03-23",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-03-24",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-03-30",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-04-08",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-04-12",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 3000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-04-14",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-04-15",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-04-18",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-04-27",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-05-10",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-05-16",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-05-24",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-05-27",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-05-31",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-06-04",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-06-06",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-06-14",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-06-16",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-06-17",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-06-20",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-06-21",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-06-22",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-06-23",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-06-24",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-06-27",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-06-28",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-06-29",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-06-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 3000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-07-01",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 8000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-07-04",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 3000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-07-05",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-07-06",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-07-07",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 3000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-07-11",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 6000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-07-12",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-07-13",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-07-14",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 5000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-07-15",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-07-19",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-08-03",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-08-11",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-08-17",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-08-31",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-09-02",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-09-08",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-09-09",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-09-10",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-09-13",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-09-14",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-09-22",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-09-23",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-09-26",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-09-30",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-10-03",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-10-04",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-10-06",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-10-14",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-10-18",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-10-20",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-10-31",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-11-01",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-11-02",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-11-04",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-11-14",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-11-16",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-11-17",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-11-21",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-11-22",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-11-23",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-11-24",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-11-25",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-11-29",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-12-01",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-12-02",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-12-05",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-12-07",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-12-15",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-12-16",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-12-20",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-12-21",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-12-22",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-12-26",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2016-12-29",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-01-13",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-01-17",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-01-18",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-01-19",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-02-18",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1000,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-03-28",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 113,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-04-10",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 42,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-04-12",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-04-14",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-04-28",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-05-02",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-05-09",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 22,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-05-12",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 458,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-05-19",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-05-22",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-05-31",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 157,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-06-03",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1455,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-06-09",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 30,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-06-12",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 1240,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-06-13",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-06-15",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 221,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-06-22",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 598,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-07-10",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 335,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-07-11",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 87,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-07-25",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 82,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-08-01",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-08-21",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 291,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-08-31",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 381,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-09-04",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 962,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-09-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1536,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-10-03",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 188,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-10-18",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 85,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-10-25",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 64,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-11-02",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 114,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-11-14",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 92,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-12-11",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 558,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-12-13",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 959,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-12-20",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 882,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-12-25",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 990,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2017-12-28",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-03-02",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 242,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-03-08",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 300,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-03-09",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 999,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-03-15",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 218,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-03-22",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 500,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-03-31",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 988,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-04-12",
+      "classification": "official_trade_without_ohlc",
+      "official_volume": 181,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-07-09",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 45006,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-08-20",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 41839,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-10-31",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 37459,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-11-09",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 44848,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-11-13",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 42628,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-11-19",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 45311,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-11-26",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 107209,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-11-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 57861,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-12-04",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 44832,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-12-07",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 42735,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-12-11",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 42159,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-12-19",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 41373,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2018-12-22",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 25560,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2019-09-09",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 635051,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2021-04-06",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 3582067,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "006208.TW",
+      "date": "2024-01-15",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 3988222,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2014-12-27",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 8731135,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2016-01-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 12962678,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2016-03-30",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2016-06-04",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 5532986,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2016-09-10",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 23404331,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2017-02-18",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 11328885,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2017-06-03",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 9968286,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2017-09-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 15841520,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2018-03-31",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 136508837,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2018-10-18",
+      "classification": "security_no_trade_or_suspended",
+      "official_volume": null,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2018-10-19",
+      "classification": "security_no_trade_or_suspended",
+      "official_volume": null,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2018-10-22",
+      "classification": "security_no_trade_or_suspended",
+      "official_volume": null,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2018-10-23",
+      "classification": "security_no_trade_or_suspended",
+      "official_volume": null,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2018-10-24",
+      "classification": "security_no_trade_or_suspended",
+      "official_volume": null,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2018-10-25",
+      "classification": "security_no_trade_or_suspended",
+      "official_volume": null,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2018-12-22",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 6222257,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2019-09-09",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 20213537,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2021-04-06",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 42038412,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2021-08-17",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 26076961,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2025-07-30",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2317.TW",
+      "date": "2025-08-01",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 65361707,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2454.TW",
+      "date": "2014-12-27",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 544425,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2454.TW",
+      "date": "2016-01-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 6247911,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2454.TW",
+      "date": "2016-05-13",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2454.TW",
+      "date": "2016-06-04",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 4371668,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2454.TW",
+      "date": "2016-09-10",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 4688489,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2454.TW",
+      "date": "2017-02-18",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2729623,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2454.TW",
+      "date": "2017-06-03",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 3593374,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2454.TW",
+      "date": "2017-09-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2905400,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2454.TW",
+      "date": "2018-03-31",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2089136,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2454.TW",
+      "date": "2018-12-22",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 923087,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2454.TW",
+      "date": "2019-09-09",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 19604086,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2454.TW",
+      "date": "2021-04-06",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 12518802,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2454.TW",
+      "date": "2021-08-17",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 5619978,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2454.TW",
+      "date": "2025-08-01",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 6495615,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2308.TW",
+      "date": "2014-12-27",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 381028,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2308.TW",
+      "date": "2016-01-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1437738,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2308.TW",
+      "date": "2016-06-04",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 985212,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2308.TW",
+      "date": "2016-09-10",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2225770,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2308.TW",
+      "date": "2017-02-18",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 709503,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2308.TW",
+      "date": "2017-06-03",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 705812,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2308.TW",
+      "date": "2017-09-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 118299,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2308.TW",
+      "date": "2018-03-31",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 772299,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2308.TW",
+      "date": "2018-12-22",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1049579,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2308.TW",
+      "date": "2019-09-09",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1281224,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2308.TW",
+      "date": "2021-04-06",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 7684725,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2308.TW",
+      "date": "2021-08-17",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 13984799,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2308.TW",
+      "date": "2025-08-01",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 25566551,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2881.TW",
+      "date": "2014-12-27",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 4773655,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2881.TW",
+      "date": "2016-01-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 62426837,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2881.TW",
+      "date": "2016-06-04",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 3937587,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2881.TW",
+      "date": "2016-09-10",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 13432712,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2881.TW",
+      "date": "2017-02-18",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 3422564,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2881.TW",
+      "date": "2017-06-03",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 4528639,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2881.TW",
+      "date": "2017-09-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 790352,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2881.TW",
+      "date": "2018-03-31",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2751183,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2881.TW",
+      "date": "2018-12-22",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1155915,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2881.TW",
+      "date": "2019-09-09",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 13953567,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2881.TW",
+      "date": "2021-04-06",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 25333675,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2881.TW",
+      "date": "2021-08-17",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 25231481,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2881.TW",
+      "date": "2025-08-01",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 11198097,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2882.TW",
+      "date": "2014-12-27",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 5297290,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2882.TW",
+      "date": "2016-01-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 39185760,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2882.TW",
+      "date": "2016-06-04",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 4327661,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2882.TW",
+      "date": "2016-09-10",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 13837030,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2882.TW",
+      "date": "2017-02-18",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 3711500,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2882.TW",
+      "date": "2017-06-03",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 4958671,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2882.TW",
+      "date": "2017-09-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2590573,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2882.TW",
+      "date": "2018-03-31",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 4060454,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2882.TW",
+      "date": "2018-12-22",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1930561,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2882.TW",
+      "date": "2019-09-09",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 11918088,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2882.TW",
+      "date": "2021-04-06",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 22036806,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2882.TW",
+      "date": "2021-08-17",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 25303072,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2882.TW",
+      "date": "2025-08-01",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 18885623,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1301.TW",
+      "date": "2014-12-27",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1788015,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1301.TW",
+      "date": "2016-01-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2828164,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1301.TW",
+      "date": "2016-06-04",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 765619,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1301.TW",
+      "date": "2016-09-10",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2555604,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1301.TW",
+      "date": "2017-02-18",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2297379,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1301.TW",
+      "date": "2017-06-03",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1911776,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1301.TW",
+      "date": "2017-09-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1191990,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1301.TW",
+      "date": "2018-03-31",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1419374,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1301.TW",
+      "date": "2018-12-22",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 806295,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1301.TW",
+      "date": "2019-09-09",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2560012,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1301.TW",
+      "date": "2021-04-06",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 5493399,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1301.TW",
+      "date": "2021-08-17",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 4786854,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2002.TW",
+      "date": "2014-12-27",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 6618050,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2002.TW",
+      "date": "2016-01-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 7363084,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2002.TW",
+      "date": "2016-06-04",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 3988011,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2002.TW",
+      "date": "2016-09-10",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 10767386,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2002.TW",
+      "date": "2017-02-18",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 6332664,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2002.TW",
+      "date": "2017-06-03",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2618382,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2002.TW",
+      "date": "2017-09-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1510358,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2002.TW",
+      "date": "2018-03-31",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 6288021,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2002.TW",
+      "date": "2018-12-22",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2545506,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2002.TW",
+      "date": "2019-09-09",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 7708654,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2002.TW",
+      "date": "2021-04-06",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 32305454,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2002.TW",
+      "date": "2021-08-17",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 110889852,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2002.TW",
+      "date": "2025-08-01",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 25232330,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1101.TW",
+      "date": "2014-12-27",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1245869,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1101.TW",
+      "date": "2016-01-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 4457746,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1101.TW",
+      "date": "2016-06-04",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1669790,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1101.TW",
+      "date": "2016-09-10",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 3061363,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1101.TW",
+      "date": "2017-02-18",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2342287,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1101.TW",
+      "date": "2017-04-19",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1101.TW",
+      "date": "2017-04-20",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1101.TW",
+      "date": "2017-06-03",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 871390,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1101.TW",
+      "date": "2017-09-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 761927,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1101.TW",
+      "date": "2018-03-31",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2174618,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1101.TW",
+      "date": "2018-12-22",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1636356,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1101.TW",
+      "date": "2019-09-09",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 16943215,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1101.TW",
+      "date": "2021-04-06",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 33845298,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1101.TW",
+      "date": "2021-08-17",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 25544445,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1101.TW",
+      "date": "2025-08-01",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 11575724,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1101.TW",
+      "date": "2025-08-13",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2105.TW",
+      "date": "2014-12-27",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1863979,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2105.TW",
+      "date": "2016-01-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2025937,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2105.TW",
+      "date": "2016-06-04",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 4732072,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2105.TW",
+      "date": "2016-09-10",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1674595,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2105.TW",
+      "date": "2017-02-18",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 945766,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2105.TW",
+      "date": "2017-06-03",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 996272,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2105.TW",
+      "date": "2017-09-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 301560,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2105.TW",
+      "date": "2018-03-31",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 4555403,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2105.TW",
+      "date": "2018-12-22",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1376705,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2105.TW",
+      "date": "2019-09-09",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2303995,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2105.TW",
+      "date": "2021-04-06",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 4813631,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2105.TW",
+      "date": "2021-08-17",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 7872407,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2105.TW",
+      "date": "2025-08-01",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2212643,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1216.TW",
+      "date": "2014-12-27",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 690752,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1216.TW",
+      "date": "2016-01-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2584663,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1216.TW",
+      "date": "2016-06-04",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1068098,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1216.TW",
+      "date": "2016-09-10",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 3083806,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1216.TW",
+      "date": "2017-02-18",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 3327916,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1216.TW",
+      "date": "2017-06-03",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2894547,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1216.TW",
+      "date": "2017-07-27",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1216.TW",
+      "date": "2017-09-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 766365,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1216.TW",
+      "date": "2018-03-31",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2361599,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1216.TW",
+      "date": "2018-12-22",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 588683,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1216.TW",
+      "date": "2019-09-09",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 4163519,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1216.TW",
+      "date": "2021-04-06",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 6116364,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1216.TW",
+      "date": "2021-08-17",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 9393335,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "1216.TW",
+      "date": "2025-08-01",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 7677704,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2412.TW",
+      "date": "2014-12-27",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 504413,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2412.TW",
+      "date": "2016-01-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 3869655,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2412.TW",
+      "date": "2016-06-04",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1805374,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2412.TW",
+      "date": "2016-09-10",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 4667322,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2412.TW",
+      "date": "2017-02-18",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2846809,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2412.TW",
+      "date": "2017-06-03",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 3247882,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2412.TW",
+      "date": "2017-09-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 2711696,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2412.TW",
+      "date": "2018-03-31",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 3738404,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2412.TW",
+      "date": "2018-12-22",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 6484126,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2412.TW",
+      "date": "2019-09-09",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 6685051,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2412.TW",
+      "date": "2021-04-06",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 9341521,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2412.TW",
+      "date": "2021-08-17",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 10532333,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2412.TW",
+      "date": "2025-08-01",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 6845260,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2912.TW",
+      "date": "2014-12-27",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 69099,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2912.TW",
+      "date": "2016-01-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 747531,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2912.TW",
+      "date": "2016-06-04",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 124577,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2912.TW",
+      "date": "2016-09-10",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 302007,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2912.TW",
+      "date": "2017-02-18",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 121333,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2912.TW",
+      "date": "2017-06-03",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 144236,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2912.TW",
+      "date": "2017-07-27",
+      "classification": "official_zero_volume",
+      "official_volume": 0,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2912.TW",
+      "date": "2017-09-30",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 95222,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2912.TW",
+      "date": "2018-03-31",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 169101,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2912.TW",
+      "date": "2018-12-22",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 245417,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2912.TW",
+      "date": "2019-09-09",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 711854,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2912.TW",
+      "date": "2021-04-06",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 771910,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2912.TW",
+      "date": "2021-08-17",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 3114799,
+      "corporate_actions": []
+    },
+    {
+      "symbol": "2912.TW",
+      "date": "2025-08-01",
+      "classification": "provider_missing_official_trade",
+      "official_volume": 1430305,
+      "corporate_actions": []
+    }
+  ],
+  "audit_id": "twse-phase1-20260801",
+  "request_plan": {
+    "mode": "execute",
+    "snapshot_dir": "D:\\Tools\\tw-stock-predictor\\reports\\backtest\\expanded-phase-a-audited-v2-20260801-b8e7d89c9854",
+    "symbols": [
+      "0056.TW",
+      "006208.TW",
+      "2317.TW",
+      "2454.TW",
+      "2308.TW",
+      "2881.TW",
+      "2882.TW",
+      "1301.TW",
+      "2002.TW",
+      "1101.TW",
+      "2105.TW",
+      "1216.TW",
+      "2412.TW",
+      "2912.TW"
+    ],
+    "requested_start": "2014-01-01",
+    "requested_end": "2026-07-31",
+    "calendar_months": 151,
+    "initial_symbol_months": 168,
+    "corporate_action_year_requests": 26,
+    "minimum_request_count": 345,
+    "note": "exact symbol-month requests are recalculated from the official calendar before stock queries",
+    "official_trading_days": 3068,
+    "exact_symbol_months": 230,
+    "exact_request_count": 407
+  }
+}

@@ -12,6 +12,14 @@ class MADeductionEngine:
     """費氏多空均線群計算、扣抵斜率預判與多空共振檢測器"""
 
     DEFAULT_MA_PERIODS = [8, 13, 21, 55, 144, 233]
+    MODEL_CLASSIFICATION = {
+        "model_version": "1.x",
+        "legacy": True,
+        "rule_ids": ["MA-01", "MA-02", "MA-03"],
+        "evidence_level": "U",
+        "implementation_mode": "legacy_experimental",
+        "official_affiliation": False,
+    }
 
     def __init__(self, config_path: str = "config/config.yaml"):
         self.config_path = config_path
@@ -57,23 +65,38 @@ class MADeductionEngine:
         return res_df
 
     def detect_resonance_signal(self, df: pd.DataFrame) -> pd.Series:
-        """
+        """Legacy v1 experimental resonance utility (Rule MA-03, evidence U).
+
+        This method remains callable for v1 compatibility and must not be used
+        as verified core, a Du-method claim, or an automatic-order signal.
         多空共振檢測器：
         當短、中、長天期均線 (8, 13, 21, 55, 144) 同時滿足：
         1. 所有均線扣抵向上 (ma_slope_up_N == True)
         2. 均線多頭排列 (SMA_8 > SMA_13 > SMA_21 > SMA_55)
         :return: 布林 Series
         """
-        if df.empty or "SMA_8" not in df.columns:
+        if df.empty:
+            return pd.Series(False, index=df.index, dtype=bool)
+
+        required_columns = {
+            "SMA_8", "SMA_13", "SMA_21", "SMA_55",
+            "ma_slope_up_8", "ma_slope_up_13", "ma_slope_up_21",
+            "ma_slope_up_55", "ma_slope_up_144"
+        }
+        if not required_columns.issubset(df.columns) and "close" in df.columns:
             df = self.calculate_ma_and_deductions(df)
+
+        if not required_columns.issubset(df.columns):
+            logger.warning("均線扣抵欄位不完整，依 fail-closed 原則不產生共振訊號")
+            return pd.Series(False, index=df.index, dtype=bool)
 
         # 1. 扣抵全向上條件
         deduct_all_up = (
-            df.get("ma_slope_up_8", True) & 
-            df.get("ma_slope_up_13", True) & 
-            df.get("ma_slope_up_21", True) & 
-            df.get("ma_slope_up_55", True) & 
-            df.get("ma_slope_up_144", True)
+            df["ma_slope_up_8"] &
+            df["ma_slope_up_13"] &
+            df["ma_slope_up_21"] &
+            df["ma_slope_up_55"] &
+            df["ma_slope_up_144"]
         )
 
         # 2. 均線多頭排列條件

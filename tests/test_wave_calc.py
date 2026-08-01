@@ -35,3 +35,21 @@ def test_no_repaint_pivot_prefix_invariance():
         assert p100.pivot_price == p150.pivot_price
         assert p100.pivot_date == p150.pivot_date
         assert p100.confirmed_at == p150.confirmed_at
+
+def test_realtime_time_window_respects_as_of_date():
+    engine = WaveFibonacciEngine()
+    dates = [(datetime(2023, 1, 1) + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(60)]
+    prices = [100.0 + (i % 10 if i % 20 < 10 else -(i % 10)) for i in range(60)]
+    df = pd.DataFrame({
+        "date": dates,
+        "open": prices,
+        "high": [p + 1 for p in prices],
+        "low": [p - 1 for p in prices],
+        "close": prices,
+    })
+
+    as_of_date = dates[39]
+    result = engine.get_realtime_confirmed_wave_params("TEST", df, as_of_date=as_of_date)
+
+    assert result["status"] == "available"
+    assert result["time_window"]["latest_date"] <= as_of_date

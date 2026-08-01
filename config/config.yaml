@@ -1,25 +1,17 @@
 # 杜金龍台股量化預測系統 - 全局配置檔 (config.yaml)
 
+model:
+  version: "1.x"
+  legacy: true
+  official_affiliation: false
+  rules_registry: "config/model_rules.yaml"
+
 database:
   db_path: "data/cache.db"
 
 fibonacci:
   numbers: [8, 13, 21, 34, 55, 89, 144, 233]
   ratios: [0.382, 0.5, 0.618, 1.0, 1.382, 1.618, 2.0, 2.618, 3.236]
-
-wave_parameters:
-  # 關鍵波浪點位配置 (Configuration over Hardcoding)
-  "^TWII":
-    p0: 12629.0          # 浪 1 起點 P0 (2022-10-25 歷史低點 12,629 點)
-    p1: 15475.0          # 浪 1 高點 P1 (浪 1 頂點 15,475 點)
-    p2: 14001.0          # 浪 2 底點 P2 (浪 2 拉回低點 14,001 點)
-    pivot_date: "2022-10-25"
-
-  "2330.TW":
-    p0: 370.0            # 浪 1 起點 P0 (台積電歷史低點 370 元)
-    p1: 546.0            # 浪 1 高點 P1
-    p2: 489.0            # 浪 2 底點 P2
-    pivot_date: "2022-10-25"
 
 valuation:
   pe_min: 10.0
@@ -31,9 +23,8 @@ valuation:
   default_eps_growth: 0.10     # 預設雙軌 EPS 成長率 (10%)
 
 sentiment:
-  default_m1b_billion: 270000.0  # 央行 M1B 備用基準值 (億新台幣)
-  volume_m1b_threshold: 0.020    # 大盤單日成交量 / M1B 頭部過熱臨界比率
-  margin_return_threshold: 0.08  # 融資報酬率過熱警示門檻 (8%)
+  turnover_m1b_threshold: 0.020       # 大盤單日成交金額 / M1B 頭部過熱臨界比率
+  margin_balance_growth_threshold: 0.08  # 融資餘額觀察期成長率警示門檻 (8%)
 
 notifier:
   # LINE Messaging API (LINE Bot) 推播金鑰與 User ID

@@ -1,0 +1,7 @@
+-c constraints.txt
+-r requirements.txt
+
+# TestClient for Starlette 1.x and CI tooling.
+httpx2==2.9.1
+pytest==9.1.1
+pytest-cov==7.0.0

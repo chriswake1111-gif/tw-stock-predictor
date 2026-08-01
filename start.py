@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 杜金龍台股量化預測系統 - 一鍵啟動入口腳本 (start.py)
-預設啟動：機構級金融終端 (FastAPI + TradingView Lightweight Charts, Port 8000)
+預設啟動：研究與決策支援介面 (FastAPI + TradingView Lightweight Charts, Port 8000)
 """
 
 import sys
@@ -12,7 +12,7 @@ import subprocess
 def main():
     parser = argparse.ArgumentParser(description="杜金龍台股量化預測與分析系統 - 一鍵啟動器")
     parser.add_argument("--mode", type=str, choices=["fastapi", "streamlit", "test"], default="fastapi", 
-                        help="啟動模式: fastapi (機構級終端, 預設 8000 埠) | streamlit (Streamlit Dashboard, 8501 埠) | test (全套單元測試)")
+                        help="啟動模式: fastapi (研究介面, 預設 8000 埠) | streamlit (Streamlit Dashboard, 8501 埠) | test (全套單元測試)")
     parser.add_argument("--port", type=int, default=None, help="指定自訂通訊埠 (FastAPI 預設 8000, Streamlit 預設 8501)")
     args = parser.parse_args()
 
@@ -40,7 +40,8 @@ def main():
 
     else: # default: fastapi
         port = args.port or 8000
-        print(f"\n[機構級金融終端] 正在啟動 FastAPI REST API 與 TradingView 前端...")
+        print(f"\n[研究與決策支援介面] 正在啟動 FastAPI REST API 與 TradingView 前端...")
+        print("-> 僅供研究與虛擬模擬；不連接券商或送出真實委託")
         print(f"-> 終端主頁: http://localhost:{port}")
         print(f"-> API 自動文檔: http://localhost:{port}/docs")
         print(f"-> 14:30 盤後自動推播排程已整合於背景運行中...\n")

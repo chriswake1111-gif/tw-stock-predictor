@@ -37,3 +37,16 @@ def test_resonance_signal():
     assert isinstance(resonance_series, pd.Series)
     # 多頭極度強烈情況下，最後一天必須觸發多空共振 (True)
     assert resonance_series.iloc[-1] == True
+
+def test_resonance_fails_closed_when_deduction_columns_are_missing():
+    engine = MADeductionEngine()
+    partial = pd.DataFrame({
+        "SMA_8": [8.0],
+        "SMA_13": [7.0],
+        "SMA_21": [6.0],
+        "SMA_55": [5.0],
+    })
+
+    result = engine.detect_resonance_signal(partial)
+
+    assert result.iloc[0] == False

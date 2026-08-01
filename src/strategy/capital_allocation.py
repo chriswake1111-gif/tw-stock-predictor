@@ -26,7 +26,7 @@ class CapitalAllocator:
         available_cash: float = 0.0
     ) -> int:
         """
-        計算本次需要買進的增量股票股數 (必須為 1,000 股的倍數)
+        計算歷史回測／虛擬配置所需的增量股票股數 (必須為 1,000 股的倍數)
         :param price: 當前單股價格
         :param target_cumulative_ratio: 累計目標持倉比例 (Stage 1: 0.20, Stage 2: 0.50, Stage 3: 1.00)
         :param base_value: 進場週期基準金額 (Campaign Base Value)

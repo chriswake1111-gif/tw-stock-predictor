@@ -1,5 +1,5 @@
 /**
- * 杜金龍台股量化預測 - 機構級金融終端 Frontend App
+ * 台股市場研究與決策支援工具 Frontend App
  * 整合 TradingView Lightweight Charts (相容 v3.8 / v4 / v5 API) 與 FastAPI REST API
  */
 
@@ -7,6 +7,7 @@ let chart = null;
 let candlestickSeries = null;
 let volumeSeries = null;
 let maSeriesMap = {};
+let valuationPriceLines = [];
 
 // 跨版本系列建立輔助函式
 function createSeries(chartObj, typeStr, options) {
@@ -111,6 +112,9 @@ async function fetchAndRenderAnalysis(symbol) {
         }
 
         const data = await resp.json();
+        const realtimeWave = data.wave_analysis?.realtime_confirmed || {};
+        const waveTargets = realtimeWave.targets || {};
+        const fibWindow = realtimeWave.time_window || {};
 
         // 1. 更新 KPI 頂部卡片
         document.getElementById('kpi-symbol').innerText = data.symbol;
@@ -125,8 +129,13 @@ async function fetchAndRenderAnalysis(symbol) {
             resElem.innerHTML = `<span class="w-3 h-3 rounded-full bg-slate-400"></span><span>⚪ 未觸發 (整理)</span>`;
         }
 
-        document.getElementById('kpi-m1b').innerText = `${(data.sentiment.volume_m1b_ratio * 100).toFixed(2)}% (${data.sentiment.is_overheat ? '極端過熱' : '正常'})`;
-        document.getElementById('kpi-fib-window').innerText = `${data.fib_window.elapsed_units} 個交易日 (${data.fib_window.is_in_window ? '轉折視窗警戒!' : '正常趨勢'})`;
+        const turnoverM1bRatio = data.sentiment?.turnover_m1b_ratio;
+        document.getElementById('kpi-m1b').innerText = turnoverM1bRatio == null
+            ? '資料不足'
+            : `${(turnoverM1bRatio * 100).toFixed(2)}% (${data.sentiment.is_overheat ? '極端過熱' : '正常'})`;
+        document.getElementById('kpi-fib-window').innerText = fibWindow.elapsed_units == null
+            ? '資料不足'
+            : `${fibWindow.elapsed_units} 個交易日 (${fibWindow.is_in_window ? '轉折視窗警戒' : '正常趨勢'})`;
 
         // 2. 渲染 TradingView K 線與成交量 (time 格式為 YYYY-MM-DD)
         if (data.kline_data && data.kline_data.length > 0) {
@@ -160,55 +169,59 @@ async function fetchAndRenderAnalysis(symbol) {
         }
 
         // 3. 畫估值通道參考價位線 (Price Lines)
-        if (data.valuation) {
-            candlestickSeries.createPriceLine({
+        valuationPriceLines.forEach(line => candlestickSeries.removePriceLine(line));
+        valuationPriceLines = [];
+        if (data.valuation?.status === 'available') {
+            valuationPriceLines.push(candlestickSeries.createPriceLine({
                 price: data.valuation.cheap_price,
                 color: '#22c55e',
                 lineWidth: 1.5,
                 lineStyle: LightweightCharts.LineStyle.Dashed,
                 axisLabelVisible: true,
                 title: '便宜價 (10x PE)',
-            });
-            candlestickSeries.createPriceLine({
+            }));
+            valuationPriceLines.push(candlestickSeries.createPriceLine({
                 price: data.valuation.fair_price,
                 color: '#3b82f6',
                 lineWidth: 1.5,
                 lineStyle: LightweightCharts.LineStyle.Dashed,
                 axisLabelVisible: true,
                 title: '合理價 (20x PE)',
-            });
-            candlestickSeries.createPriceLine({
+            }));
+            valuationPriceLines.push(candlestickSeries.createPriceLine({
                 price: data.valuation.expensive_price,
                 color: '#ef4444',
                 lineWidth: 1.5,
                 lineStyle: LightweightCharts.LineStyle.Dashed,
                 axisLabelVisible: true,
                 title: '昂貴價 (25x PE)',
-            });
+            }));
         }
 
         // 4. 更新波浪目標價表格
-        document.getElementById('wave-p0').innerText = data.wave_targets.p0 || '-';
-        document.getElementById('wave-p1').innerText = data.wave_targets.p1 || '-';
-        document.getElementById('wave-p2').innerText = data.wave_targets.p2 || '-';
+        document.getElementById('wave-p0').innerText = waveTargets.p0 ?? '-';
+        document.getElementById('wave-p1').innerText = waveTargets.p1 ?? '-';
+        document.getElementById('wave-p2').innerText = waveTargets.p2 ?? '-';
 
         const waveTable = document.getElementById('wave-table-body');
         waveTable.innerHTML = `
-            <tr><td class="p-2 font-medium">浪 3 (1.382 滿足點)</td><td class="p-2 text-slate-500">1.382</td><td class="p-2 text-right font-bold text-blue-500">${data.wave_targets['wave3_1.382']}</td></tr>
-            <tr><td class="p-2 font-medium">浪 3 (1.618 主升段)</td><td class="p-2 text-slate-500">1.618</td><td class="p-2 text-right font-bold text-emerald-500">${data.wave_targets['wave3_1.618']}</td></tr>
-            <tr><td class="p-2 font-medium">浪 3 (2.000 擴張段)</td><td class="p-2 text-slate-500">2.000</td><td class="p-2 text-right font-bold text-amber-500">${data.wave_targets['wave3_2.000']}</td></tr>
-            <tr><td class="p-2 font-medium">浪 3 (2.618 強勢段)</td><td class="p-2 text-slate-500">2.618</td><td class="p-2 text-right font-bold text-red-500">${data.wave_targets['wave3_2.618']}</td></tr>
-            <tr><td class="p-2 font-medium">浪 5 (3.236 滿載點)</td><td class="p-2 text-slate-500">3.236</td><td class="p-2 text-right font-bold text-purple-500">${data.wave_targets['wave5_3.236']}</td></tr>
+            <tr><td class="p-2 font-medium">浪 3 (1.382 滿足點)</td><td class="p-2 text-slate-500">1.382</td><td class="p-2 text-right font-bold text-blue-500">${waveTargets['wave3_1.382'] ?? '資料不足'}</td></tr>
+            <tr><td class="p-2 font-medium">浪 3 (1.618 主升段)</td><td class="p-2 text-slate-500">1.618</td><td class="p-2 text-right font-bold text-emerald-500">${waveTargets['wave3_1.618'] ?? '資料不足'}</td></tr>
+            <tr><td class="p-2 font-medium">浪 3 (2.000 擴張段)</td><td class="p-2 text-slate-500">2.000</td><td class="p-2 text-right font-bold text-amber-500">${waveTargets['wave3_2.000'] ?? '資料不足'}</td></tr>
+            <tr><td class="p-2 font-medium">浪 3 (2.618 強勢段)</td><td class="p-2 text-slate-500">2.618</td><td class="p-2 text-right font-bold text-red-500">${waveTargets['wave3_2.618'] ?? '資料不足'}</td></tr>
+            <tr><td class="p-2 font-medium">浪 5 (3.236 滿載點)</td><td class="p-2 text-slate-500">3.236</td><td class="p-2 text-right font-bold text-purple-500">${waveTargets['wave5_3.236'] ?? '資料不足'}</td></tr>
         `;
 
         // 5. 更新估值表格
-        document.getElementById('val-eps').innerText = `${data.valuation.estimated_eps} 元`;
+        document.getElementById('val-eps').innerText = data.valuation.estimated_eps == null
+            ? '資料不足'
+            : `${data.valuation.estimated_eps} 元`;
         const valTable = document.getElementById('val-table-body');
         valTable.innerHTML = `
-            <tr><td class="p-2 font-medium text-emerald-500">便宜價 (10x PE)</td><td class="p-2 text-slate-500">EPS * 10</td><td class="p-2 text-right font-bold">$${data.valuation.cheap_price}</td></tr>
-            <tr><td class="p-2 font-medium text-blue-500">合理價 (20x PE)</td><td class="p-2 text-slate-500">EPS * 20</td><td class="p-2 text-right font-bold">$${data.valuation.fair_price}</td></tr>
-            <tr><td class="p-2 font-medium text-red-500">昂貴價 (25x PE)</td><td class="p-2 text-slate-500">EPS * 25</td><td class="p-2 text-right font-bold">$${data.valuation.expensive_price}</td></tr>
-            <tr><td class="p-2 font-medium text-purple-500">EVA 長線價值底盤</td><td class="p-2 text-slate-500">NOPAT-Capital*WACC</td><td class="p-2 text-right font-bold">$${data.eva_valuation.eva_floor_price}</td></tr>
+            <tr><td class="p-2 font-medium text-emerald-500">便宜價 (10x PE)</td><td class="p-2 text-slate-500">EPS * 10</td><td class="p-2 text-right font-bold">${data.valuation.cheap_price == null ? '不適用／資料不足' : '$' + data.valuation.cheap_price}</td></tr>
+            <tr><td class="p-2 font-medium text-blue-500">合理價 (20x PE)</td><td class="p-2 text-slate-500">EPS * 20</td><td class="p-2 text-right font-bold">${data.valuation.fair_price == null ? '不適用／資料不足' : '$' + data.valuation.fair_price}</td></tr>
+            <tr><td class="p-2 font-medium text-red-500">昂貴價 (25x PE)</td><td class="p-2 text-slate-500">EPS * 25</td><td class="p-2 text-right font-bold">${data.valuation.expensive_price == null ? '不適用／資料不足' : '$' + data.valuation.expensive_price}</td></tr>
+            <tr><td class="p-2 font-medium text-purple-500">EVA 長線價值底盤</td><td class="p-2 text-slate-500">需完整財報契約</td><td class="p-2 text-right font-bold">${data.eva_valuation.eva_floor_price == null ? '目前不支援' : '$' + data.eva_valuation.eva_floor_price}</td></tr>
         `;
 
     } catch (e) {

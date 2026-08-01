@@ -1,0 +1,15 @@
+status,symbol,row_count,start_date,end_date,duplicate_dates,missing_by_column,invalid_price_rows,non_monotonic_dates,large_return_rows_25pct,max_abs_daily_return_pct,max_calendar_gap_days,price_adjustment_contract
+available,0056.TW,3069,2014-01-02,2026-07-31,0,"{'date': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}",0,False,0,9.9801,13,yfinance auto_adjust=True; actions=False; repair=False
+available,006208.TW,3063,2014-01-02,2026-07-31,0,"{'date': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}",0,False,0,9.9807,13,yfinance auto_adjust=True; actions=False; repair=False
+available,2317.TW,3063,2014-01-02,2026-07-31,0,"{'date': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}",0,False,0,10.4846,13,yfinance auto_adjust=True; actions=False; repair=False
+available,2454.TW,3063,2014-01-02,2026-07-31,0,"{'date': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}",0,False,0,10.0,13,yfinance auto_adjust=True; actions=False; repair=False
+available,2308.TW,3063,2014-01-02,2026-07-31,0,"{'date': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}",0,False,0,10.0,13,yfinance auto_adjust=True; actions=False; repair=False
+available,2881.TW,3063,2014-01-02,2026-07-31,0,"{'date': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}",0,False,0,9.9861,13,yfinance auto_adjust=True; actions=False; repair=False
+available,2882.TW,3063,2014-01-02,2026-07-31,0,"{'date': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}",0,False,0,9.9692,13,yfinance auto_adjust=True; actions=False; repair=False
+available,1301.TW,3063,2014-01-02,2026-07-31,0,"{'date': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}",0,False,0,11.2544,13,yfinance auto_adjust=True; actions=False; repair=False
+available,2002.TW,3063,2014-01-02,2026-07-31,0,"{'date': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}",0,False,0,10.0,13,yfinance auto_adjust=True; actions=False; repair=False
+available,1101.TW,3063,2014-01-02,2026-07-31,0,"{'date': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}",0,False,0,9.9702,13,yfinance auto_adjust=True; actions=False; repair=False
+available,2105.TW,3063,2014-01-02,2026-07-31,0,"{'date': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}",0,False,0,10.0,13,yfinance auto_adjust=True; actions=False; repair=False
+available,1216.TW,3063,2014-01-02,2026-07-31,0,"{'date': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}",0,False,0,9.0354,13,yfinance auto_adjust=True; actions=False; repair=False
+available,2412.TW,3063,2014-01-02,2026-07-31,0,"{'date': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}",0,False,0,6.1033,13,yfinance auto_adjust=True; actions=False; repair=False
+available,2912.TW,3063,2014-01-02,2026-07-31,0,"{'date': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}",0,False,0,9.932,13,yfinance auto_adjust=True; actions=False; repair=False

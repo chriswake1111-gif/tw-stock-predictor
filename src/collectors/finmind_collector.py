@@ -32,6 +32,7 @@ class FinMindCollector:
                     pe REAL,
                     pb REAL,
                     yield_rate REAL,
+                    yield_unit TEXT,
                     PRIMARY KEY (stock_id, date)
                 )
             """)
@@ -60,6 +61,18 @@ class FinMindCollector:
                 )
             """)
             # Migration 檢查：確保舊版 stock_quarterly_eps 具有新欄位
+            cursor.execute("PRAGMA table_info(stock_valuation)")
+            valuation_cols = [col[1] for col in cursor.fetchall()]
+            if "symbol" in valuation_cols and "stock_id" not in valuation_cols:
+                cursor.execute("ALTER TABLE stock_valuation RENAME COLUMN symbol TO stock_id")
+                cursor.execute("PRAGMA table_info(stock_valuation)")
+                valuation_cols = [col[1] for col in cursor.fetchall()]
+            if "yield_unit" not in valuation_cols:
+                cursor.execute("ALTER TABLE stock_valuation ADD COLUMN yield_unit TEXT")
+                cursor.execute(
+                    "UPDATE stock_valuation SET yield_unit='percent' WHERE yield_unit IS NULL"
+                )
+
             cursor.execute("PRAGMA table_info(stock_quarterly_eps)")
             cols = [col[1] for col in cursor.fetchall()]
             if "quarterly_eps" in cols and "single_quarter_eps" not in cols:
@@ -69,6 +82,18 @@ class FinMindCollector:
             if "quarter" not in cols:
                 cursor.execute("ALTER TABLE stock_quarterly_eps ADD COLUMN quarter INTEGER")
             conn.commit()
+
+    @staticmethod
+    def _yield_to_ratio(value: Any, unit: str = "percent") -> Optional[float]:
+        """依明確單位將殖利率統一為比例格式。"""
+        if value is None or pd.isna(value):
+            return None
+        numeric = float(value)
+        if unit == "ratio":
+            return numeric
+        if unit == "percent":
+            return numeric / 100.0
+        raise ValueError(f"Unsupported dividend-yield unit: {unit}")
 
     def normalize_quarterly_eps(self, raw_df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -106,7 +131,11 @@ class FinMindCollector:
             dt_str = row["date"].strftime("%Y-%m-%d")
             av_at = row["origin_date"].strftime("%Y-%m-%d")
 
-            q = 1 if m == 3 else (2 if m == 6 else (3 if m == 9 else 4))
+            quarter_by_month = {3: 1, 6: 2, 9: 3, 12: 4}
+            q = quarter_by_month.get(m)
+            if q is None:
+                logger.warning(f"忽略非標準季末 EPS 紀錄: {dt_str}")
+                continue
             records[(yr, q)] = {
                 "period_end": dt_str,
                 "available_at": av_at,
@@ -169,18 +198,28 @@ class FinMindCollector:
             res_df.sort_values(by="period_end", inplace=True)
         return res_df
 
-    def get_quarterly_eps(self, stock_id: str) -> pd.DataFrame:
+    def get_quarterly_eps(self, stock_id: str, as_of_date: Optional[str] = None) -> pd.DataFrame:
         """從 SQLite 快取或 FinMind API 獲取單季標準化 EPS"""
         clean_id = stock_id.replace(".TW", "").replace(".TWO", "").replace("^", "")
+        cached_df = pd.DataFrame()
         
         try:
             with sqlite3.connect(self.db_path) as conn:
                 query = "SELECT stock_id, period_end, available_at, single_quarter_eps, year, quarter FROM stock_quarterly_eps WHERE stock_id=? ORDER BY period_end ASC"
-                df = pd.read_sql_query(query, conn, params=(clean_id,))
-                if not df.empty and len(df) >= 4:
-                    return df
+                cached_df = pd.read_sql_query(query, conn, params=(clean_id,))
+
+            eligible_cache = cached_df
+            if as_of_date and not eligible_cache.empty:
+                available_at = pd.to_datetime(eligible_cache["available_at"], errors="coerce")
+                eligible_cache = eligible_cache[available_at <= pd.Timestamp(as_of_date)]
+
+            if len(eligible_cache) >= 4:
+                reference_date = pd.Timestamp(as_of_date or datetime.now().strftime("%Y-%m-%d"))
+                latest_available = pd.to_datetime(eligible_cache["available_at"], errors="coerce").max()
+                if pd.notna(latest_available) and (reference_date - latest_available).days <= 150:
+                    return cached_df
         except Exception:
-            pass
+            cached_df = pd.DataFrame()
 
         try:
             url = f"https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockFinancialStatements&data_id={clean_id}&start_date=2020-01-01"
@@ -206,7 +245,7 @@ class FinMindCollector:
         except Exception as e:
             logger.error(f"FinMind EPS 採集與標準化失敗: {str(e)}")
 
-        return pd.DataFrame()
+        return cached_df
 
     def get_ttm_eps(self, stock_id: str, as_of_date: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -214,7 +253,7 @@ class FinMindCollector:
         若不滿 4 季連續單季紀錄，回傳 status: "insufficient_data"，絕不安裝代理假值。
         """
         clean_id = stock_id.replace(".TW", "").replace(".TWO", "").replace("^", "")
-        eps_df = self.get_quarterly_eps(clean_id)
+        eps_df = self.get_quarterly_eps(clean_id, as_of_date=as_of_date)
 
         if eps_df.empty:
             return {
@@ -224,7 +263,8 @@ class FinMindCollector:
             }
 
         if as_of_date:
-            eps_df = eps_df[eps_df["available_at"] <= as_of_date]
+            available_at = pd.to_datetime(eps_df["available_at"], errors="coerce")
+            eps_df = eps_df[available_at <= pd.Timestamp(as_of_date)]
 
         if len(eps_df) < 4:
             return {
@@ -233,7 +273,27 @@ class FinMindCollector:
                 "eps": None
             }
 
+        eps_df = eps_df.copy()
+        eps_df["year"] = pd.to_numeric(eps_df["year"], errors="coerce")
+        eps_df["quarter"] = pd.to_numeric(eps_df["quarter"], errors="coerce")
+        eps_df.dropna(subset=["year", "quarter", "single_quarter_eps"], inplace=True)
+        eps_df.sort_values(["year", "quarter", "available_at"], inplace=True)
+        eps_df.drop_duplicates(["year", "quarter"], keep="last", inplace=True)
+
         latest_four = eps_df.iloc[-4:]
+        quarter_ordinals = (
+            latest_four["year"].astype(int) * 4 + latest_four["quarter"].astype(int)
+        ).tolist()
+        if len(latest_four) < 4 or any(
+            current - previous != 1
+            for previous, current in zip(quarter_ordinals, quarter_ordinals[1:])
+        ):
+            return {
+                "status": "insufficient_data",
+                "reason": "The latest normalized EPS records are not four consecutive quarters",
+                "eps": None
+            }
+
         ttm_val = round(float(latest_four["single_quarter_eps"].sum()), 2)
         latest_row = latest_four.iloc[-1]
 
@@ -259,9 +319,15 @@ class FinMindCollector:
 
         try:
             with sqlite3.connect(self.db_path) as conn:
-                query = "SELECT stock_id, date, pe, pb, yield_rate FROM stock_valuation WHERE stock_id=? AND date>=? AND date<=? ORDER BY date ASC"
+                query = "SELECT stock_id, date, pe, pb, yield_rate, yield_unit FROM stock_valuation WHERE stock_id=? AND date>=? AND date<=? ORDER BY date ASC"
                 df = pd.read_sql_query(query, conn, params=(clean_id, start_date, end_date))
                 if not df.empty and len(df) >= 10:
+                    df["yield_rate"] = df.apply(
+                        lambda row: self._yield_to_ratio(
+                            row["yield_rate"], row.get("yield_unit") or "percent"
+                        ),
+                        axis=1
+                    )
                     return df
         except Exception:
             pass
@@ -280,11 +346,12 @@ class FinMindCollector:
                     with sqlite3.connect(self.db_path) as conn:
                         cursor = conn.cursor()
                         for _, r in raw_df.iterrows():
+                            yield_rate = self._yield_to_ratio(r.get("yield_rate"), "percent")
                             cursor.execute("""
-                                INSERT OR REPLACE INTO stock_valuation (stock_id, date, pe, pb, yield_rate)
-                                VALUES (?, ?, ?, ?, ?)
-                            """, (clean_id, str(r["date"]), float(r.get("pe", 0)), float(r.get("pb", 0)), float(r.get("yield_rate", 0))))
-                            records.append({"stock_id": clean_id, "date": str(r["date"]), "pe": float(r.get("pe", 0)), "pb": float(r.get("pb", 0)), "yield_rate": float(r.get("yield_rate", 0))})
+                                INSERT OR REPLACE INTO stock_valuation (stock_id, date, pe, pb, yield_rate, yield_unit)
+                                VALUES (?, ?, ?, ?, ?, ?)
+                            """, (clean_id, str(r["date"]), float(r.get("pe", 0)), float(r.get("pb", 0)), yield_rate, "ratio"))
+                            records.append({"stock_id": clean_id, "date": str(r["date"]), "pe": float(r.get("pe", 0)), "pb": float(r.get("pb", 0)), "yield_rate": yield_rate})
                         conn.commit()
                     return pd.DataFrame(records)
         except Exception as e:

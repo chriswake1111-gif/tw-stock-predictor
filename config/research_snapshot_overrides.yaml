@@ -1,0 +1,26 @@
+schema_version: 1
+policy: >-
+  僅新增經官方交易所確認、供應商快照缺失的日期；不得覆寫既有列，
+  並須保存原始價、調整因子、推導方式與官方來源。
+overrides:
+  - symbol: "1301.TW"
+    date: "2025-08-01"
+    mode: "insert_missing_adjusted_ohlcv"
+    raw_ohlcv:
+      open: 41.80
+      high: 42.25
+      low: 40.60
+      close: 40.70
+      volume: 50445289
+    adjustment_factor: 0.9906014803565542
+    factor_derivation: >-
+      yfinance adjusted close on 2025-07-31 (42.24915338039304)
+      divided by TWSE raw close on 2025-07-31 (42.65); the same factor is
+      independently consistent with 2025-08-04 adjusted/raw closes.
+    factor_anchors:
+      - date: "2025-07-31"
+        official_raw_close: 42.65
+      - date: "2025-08-04"
+        official_raw_close: 37.85
+    source_url: >-
+      https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date=20250801&stockNo=1301

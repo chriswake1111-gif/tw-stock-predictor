@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "mode": "read_only_twse_snapshot_audit",
+  "audits": [
+    {
+      "symbol": "1301.TW",
+      "month": "2025-08",
+      "status": "matched",
+      "official_row_count": 21,
+      "provider_row_count": 21,
+      "missing_official_dates": [],
+      "provider_only_dates": [],
+      "zero_volume_provider_dates": [],
+      "official_missing_rows": [],
+      "source_url": "https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date=20250801&stockNo=1301"
+    },
+    {
+      "symbol": "2317.TW",
+      "month": "2018-10",
+      "status": "matched",
+      "official_row_count": 16,
+      "provider_row_count": 16,
+      "missing_official_dates": [],
+      "provider_only_dates": [],
+      "zero_volume_provider_dates": [],
+      "official_missing_rows": [],
+      "source_url": "https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date=20181001&stockNo=2317"
+    }
+  ]
+}

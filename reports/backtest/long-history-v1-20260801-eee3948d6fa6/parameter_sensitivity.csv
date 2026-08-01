@@ -1,0 +1,16 @@
+symbol,selection_applied_to_validation,average_return_range_pct_points,positive_candidate_fraction,candidate_id,strategy_params,status,training_window_count,average_return_pct,median_return_pct,positive_window_fraction,worst_drawdown_pct,total_trades
+^TWII,False,0.3409,1.0,default,"{'stage1_ratio': 0.2, 'pullback_min_pct': 0.07, 'pullback_max_pct': 0.11}",available,11,0.6764,-0.26,0.4545,4.19,88
+^TWII,False,0.3409,1.0,entry_15pct,"{'stage1_ratio': 0.15, 'pullback_min_pct': 0.07, 'pullback_max_pct': 0.11}",available,11,0.5027,-0.19,0.4545,3.15,88
+^TWII,False,0.3409,1.0,entry_25pct,"{'stage1_ratio': 0.25, 'pullback_min_pct': 0.07, 'pullback_max_pct': 0.11}",available,11,0.8436,-0.33,0.4545,5.22,88
+^TWII,False,0.3409,1.0,pullback_5_9pct,"{'stage1_ratio': 0.2, 'pullback_min_pct': 0.05, 'pullback_max_pct': 0.09}",available,11,0.6982,-0.26,0.4545,4.19,88
+^TWII,False,0.3409,1.0,pullback_9_13pct,"{'stage1_ratio': 0.2, 'pullback_min_pct': 0.09, 'pullback_max_pct': 0.13}",available,11,0.6764,-0.26,0.4545,4.19,88
+0050.TW,False,0.8454,1.0,default,"{'stage1_ratio': 0.2, 'pullback_min_pct': 0.07, 'pullback_max_pct': 0.11}",available,11,1.5618,0.73,0.6364,4.59,97
+0050.TW,False,0.8454,1.0,entry_15pct,"{'stage1_ratio': 0.15, 'pullback_min_pct': 0.07, 'pullback_max_pct': 0.11}",available,11,1.1955,0.8,0.6364,3.77,97
+0050.TW,False,0.8454,1.0,entry_25pct,"{'stage1_ratio': 0.25, 'pullback_min_pct': 0.07, 'pullback_max_pct': 0.11}",available,11,1.9327,0.66,0.6364,5.4,97
+0050.TW,False,0.8454,1.0,pullback_5_9pct,"{'stage1_ratio': 0.2, 'pullback_min_pct': 0.05, 'pullback_max_pct': 0.09}",available,11,1.0873,0.27,0.5455,5.25,97
+0050.TW,False,0.8454,1.0,pullback_9_13pct,"{'stage1_ratio': 0.2, 'pullback_min_pct': 0.09, 'pullback_max_pct': 0.13}",available,11,1.4491,0.22,0.6364,4.41,97
+2330.TW,False,7.9809,1.0,default,"{'stage1_ratio': 0.2, 'pullback_min_pct': 0.07, 'pullback_max_pct': 0.11}",available,11,2.99,2.33,0.6364,8.03,90
+2330.TW,False,7.9809,1.0,entry_15pct,"{'stage1_ratio': 0.15, 'pullback_min_pct': 0.07, 'pullback_max_pct': 0.11}",available,11,1.7373,1.69,0.5455,7.39,90
+2330.TW,False,7.9809,1.0,entry_25pct,"{'stage1_ratio': 0.25, 'pullback_min_pct': 0.07, 'pullback_max_pct': 0.11}",available,11,4.08,2.9,0.7273,8.7,90
+2330.TW,False,7.9809,1.0,pullback_5_9pct,"{'stage1_ratio': 0.2, 'pullback_min_pct': 0.05, 'pullback_max_pct': 0.09}",available,11,9.7182,5.03,0.6364,14.99,90
+2330.TW,False,7.9809,1.0,pullback_9_13pct,"{'stage1_ratio': 0.2, 'pullback_min_pct': 0.09, 'pullback_max_pct': 0.13}",available,11,2.8464,2.33,0.5455,8.03,90

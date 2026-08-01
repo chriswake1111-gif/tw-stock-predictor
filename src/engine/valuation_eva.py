@@ -30,7 +30,10 @@ class ValuationEVAEngine:
         historical_ttm_eps: Optional[float] = None, 
         growth_rate: Optional[float] = None
     ) -> float:
-        """
+        """Legacy v1 estimate retained for compatibility.
+
+        Historical TTM growth output is not Forward EPS and may not be used by
+        the v2 verified valuation core.
         預估 EPS 雙軌機制 (Dual-track EPS):
         軌道 1: 若提供法人預估 EPS，優先採用法人預估值。
         軌道 2: 備援機制 = 歷史 TTM EPS * (1 + 預設成長率).
@@ -51,7 +54,7 @@ class ValuationEVAEngine:
         pe_min: float = 10.0, 
         pe_mid: float = 20.0, 
         pe_max: float = 25.0
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Any]:
         """
         主人與小狗估值模型 (Dog & Master Valuation Model):
         合理目標價 = 預估未來 EPS * 歷史平均 PE (便宜/合理/昂貴價位)
@@ -61,11 +64,28 @@ class ValuationEVAEngine:
         pe_mid = val_cfg.get("pe_mid", pe_mid)
         pe_max = val_cfg.get("pe_max", pe_max)
 
+        if eps <= 0:
+            return {
+                "status": "not_applicable",
+                "reason": "PE valuation is not applicable when EPS is zero or negative",
+                "estimated_eps": round(float(eps), 2),
+                "pe_min": pe_min,
+                "pe_mid": pe_mid,
+                "pe_max": pe_max,
+                "cheap_price": None,
+                "fair_price": None,
+                "expensive_price": None
+            }
+
+        if not (0 < pe_min <= pe_mid <= pe_max):
+            raise ValueError("PE multiples must be positive and ordered pe_min <= pe_mid <= pe_max")
+
         cheap_price = round(eps * pe_min, 2)
         fair_price = round(eps * pe_mid, 2)
         expensive_price = round(eps * pe_max, 2)
 
         return {
+            "status": "available",
             "estimated_eps": round(eps, 2),
             "pe_min": pe_min,
             "pe_mid": pe_mid,
@@ -81,7 +101,7 @@ class ValuationEVAEngine:
         invested_capital: float, 
         wacc: Optional[float] = None,
         total_shares_billion: float = 1.0
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Any]:
         """
         EVA 長線價值底盤模型:
         EVA = NOPAT - (Invested Capital * WACC)
@@ -94,11 +114,25 @@ class ValuationEVAEngine:
         if wacc is None:
             wacc = self.config.get("valuation", {}).get("default_wacc", 0.07)
 
+        if wacc <= 0 or total_shares_billion <= 0:
+            return {
+                "status": "not_applicable",
+                "reason": "WACC and total shares must both be greater than zero",
+                "eva_floor_price": None
+            }
+
         eva_billion = round(nopat - (invested_capital * wacc), 2)
         total_enterprise_val = invested_capital + (eva_billion / wacc)
         eva_floor_price = round(total_enterprise_val / total_shares_billion, 2)
 
         return {
+            "status": "available",
+            "model_version": "1.x",
+            "legacy": True,
+            "rule_id": "VAL-05",
+            "evidence_level": "U",
+            "implementation_mode": "unsupported",
+            "official_affiliation": False,
             "nopat_billion": nopat,
             "invested_capital_billion": invested_capital,
             "wacc": wacc,
@@ -131,6 +165,7 @@ class ValuationEVAEngine:
             "pe": pe,
             "pb": pb,
             "yield_rate": yield_rate,
+            "yield_unit": "ratio",
             "conditions": {
                 "pe_below_avg": bool(c1),
                 "pb_below_max": bool(c2),
@@ -170,3 +205,17 @@ class ValuationEVAEngine:
 
         breakout_reversal = recent_breakdown & recovered & volume_up
         return breakout_reversal.fillna(False)
+    MODEL_CLASSIFICATION = {
+        "model_version": "1.x",
+        "legacy": True,
+        "official_affiliation": False,
+        "future_eps_estimate": {
+            "implementation_mode": "legacy_experimental",
+            "forbidden_uses": ["forward_eps", "verified_core"],
+        },
+        "eva_floor": {
+            "rule_id": "VAL-05",
+            "evidence_level": "U",
+            "implementation_mode": "unsupported",
+        },
+    }

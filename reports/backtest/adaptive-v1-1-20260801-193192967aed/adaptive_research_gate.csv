@@ -1,0 +1,4 @@
+symbol,status,passed,promotion_to_default,return_improves_legacy,worst_window_mdd_at_most_12pct,bear_window_present,bear_compounded_return_above_minus_5pct,bear_worst_mdd_at_most_5pct
+^TWII,candidate_for_broader_validation,True,False,True,True,True,True,True
+0050.TW,candidate_for_broader_validation,True,False,True,True,True,True,True
+2330.TW,candidate_for_broader_validation,True,False,True,True,True,True,True

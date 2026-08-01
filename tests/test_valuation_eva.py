@@ -23,6 +23,16 @@ def test_dual_track_eps():
     eps_track2 = engine.estimate_future_eps(historical_ttm_eps=40.0, growth_rate=0.10)
     assert eps_track2 == 44.0
 
+def test_negative_eps_is_not_applicable_to_pe_valuation():
+    engine = ValuationEVAEngine(config_path="config/config.yaml")
+
+    result = engine.calculate_dog_master_valuation(eps=-2.0)
+
+    assert result["status"] == "not_applicable"
+    assert result["cheap_price"] is None
+    assert result["fair_price"] is None
+    assert result["expensive_price"] is None
+
 def test_eva_floor_valuation():
     engine = ValuationEVAEngine(config_path="config/config.yaml")
     
@@ -42,6 +52,13 @@ def test_two_lows_one_high_screener():
     # 不符合
     res_fail = engine.screen_two_lows_one_high(pe=22.0, pb=1.8, yield_rate=0.02)
     assert res_fail["passed"] == False
+
+    # FinMind 原始 3.5 表示 3.5%，正規化後為 0.035，應低於 4% 門檻。
+    normalized_yield = 3.5 / 100.0
+    res_below_yield = engine.screen_two_lows_one_high(
+        pe=12.0, pb=1.2, yield_rate=normalized_yield
+    )
+    assert res_below_yield["passed"] == False
 
 def test_breakout_reversal_pattern():
     engine = ValuationEVAEngine(config_path="config/config.yaml")

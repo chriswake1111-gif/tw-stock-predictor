@@ -11,12 +11,7 @@ import streamlit as st
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from src.collectors.twse_collector import TWSECollector
-from src.collectors.finmind_collector import FinMindCollector
-from src.collectors.cbc_collector import CBCCollector
-from src.engine.wave_fibonacci import WaveFibonacciEngine
-from src.engine.ma_deduction import MADeductionEngine
-from src.engine.valuation_eva import ValuationEVAEngine
-from src.engine.market_sentiment import MarketSentimentEngine
+from src.analysis_service import RESEARCH_DISCLAIMER, analyze_symbol
 from src.strategy.backtester import TuBacktester
 
 # 頁面配置
@@ -37,39 +32,21 @@ def load_ohlcv_data(symbol: str, db_path: str = "data/cache.db"):
 
 @st.cache_data(ttl=3600)
 def compute_engine_analysis(symbol: str, db_path: str = "data/cache.db"):
-    twse_df = load_ohlcv_data(symbol, db_path)
-    if twse_df.empty:
+    analysis, analyzed_df = analyze_symbol(symbol, db_path=db_path)
+    if analysis.get("status") != "available" or analyzed_df.empty:
         return {}, pd.DataFrame(), {}, {}, {}, {}
 
-    wave_engine = WaveFibonacciEngine(config_path="config/config.yaml")
-    ma_engine = MADeductionEngine(config_path="config/config.yaml")
-    val_engine = ValuationEVAEngine(config_path="config/config.yaml")
-    sentiment_engine = MarketSentimentEngine(db_path=db_path, config_path="config/config.yaml")
+    realtime_wave = analysis["wave_analysis"]["realtime_confirmed"]
+    return (
+        realtime_wave.get("targets", {}),
+        analyzed_df,
+        analysis["valuation"],
+        analysis["eva_valuation"],
+        realtime_wave.get("time_window", {}),
+        analysis["sentiment"],
+    )
 
-    params = wave_engine.get_symbol_wave_params(symbol, df=twse_df)
-    targets = wave_engine.calculate_wave_targets(p0=params["p0"], p1=params["p1"], p2=params.get("p2"))
-    time_win = wave_engine.check_time_window(twse_df, pivot_date=params.get("pivot_date", "2022-10-25"))
-
-    analyzed_df = ma_engine.calculate_ma_and_deductions(twse_df)
-    resonance_series = ma_engine.detect_resonance_signal(analyzed_df)
-    analyzed_df["resonance_signal"] = resonance_series
-
-    # 估值計算
-    finmind = FinMindCollector(db_path=db_path)
-    clean_stock_id = symbol.replace(".TW", "").replace(".TWO", "").replace("^", "")
-    val_df = finmind.get_valuation(clean_stock_id)
-    
-    last_close = float(twse_df['close'].dropna().iloc[-1])
-    est_eps = val_engine.estimate_future_eps(historical_ttm_eps=round(last_close / 20.0, 2))
-    dog_val = val_engine.calculate_dog_master_valuation(eps=est_eps)
-    eva_val = val_engine.calculate_eva_floor(nopat=last_close * 5.0, invested_capital=last_close * 35.0, total_shares_billion=10.0)
-
-    # 熱度
-    sentiment = sentiment_engine.check_volume_m1b_overheat(daily_volume_billion=4500.0)
-
-    return targets, analyzed_df, dog_val, eva_val, time_win, sentiment
-
-def create_tu_plotly_chart(df: pd.DataFrame, targets: dict, dog_val: dict, pivot_date: str = "2022-10-25"):
+def create_tu_plotly_chart(df: pd.DataFrame, targets: dict, dog_val: dict, pivot_date: str | None = None):
     """杜氏特化 Plotly 互動圖表：K 線 + 均線扣抵標記 + 費氏時間帶 + 估值通道帶"""
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.75, 0.25])
 
@@ -121,26 +98,29 @@ def create_tu_plotly_chart(df: pd.DataFrame, targets: dict, dog_val: dict, pivot
                 )
 
     # 4. 主人與小狗估值通道帶 (Bands)
-    cheap_p = dog_val.get("cheap_price", 400.0)
-    fair_p = dog_val.get("fair_price", 800.0)
-    exp_p = dog_val.get("expensive_price", 1000.0)
-    
-    fig.add_hrect(y0=0, y1=cheap_p, fillcolor="green", opacity=0.08, line_width=0, annotation_text="便宜價區間", row=1, col=1)
-    fig.add_hrect(y0=cheap_p, y1=fair_p, fillcolor="blue", opacity=0.05, line_width=0, annotation_text="合理價區間", row=1, col=1)
-    fig.add_hrect(y0=fair_p, y1=exp_p, fillcolor="red", opacity=0.08, line_width=0, annotation_text="昂貴價區間", row=1, col=1)
+    cheap_p = dog_val.get("cheap_price")
+    fair_p = dog_val.get("fair_price")
+    exp_p = dog_val.get("expensive_price")
+    if dog_val.get("status") == "available" and all(
+        value is not None for value in [cheap_p, fair_p, exp_p]
+    ):
+        fig.add_hrect(y0=0, y1=cheap_p, fillcolor="green", opacity=0.08, line_width=0, annotation_text="便宜價區間", row=1, col=1)
+        fig.add_hrect(y0=cheap_p, y1=fair_p, fillcolor="blue", opacity=0.05, line_width=0, annotation_text="合理價區間", row=1, col=1)
+        fig.add_hrect(y0=fair_p, y1=exp_p, fillcolor="red", opacity=0.08, line_width=0, annotation_text="昂貴價區間", row=1, col=1)
 
     # 5. 費波南希時間轉折垂直區間帶 (add_vrect)
-    sub_df = clean_df[clean_df['date'] >= pivot_date].reset_index(drop=True)
-    for fib in [8, 13, 21, 34, 55, 89, 144, 233]:
-        if fib < len(sub_df):
-            fib_date = sub_df['date'].iloc[fib]
-            fig.add_vrect(
-                x0=fib_date, x1=fib_date,
-                fillcolor="purple", opacity=0.3,
-                line=dict(color="purple", width=1.5, dash="dash"),
-                annotation_text=f"Fib {fib}", annotation_position="top left",
-                row=1, col=1
-            )
+    if pivot_date:
+        sub_df = clean_df[clean_df['date'] >= pivot_date].reset_index(drop=True)
+        for fib in [8, 13, 21, 34, 55, 89, 144, 233]:
+            if fib < len(sub_df):
+                fib_date = sub_df['date'].iloc[fib]
+                fig.add_vrect(
+                    x0=fib_date, x1=fib_date,
+                    fillcolor="purple", opacity=0.3,
+                    line=dict(color="purple", width=1.5, dash="dash"),
+                    annotation_text=f"Fib {fib}", annotation_position="top left",
+                    row=1, col=1
+                )
 
     # 6. 成交量圖 (Volume Subplot)
     colors_vol = np.where(clean_df['close'] >= clean_df['open'], 'red', 'green')
@@ -161,7 +141,8 @@ def create_tu_plotly_chart(df: pd.DataFrame, targets: dict, dog_val: dict, pivot
 # Streamlit 主介面邏輯
 def main():
     st.title("📈 杜金龍台股量化預測與分析系統 (Anti-Gravity TU-System)")
-    st.caption("融合「波浪理論」、「費波南希時間/空間」、「均線扣抵共振」、「EVA 估值」與「M1B 籌碼過熱指標」")
+    st.caption("研究／歷史回測／虛擬模擬模式｜不連接券商、不送出真實委託")
+    st.info(RESEARCH_DISCLAIMER)
 
     # 側邊欄 Sidebar
     st.sidebar.header("⚙️ 系統設定與標的選擇")
@@ -213,7 +194,8 @@ def main():
     with col2:
         st.metric("多空共振攻擊訊號", "🔥 亮燈發動" if is_resonance else "⚪ 未觸發 (整理)", delta="強攻訊號" if is_resonance else "中立")
     with col3:
-        st.metric("M1B 頭部過熱比率", f"{sentiment.get('volume_m1b_ratio', 0)*100:.2f}%", delta="極端過熱" if sentiment.get('is_overheat') else "正常適中")
+        ratio = sentiment.get("turnover_m1b_ratio")
+        st.metric("M1B 頭部過熱比率", f"{ratio*100:.2f}%" if ratio is not None else "資料不足", delta="極端過熱" if sentiment.get('is_overheat') else "未觸發／待資料")
     with col4:
         st.metric("費氏時間轉折狀態", f"{time_win.get('elapsed_units', 0)} 天", delta=time_win.get('matching_fib') or "正常發展")
 
@@ -221,7 +203,7 @@ def main():
     
     # 呈現 Plotly 杜氏特化 K 線圖
     st.subheader(f"📊 {symbol_code} 杜氏特化 Plotly K 線圖 (含均線扣抵預判、費氏時間帶與估值通道)")
-    fig = create_tu_plotly_chart(clean_df, targets, dog_val, pivot_date=time_win.get("pivot_date", "2022-10-25"))
+    fig = create_tu_plotly_chart(clean_df, targets, dog_val, pivot_date=time_win.get("pivot_date"))
     st.plotly_chart(fig, use_container_width=True)
 
     # 呈現詳細算圖數據
@@ -239,7 +221,7 @@ def main():
 
     with col_right:
         st.subheader("🐶 主人與小狗估值模型 & EVA 價值底盤")
-        st.write(f"**預估未來一年 EPS**: {dog_val.get('estimated_eps')} 元 (雙軌備援模式)")
+        st.write(f"**歷史 TTM EPS**: {dog_val.get('estimated_eps')} 元｜狀態：{dog_val.get('status', 'insufficient_data')}")
         st.dataframe(pd.DataFrame([
             {"估值價位類別": "便宜價 (10x PE)", "價格 (元)": dog_val.get("cheap_price")},
             {"估值價位類別": "合理價 (20x PE)", "價格 (元)": dog_val.get("fair_price")},
