@@ -12,7 +12,9 @@ from fastapi.staticfiles import StaticFiles
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from src.analysis_service import analyze_symbol, normalize_symbol
+from src.domain.model_status import LEGACY_V1_MODEL_METADATA
 from src.scheduler import AutoScheduler
+from src.services.rule_registry import RuleRegistry
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -56,15 +58,34 @@ def health_check():
     return {
         "status": "ok",
         "system": "Anti-Gravity TU-Predictor",
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
+        **LEGACY_V1_MODEL_METADATA,
     }
+
+
+@app.get("/api/model-rules")
+def list_model_rules():
+    registry = RuleRegistry()
+    return {
+        "model_version": "2.0.0-registry",
+        "official_affiliation": False,
+        "rules": [rule.to_dict() for rule in registry.list_rules()],
+    }
+
+
+@app.get("/api/model-rules/{rule_id}")
+def get_model_rule(rule_id: str):
+    try:
+        return RuleRegistry().describe(rule_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 @app.get("/api/analysis/{symbol}")
 def get_analysis(symbol: str):
     analysis, _ = analyze_symbol(symbol, db_path="data/cache.db")
     if analysis.get("status") != "available":
         raise HTTPException(status_code=404, detail=f"無法獲取標的 {symbol} 的 K 線數據")
-    return analysis
+    return {**analysis, **LEGACY_V1_MODEL_METADATA}
 
 # 掛載靜態網頁端點
 static_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../ui_alert/web"))

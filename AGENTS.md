@@ -469,3 +469,17 @@ Agent 不得在沒有證據時使用：
 9. 額外功能
 
 任何新增功能不得犧牲前五項。
+
+---
+
+## 18. Evidence-Based Model Rules
+
+- Every implemented research rule must have a stable Rule ID and an entry in `config/model_rules.yaml`.
+- Evidence levels are A, B, C, and U. Only A-level rules may be registered as `verified_core`.
+- U-level rules must never enter verified core, a core score, or a Du-method claim.
+- C-level rules must expose `project_operationalization: true`.
+- Rules requiring human approval must return `needs_human_input` when no valid approval ID is supplied.
+- Reports and API results must disclose model version, legacy state, evidence classification, and `official_affiliation: false` where applicable.
+- Historical TTM EPS or a fixed growth rate must not be relabeled as Forward EPS.
+- Existing fixed MA resonance, 20/30/50 allocation, 7%-11% pullback, and EVA floor calculations are legacy experimental or unsupported; they remain only for v1 compatibility and controlled historical research.
+- Evidence reclassification requires source references, focused tests, and a versioned, reversible change. Do not overwrite an older rule version.

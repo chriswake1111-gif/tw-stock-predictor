@@ -30,7 +30,10 @@ class ValuationEVAEngine:
         historical_ttm_eps: Optional[float] = None, 
         growth_rate: Optional[float] = None
     ) -> float:
-        """
+        """Legacy v1 estimate retained for compatibility.
+
+        Historical TTM growth output is not Forward EPS and may not be used by
+        the v2 verified valuation core.
         預估 EPS 雙軌機制 (Dual-track EPS):
         軌道 1: 若提供法人預估 EPS，優先採用法人預估值。
         軌道 2: 備援機制 = 歷史 TTM EPS * (1 + 預設成長率).
@@ -124,6 +127,12 @@ class ValuationEVAEngine:
 
         return {
             "status": "available",
+            "model_version": "1.x",
+            "legacy": True,
+            "rule_id": "VAL-05",
+            "evidence_level": "U",
+            "implementation_mode": "unsupported",
+            "official_affiliation": False,
             "nopat_billion": nopat,
             "invested_capital_billion": invested_capital,
             "wacc": wacc,
@@ -196,3 +205,17 @@ class ValuationEVAEngine:
 
         breakout_reversal = recent_breakdown & recovered & volume_up
         return breakout_reversal.fillna(False)
+    MODEL_CLASSIFICATION = {
+        "model_version": "1.x",
+        "legacy": True,
+        "official_affiliation": False,
+        "future_eps_estimate": {
+            "implementation_mode": "legacy_experimental",
+            "forbidden_uses": ["forward_eps", "verified_core"],
+        },
+        "eva_floor": {
+            "rule_id": "VAL-05",
+            "evidence_level": "U",
+            "implementation_mode": "unsupported",
+        },
+    }

@@ -380,6 +380,11 @@ class TuBacktester:
         return {
             "mode": "historical_backtest_only",
             "execution_capability": "simulated_orders_only",
+            "model_version": "1.x",
+            "legacy": True,
+            "official_affiliation": False,
+            "rule_ids": ["MA-03", "ENT-01", "ENT-03"],
+            "implementation_mode": "legacy_experimental",
             "initial_cash": self.initial_cash,
             "final_value": round(final_value, 2),
             "total_return_pct": round(total_return_pct, 2),
@@ -417,3 +422,13 @@ class TuBacktester:
             "execution_log": execution_log,
             "equity_curve": strat.equity_curve,
         }
+    MODEL_CLASSIFICATION = {
+        "model_version": "1.x",
+        "legacy": True,
+        "official_affiliation": False,
+        "rules": {
+            "ENT-03": {"evidence_level": "U", "implementation_mode": "legacy_experimental"},
+            "ENT-01": {"evidence_level": "U", "implementation_mode": "legacy_experimental"},
+            "MA-03": {"evidence_level": "U", "implementation_mode": "legacy_experimental"},
+        },
+    }

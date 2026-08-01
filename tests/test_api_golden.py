@@ -24,3 +24,14 @@ def test_v1_analysis_contract_matches_golden_snapshot(monkeypatch):
     actual = response.json()
     for key, value in expected.items():
         assert actual[key] == value
+    assert actual["model_version"] == "1.x"
+    assert actual["legacy"] is True
+    assert actual["official_affiliation"] is False
+
+
+def test_model_rule_api_exposes_classification():
+    response = TestClient(api_main.app).get("/api/model-rules/MA-03")
+
+    assert response.status_code == 200
+    assert response.json()["evidence_level"] == "U"
+    assert response.json()["implementation_mode"] == "legacy_experimental"

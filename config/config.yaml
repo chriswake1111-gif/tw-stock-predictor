@@ -1,5 +1,11 @@
 # 杜金龍台股量化預測系統 - 全局配置檔 (config.yaml)
 
+model:
+  version: "1.x"
+  legacy: true
+  official_affiliation: false
+  rules_registry: "config/model_rules.yaml"
+
 database:
   db_path: "data/cache.db"
 
