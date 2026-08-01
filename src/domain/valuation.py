@@ -33,6 +33,11 @@ class ApprovalStatus(str, Enum):
     REVOKED = "revoked"
 
 
+class ApprovalResourceType(str, Enum):
+    FORWARD_EPS = "forward_eps"
+    PE_SCENARIO = "pe_scenario"
+
+
 def normalize_utc_timestamp(value: str, field_name: str) -> str:
     """Validate an aware ISO-8601 timestamp and normalize it to UTC."""
     if not isinstance(value, str) or not value.strip():
@@ -49,6 +54,11 @@ def normalize_utc_timestamp(value: str, field_name: str) -> str:
     return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds").replace(
         "+00:00", "Z"
     )
+
+
+def parse_aware_timestamp(value: str, field_name: str) -> datetime:
+    normalized = normalize_utc_timestamp(value, field_name)
+    return datetime.fromisoformat(normalized.replace("Z", "+00:00"))
 
 
 def utc_now_timestamp() -> str:
@@ -101,9 +111,14 @@ class ForwardEPSObservation:
         if self.fiscal_year < 1900:
             raise ValueError("fiscal_year is invalid")
         try:
-            date.fromisoformat(self.published_at)
+            published_date = date.fromisoformat(self.published_at)
         except ValueError as exc:
             raise ValueError("published_at must be an ISO-8601 date") from exc
+        normalize_utc_timestamp(self.available_at, "available_at")
+        available_candidate = self.available_at.replace("Z", "+00:00")
+        available_date = datetime.fromisoformat(available_candidate).date()
+        if published_date > available_date:
+            raise ValueError("published_at cannot be later than available_at date")
         low = _finite_optional(self.eps_low, "eps_low")
         base = _finite_optional(self.eps_base, "eps_base")
         high = _finite_optional(self.eps_high, "eps_high")
@@ -182,11 +197,22 @@ class PEScenario:
             raise ValueError("exactly one value matching the PE scope is required")
         normalize_utc_timestamp(self.available_at, "available_at")
         if self.approval_status is ApprovalStatus.APPROVED:
+            if not self.label.strip():
+                raise ValueError("approved PE scenarios require a non-blank label")
+            if not self.rationale.strip():
+                raise ValueError("approved PE scenarios require a non-blank rationale")
             if not self.approved_by or not self.approved_at:
                 raise ValueError("approved PE scenarios require approved_by and approved_at")
             normalize_utc_timestamp(self.approved_at, "approved_at")
         elif self.approved_at is not None:
             normalize_utc_timestamp(self.approved_at, "approved_at")
+        if self.effective_from and self.effective_to:
+            effective_from = parse_aware_timestamp(
+                self.effective_from, "effective_from"
+            )
+            effective_to = parse_aware_timestamp(self.effective_to, "effective_to")
+            if effective_from >= effective_to:
+                raise ValueError("effective_from must be earlier than effective_to")
         return self
 
     def canonical_payload(self) -> dict[str, Any]:
@@ -210,4 +236,48 @@ class PEScenario:
             "effective_from": normalize_utc_timestamp(self.effective_from, "effective_from") if self.effective_from else None,
             "effective_to": normalize_utc_timestamp(self.effective_to, "effective_to") if self.effective_to else None,
             "version": self.version,
+        }
+
+
+@dataclass(frozen=True)
+class ValuationApproval:
+    approval_id: str
+    resource_type: ApprovalResourceType
+    resource_id: str
+    decision: ApprovalStatus
+    rule_id: str
+    evidence_level: str
+    project_operationalization: bool
+    approved_by: str
+    rationale: str
+    available_at: str
+
+    def canonical_payload(self) -> dict[str, Any]:
+        if self.decision not in {ApprovalStatus.APPROVED, ApprovalStatus.REVOKED}:
+            raise ValueError("approval decision must be approved or revoked")
+        if not self.approval_id.strip():
+            raise ValueError("approval_id is required")
+        if not self.resource_id.strip():
+            raise ValueError("resource_id is required")
+        if not self.approved_by.strip():
+            raise ValueError("approved_by is required")
+        if not self.rationale.strip():
+            raise ValueError("approval rationale cannot be blank")
+        if self.evidence_level not in {"A", "B", "C", "U"}:
+            raise ValueError("evidence_level must be A, B, C, or U")
+        if self.evidence_level == "C" and not self.project_operationalization:
+            raise ValueError("C-level approvals require project_operationalization")
+        return {
+            "approval_id": self.approval_id,
+            "resource_type": self.resource_type.value,
+            "resource_id": self.resource_id,
+            "decision": self.decision.value,
+            "rule_id": self.rule_id,
+            "evidence_level": self.evidence_level,
+            "project_operationalization": self.project_operationalization,
+            "approved_by": self.approved_by,
+            "rationale": self.rationale,
+            "available_at": normalize_utc_timestamp(
+                self.available_at, "available_at"
+            ),
         }

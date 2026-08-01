@@ -5,12 +5,20 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 from src.domain.valuation import utc_now_timestamp
 
 
-MIGRATION_ID = "20260801_01_evidence_model_v2_valuation"
-MIGRATION_FILE = Path(__file__).resolve().parents[2] / "migrations" / f"{MIGRATION_ID}.sql"
+MIGRATION_IDS = (
+    "20260801_01_evidence_model_v2_valuation",
+    "20260801_02_evidence_model_v2_approval_hardening",
+)
+MIGRATION_ID = MIGRATION_IDS[-1]
+MIGRATION_FILES = tuple(
+    Path(__file__).resolve().parents[2] / "migrations" / f"{migration_id}.sql"
+    for migration_id in MIGRATION_IDS
+)
 
 
 def _statements(sql: str) -> list[str]:
@@ -28,9 +36,19 @@ def _statements(sql: str) -> list[str]:
     return statements
 
 
-def apply_valuation_migration(db_path: str) -> dict[str, str | bool]:
-    sql = MIGRATION_FILE.read_text(encoding="utf-8")
-    checksum = hashlib.sha256(sql.encode("utf-8")).hexdigest()
+def apply_valuation_migration(db_path: str) -> dict[str, Any]:
+    database_path = Path(db_path)
+    if db_path != ":memory:":
+        database_path.resolve().parent.mkdir(parents=True, exist_ok=True)
+    migrations = []
+    for migration_id, migration_file in zip(MIGRATION_IDS, MIGRATION_FILES):
+        sql = migration_file.read_text(encoding="utf-8")
+        migrations.append((
+            migration_id,
+            sql,
+            hashlib.sha256(sql.encode("utf-8")).hexdigest(),
+        ))
+    applied_ids: list[str] = []
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("BEGIN IMMEDIATE")
@@ -44,25 +62,31 @@ def apply_valuation_migration(db_path: str) -> dict[str, str | bool]:
                 )
                 """
             )
-            existing = conn.execute(
-                "SELECT checksum_sha256 FROM schema_migrations WHERE version_id = ?",
-                (MIGRATION_ID,),
-            ).fetchone()
-            if existing:
-                if existing[0] != checksum:
-                    raise RuntimeError(
-                        f"migration checksum mismatch for {MIGRATION_ID}"
-                    )
-                conn.commit()
-                return {"migration_id": MIGRATION_ID, "checksum_sha256": checksum, "applied": False}
-            for statement in _statements(sql):
-                conn.execute(statement)
-            conn.execute(
-                "INSERT INTO schema_migrations(version_id, checksum_sha256, applied_at) VALUES (?, ?, ?)",
-                (MIGRATION_ID, checksum, utc_now_timestamp()),
-            )
+            for migration_id, sql, checksum in migrations:
+                existing = conn.execute(
+                    "SELECT checksum_sha256 FROM schema_migrations WHERE version_id = ?",
+                    (migration_id,),
+                ).fetchone()
+                if existing:
+                    if existing[0] != checksum:
+                        raise RuntimeError(
+                            f"migration checksum mismatch for {migration_id}"
+                        )
+                    continue
+                for statement in _statements(sql):
+                    conn.execute(statement)
+                conn.execute(
+                    "INSERT INTO schema_migrations(version_id, checksum_sha256, applied_at) VALUES (?, ?, ?)",
+                    (migration_id, checksum, utc_now_timestamp()),
+                )
+                applied_ids.append(migration_id)
             conn.commit()
-            return {"migration_id": MIGRATION_ID, "checksum_sha256": checksum, "applied": True}
+            return {
+                "migration_id": MIGRATION_ID,
+                "checksum_sha256": migrations[-1][2],
+                "applied": bool(applied_ids),
+                "applied_migration_ids": applied_ids,
+            }
         except Exception:
             conn.rollback()
             raise

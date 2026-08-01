@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import os
+import hmac
+import sqlite3
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Header, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from src.analysis_service import normalize_symbol
 from src.domain.valuation import (
     ApprovalStatus,
+    ApprovalResourceType,
     ForwardEPSObservation,
     ForwardEPSSourceType,
     PEScenario,
@@ -27,7 +30,11 @@ from src.services.rule_registry import RuleRegistry
 router = APIRouter(prefix="/api/v2", tags=["evidence-model-v2"])
 
 
-class ForwardEPSRequest(BaseModel):
+class StrictRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ForwardEPSRequest(StrictRequest):
     logical_series_id: str
     revision_number: int
     revision_of: str | None = None
@@ -42,32 +49,56 @@ class ForwardEPSRequest(BaseModel):
     available_at: str
     analyst_count: int | None = None
     quality_note: str | None = None
-    status: RecordStatus = RecordStatus.ACTIVE
 
 
-class PEScenarioRequest(BaseModel):
+class PEScenarioRequest(StrictRequest):
     logical_series_id: str
     revision_number: int
     revision_of: str | None = None
     label: str
     pe_value: float
     rationale: str
-    evidence_level: str
     scope: PEScope
     symbol: str | None = None
     industry: str | None = None
     market: str | None = None
     available_at: str
-    approval_status: ApprovalStatus
-    approved_by: str | None = None
-    approved_at: str | None = None
     effective_from: str | None = None
     effective_to: str | None = None
     version: str = "2.0.0"
 
 
+class ApprovalRequest(StrictRequest):
+    decision: ApprovalStatus
+    rule_id: str
+    rationale: str
+    available_at: str
+
+
 def _service() -> ForwardEPSService:
     return ForwardEPSService(os.getenv("DATABASE_PATH", "data/cache.db"))
+
+
+def _require_write_access(api_key: str | None) -> str:
+    if os.getenv("EVIDENCE_V2_WRITES_ENABLED", "false").strip().lower() != "true":
+        raise HTTPException(status_code=503, detail="evidence_v2_writes_disabled")
+    expected = os.getenv("EVIDENCE_V2_ADMIN_API_KEY", "")
+    actor = os.getenv("EVIDENCE_V2_ADMIN_ACTOR", "")
+    if not expected or not actor:
+        raise HTTPException(
+            status_code=503, detail="evidence_v2_admin_configuration_incomplete"
+        )
+    if api_key is None or not hmac.compare_digest(api_key, expected):
+        raise HTTPException(status_code=401, detail="invalid_admin_api_key")
+    return actor
+
+
+def _public_dto(record: dict) -> dict:
+    return {
+        key: value
+        for key, value in record.items()
+        if key not in {"idempotency_key", "payload_fingerprint"}
+    }
 
 
 def resolve_knowledge_cutoff(
@@ -112,8 +143,10 @@ def resolve_knowledge_cutoff(
 def create_forward_eps(
     payload: ForwardEPSRequest,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    admin_api_key: str | None = Header(default=None, alias="X-Admin-API-Key"),
 ):
     try:
+        _require_write_access(admin_api_key)
         observation = ForwardEPSObservation(
             logical_series_id=payload.logical_series_id,
             revision_number=payload.revision_number,
@@ -129,11 +162,15 @@ def create_forward_eps(
             available_at=payload.available_at,
             analyst_count=payload.analyst_count,
             quality_note=payload.quality_note,
-            status=payload.status,
+            status=RecordStatus.ACTIVE,
         )
         result = _service().ingest_forward_eps(observation, idempotency_key)
-        return {"status": "available", "observation": result}
-    except (ValueError, RuntimeError) as exc:
+        return {
+            "status": "available",
+            "approval_status": "draft",
+            "observation": _public_dto(result),
+        }
+    except (ValueError, RuntimeError, sqlite3.IntegrityError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
@@ -141,8 +178,10 @@ def create_forward_eps(
 def create_pe_scenario(
     payload: PEScenarioRequest,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    admin_api_key: str | None = Header(default=None, alias="X-Admin-API-Key"),
 ):
     try:
+        _require_write_access(admin_api_key)
         scenario = PEScenario(
             logical_series_id=payload.logical_series_id,
             revision_number=payload.revision_number,
@@ -150,23 +189,82 @@ def create_pe_scenario(
             label=payload.label,
             pe_value=payload.pe_value,
             rationale=payload.rationale,
-            evidence_level=payload.evidence_level,
+            evidence_level="U",
             scope=payload.scope,
             symbol=normalize_symbol(payload.symbol) if payload.symbol else None,
             industry=payload.industry,
             market=payload.market,
             available_at=payload.available_at,
-            approval_status=payload.approval_status,
-            approved_by=payload.approved_by,
-            approved_at=payload.approved_at,
+            approval_status=ApprovalStatus.DRAFT,
             effective_from=payload.effective_from,
             effective_to=payload.effective_to,
             version=payload.version,
         )
         result = _service().ingest_pe_scenario(scenario, idempotency_key)
-        return {"status": "available", "pe_scenario": result}
-    except (ValueError, RuntimeError) as exc:
+        return {
+            "status": "available",
+            "approval_status": "draft",
+            "pe_scenario": _public_dto(result),
+        }
+    except (ValueError, RuntimeError, sqlite3.IntegrityError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _record_approval(
+    *,
+    resource_type: ApprovalResourceType,
+    resource_id: str,
+    payload: ApprovalRequest,
+    idempotency_key: str,
+    admin_api_key: str | None,
+):
+    try:
+        actor = _require_write_access(admin_api_key)
+        result = _service().record_approval(
+            resource_type=resource_type,
+            resource_id=resource_id,
+            decision=payload.decision,
+            rule_id=payload.rule_id,
+            rationale=payload.rationale,
+            available_at=payload.available_at,
+            approved_by=actor,
+            idempotency_key=idempotency_key,
+        )
+        return {"status": "available", "approval": _public_dto(result)}
+    except (ValueError, RuntimeError, sqlite3.IntegrityError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/forward-eps/{observation_id}/approval")
+def approve_forward_eps(
+    observation_id: str,
+    payload: ApprovalRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    admin_api_key: str | None = Header(default=None, alias="X-Admin-API-Key"),
+):
+    return _record_approval(
+        resource_type=ApprovalResourceType.FORWARD_EPS,
+        resource_id=observation_id,
+        payload=payload,
+        idempotency_key=idempotency_key,
+        admin_api_key=admin_api_key,
+    )
+
+
+@router.post("/pe-scenarios/{scenario_id}/approval")
+def approve_pe_scenario(
+    scenario_id: str,
+    payload: ApprovalRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    admin_api_key: str | None = Header(default=None, alias="X-Admin-API-Key"),
+):
+    return _record_approval(
+        resource_type=ApprovalResourceType.PE_SCENARIO,
+        resource_id=scenario_id,
+        payload=payload,
+        idempotency_key=idempotency_key,
+        admin_api_key=admin_api_key,
+    )
 
 
 @router.get("/analysis/{symbol}")

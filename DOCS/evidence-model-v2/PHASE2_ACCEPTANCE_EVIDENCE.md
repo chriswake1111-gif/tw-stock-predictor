@@ -7,15 +7,18 @@ Date: 2026-08-01
 ```powershell
 python -m py_compile src\domain\valuation.py src\repositories\migration_runner.py src\repositories\forward_eps_repository.py
 python -m py_compile src\engine\forward_pe_valuation.py src\services\forward_eps_service.py src\api\routes\v2_valuation.py src\api\main.py
-python -m pytest -q -p no:cacheprovider --basetemp C:\tmp\tw-stock-evidence-phase2-final-focus-20260801 tests\test_forward_eps_asof.py tests\test_forward_pe_valuation.py tests\test_v2_valuation_api.py
-python -m pytest -q -p no:cacheprovider --basetemp C:\tmp\tw-stock-evidence-phase2-full-final-20260801
+python -m pytest -q -p no:cacheprovider --basetemp=.test-tmp tests/test_forward_eps_asof.py tests/test_forward_pe_valuation.py tests/test_v2_valuation_api.py
+python -m pytest -q -p no:cacheprovider
+python -m pytest -q -p no:cacheprovider tests/test_api_golden.py
+git diff --check
 ```
 
 ## Results
 
-- Final Phase 2 focus tests: 13 passed.
-- Full repository regression including the rollback case: 100 passed.
-- Existing warning: one Starlette TestClient/httpx deprecation warning.
+- Phase 2 review-hardening focus tests: 28 passed.
+- Full repository regression: 115 passed.
+- Independent v1 API golden snapshot: 2 passed.
+- Existing warning: Starlette TestClient/httpx deprecation.
 - No live network dependency was used by the new tests.
 
 ## Acceptance coverage
@@ -32,6 +35,13 @@ python -m pytest -q -p no:cacheprovider --basetemp C:\tmp\tw-stock-evidence-phas
 - Versioned migration rerun and transactional rollback: covered.
 - Partial v2 response without HTTP 500: covered.
 - v1 golden snapshot: included in the full regression.
+- Write routes default closed and management API-key protected: covered.
+- Draft-only import and server-controlled approver identity: covered.
+- Forward EPS approval/revocation and approval ID traceability: covered.
+- U-level PE fail-closed and C-level project operationalization: covered.
+- Cross-symbol/year/source/unit/scope revision rejection: covered.
+- Permanent multi-key idempotency bindings: covered.
+- Fresh-clone migration with missing parent directory: covered.
 
 ## Boundary evidence
 

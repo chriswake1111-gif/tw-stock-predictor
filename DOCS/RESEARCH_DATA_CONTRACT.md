@@ -169,7 +169,9 @@ python tools\build_official_gap_snapshot.py `
 - `historical_ttm` 不是允許的 Forward EPS source type，且不得進入 Forward PE 矩陣。
 - PE scope 明確分為 `symbol`、`industry`、`market`；verified matrix 只自動使用該股票已核准的 symbol PE。
 - draft、revoked、未生效或已失效的 PE 不得進入矩陣。
-- 所有 POST 需要 idempotency key，資料同時保存可重現 SHA-256 fingerprint。
+- Forward EPS 與 PE 必須先經受保護的人工作業核准；矩陣與 Rule Trace 保存 approval ID。U 級一律 fail-closed，C 級標示 project operationalization。
+- 寫入 API 預設關閉，啟用後仍須管理 API key；匯入只能建立 draft，`approved_by` 由伺服器管理設定決定。
+- 所有 POST 需要 idempotency key；永久 ledger 綁定每個 key、SHA-256 fingerprint 與 resource ID，public DTO 不揭露 key 或 fingerprint。
 - 詳細契約見 `DOCS/EVIDENCE_MODEL_V2_PHASE2.md`。
 
 ## Adaptive 配置研究契約

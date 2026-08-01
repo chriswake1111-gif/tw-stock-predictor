@@ -18,7 +18,20 @@ class ForwardPEValuationEngine:
         self.repository = repository
         self.rule_registry = rule_registry or RuleRegistry()
 
-    def _rule_trace(self, rule_id: str, knowledge_cutoff_at: str) -> dict[str, Any]:
+    @staticmethod
+    def _public_record(record: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in record.items()
+            if key not in {"idempotency_key", "payload_fingerprint", "revision_rank"}
+        }
+
+    def _rule_trace(
+        self,
+        rule_id: str,
+        knowledge_cutoff_at: str,
+        approval_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
         rule = self.rule_registry.describe(rule_id)
         return {
             "rule_id": rule_id,
@@ -27,6 +40,7 @@ class ForwardPEValuationEngine:
             "implementation_mode": rule["implementation_mode"],
             "project_operationalization": rule["project_operationalization"],
             "source_data_as_of": knowledge_cutoff_at,
+            "approval_ids": sorted(set(approval_ids or [])),
         }
 
     def evaluate(
@@ -44,19 +58,28 @@ class ForwardPEValuationEngine:
             symbol, knowledge_cutoff_at, industry=industry, market=market
         )
         symbol_scenarios = pe_by_scope["symbol"]
+        forecast_approval_ids = [
+            row["verified_approval_id"] for row in observations
+        ]
+        pe_approval_ids = [
+            row["verified_approval_id"] for row in symbol_scenarios
+        ]
         rules_used = [
-            self._rule_trace("VAL-01", knowledge_cutoff_at),
-            self._rule_trace("VAL-02", knowledge_cutoff_at),
-            self._rule_trace("VAL-03", knowledge_cutoff_at),
-            self._rule_trace("VAL-04", knowledge_cutoff_at),
+            self._rule_trace(
+                "VAL-01", knowledge_cutoff_at,
+                forecast_approval_ids + pe_approval_ids,
+            ),
+            self._rule_trace("VAL-02", knowledge_cutoff_at, forecast_approval_ids),
+            self._rule_trace("VAL-03", knowledge_cutoff_at, pe_approval_ids),
+            self._rule_trace("VAL-04", knowledge_cutoff_at, pe_approval_ids),
         ]
         base = {
             "knowledge_cutoff_at": knowledge_cutoff_at,
-            "forward_eps": observations,
-            "pe_scenarios": symbol_scenarios,
+            "forward_eps": [self._public_record(row) for row in observations],
+            "pe_scenarios": [self._public_record(row) for row in symbol_scenarios],
             "reference_pe_scenarios": {
-                "industry": pe_by_scope["industry"],
-                "market": pe_by_scope["market"],
+                "industry": [self._public_record(row) for row in pe_by_scope["industry"]],
+                "market": [self._public_record(row) for row in pe_by_scope["market"]],
                 "automatic_use": False,
             },
             "target_matrix": [],
@@ -119,6 +142,10 @@ class ForwardPEValuationEngine:
                         "target_price": round(float(eps_value) * float(pe_scenario["pe_value"]), 4) if applicable else None,
                         "formula": "forward_eps * approved_symbol_pe",
                         "rule_ids": ["VAL-01", "VAL-02", "VAL-03", "VAL-04"],
+                        "approval_ids": {
+                            "forward_eps": observation["verified_approval_id"],
+                            "pe_scenario": pe_scenario["verified_approval_id"],
+                        },
                     })
         return {
             **base,

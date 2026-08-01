@@ -2,7 +2,7 @@
 
 ## Scope
 
-Phase 2 adds manually ingested or authorized-source Forward EPS observations, approved PE scenarios, and a parallel v2 valuation API. It does not add an external Forward EPS collector and does not modify the legacy v1 API.
+Phase 2 adds manually ingested or authorized-source Forward EPS observations, a protected human-approval ledger, PE scenarios, and a parallel v2 valuation API. It does not add an external Forward EPS collector and does not modify the legacy v1 API.
 
 ## Knowledge cutoff policy
 
@@ -38,7 +38,7 @@ As-of queries select the latest known revision in each logical series. A later r
 
 Allowed source types are `broker_report`, `company_guidance`, `consensus_api`, and `manual`. `historical_ttm` is rejected. Historical TTM is not substituted into the Forward EPS matrix.
 
-Multiple sources are never automatically averaged. Each active source observation generates separate matrix cells, and every cell contains its original observation ID.
+Multiple sources are never automatically averaged. Each approved source observation generates separate matrix cells, and every cell contains its original observation ID and approval ID. Unapproved or revoked observations fail closed.
 
 ## PE scope and approval
 
@@ -48,7 +48,7 @@ PE scenarios are immutable revisions with one explicit scope:
 2. `industry`
 3. `market`
 
-Only an approved, effective, non-revoked `symbol` scenario is automatically used in the verified valuation matrix. Industry and market scenarios are returned as reference data only. Draft and revoked revisions are excluded.
+Only an approved, effective, non-revoked `symbol` scenario with non-U evidence is automatically used in the verified valuation matrix. C-level approvals are explicitly marked as project operationalization. Industry and market scenarios are returned as reference data only. Draft, revoked, not-yet-effective, and expired revisions are excluded. Evidence level and approver identity are assigned by the protected backend approval flow, not by import callers.
 
 ## Formula and non-applicable EPS
 
@@ -60,10 +60,11 @@ Zero or negative EPS observations may be preserved as evidence, but their matrix
 
 ## Migration
 
-Migration ID:
+Migration IDs:
 
 ```text
 20260801_01_evidence_model_v2_valuation
+20260801_02_evidence_model_v2_approval_hardening
 ```
 
 The centralized migration runner records the migration ID, SQL SHA-256, and application timestamp. All migration statements execute inside one SQLite transaction. Re-running the same migration is a verified no-op; a checksum change for an applied version is rejected.
@@ -72,6 +73,8 @@ New tables:
 
 - `forward_eps_observations`
 - `pe_scenarios`
+- `valuation_approvals`
+- `valuation_idempotency_keys`
 - central `schema_migrations` ledger
 
 The migration is additive. Existing v1 tables are unchanged, and application rollback can ignore the new tables without deleting stored evidence.
@@ -81,11 +84,15 @@ The migration is additive. Existing v1 tables are unchanged, and application rol
 ```text
 POST /api/v2/forward-eps
 POST /api/v2/pe-scenarios
+POST /api/v2/forward-eps/{observation_id}/approval
+POST /api/v2/pe-scenarios/{scenario_id}/approval
 GET  /api/v2/analysis/{symbol}
 GET  /api/v2/model-rules
 ```
 
-POST requests require `Idempotency-Key`. Repeating the same key and payload returns the existing record. Reusing the key with a different payload is rejected.
+All POST routes are disabled unless `EVIDENCE_V2_WRITES_ENABLED=true`, and require `X-Admin-API-Key` matching `EVIDENCE_V2_ADMIN_API_KEY`. The audited actor comes from `EVIDENCE_V2_ADMIN_ACTOR`; callers cannot submit `approved_by`. Imports always create draft resources. Separate protected approval routes create immutable approval events.
+
+POST requests require `Idempotency-Key`. A permanent ledger binds every key to its fingerprint and resource ID. Repeating a key and payload returns the existing resource; reusing that key with a different payload is rejected. Public DTOs do not expose keys or fingerprints.
 
 Sections belonging to Phase 3 or later return `unsupported` or `needs_human_input`; partial data does not fail the entire response.
 
@@ -93,7 +100,7 @@ Sections belonging to Phase 3 or later return `unsupported` or `needs_human_inpu
 
 - No external Forward EPS collector.
 - No automatic forecast-source averaging or source selection.
-- No approved forecast-set workflow; sources remain separate.
+- No grouped forecast-set workflow; individually approved sources remain separate.
 - No Phase 3 M1B integration.
 - No Phase 4 anchor or wave workflow.
 - No immutable full-analysis snapshot yet; `snapshot_id` remains `null` until Phase 7.
