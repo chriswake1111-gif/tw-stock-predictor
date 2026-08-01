@@ -159,6 +159,19 @@ python tools\build_official_gap_snapshot.py `
 
 2026-08-01 正式結果：236 個缺口中 202 筆通過契約並新增，34 筆 fail-closed；12/14 標的通過官方完整性 gate。`006208.TW` 保留 33 筆不可重建資料，`2308.TW` 保留 1 筆調整因子歧義。新快照為 `phase2-gap-adjusted-v1-20260801-ec781a02134f`；source snapshot 不變。完整逐列 ledger 保留於本機並由 manifest SHA-256 固定，Git 只保存必要摘要、未解決清單與 provenance。
 
+## Evidence Model v2 Forward EPS 與 PE（Phase 2）
+
+- 所有歷史知識查詢使用完整 `knowledge_cutoff_at`，並正規化為 UTC ISO-8601。
+- API 只有日期時採 `00:00:00 Asia/Taipei`，不得採當日結束時間；回應必須揭露 cutoff policy。
+- Forward EPS 同時以 `available_at <= cutoff` 與 `ingested_at <= cutoff` 限制可見性。
+- `logical_series_id`、`revision_number`、`revision_of` 形成不可變修訂鏈，歷史查詢取得當時最新可用版本。
+- 多個來源不得自動平均；每筆 observation 分別產生矩陣，矩陣格保存 observation ID。
+- `historical_ttm` 不是允許的 Forward EPS source type，且不得進入 Forward PE 矩陣。
+- PE scope 明確分為 `symbol`、`industry`、`market`；verified matrix 只自動使用該股票已核准的 symbol PE。
+- draft、revoked、未生效或已失效的 PE 不得進入矩陣。
+- 所有 POST 需要 idempotency key，資料同時保存可重現 SHA-256 fingerprint。
+- 詳細契約見 `DOCS/EVIDENCE_MODEL_V2_PHASE2.md`。
+
 ## Adaptive 配置研究契約
 
 - legacy 訊號、退場與風控規則維持不變；adaptive 只改變 Stage 配置比例。

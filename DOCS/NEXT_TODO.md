@@ -38,6 +38,10 @@
 - [x] 完成 14 檔官方對帳報告 `official_integrity_audit_v1.json`；辨識供應商漏掉的補行星期六交易、2317 停牌／未交易日及 006208 官方零量列。既有 `daily_ohlcv` 52,074 筆與 canonical SHA-256 均未改變。
 - [x] 核准並實作 `provider_compatible_adjusted_v1`：同月份、同公司行動區段至少兩個 `1e-6` 唯一共識錨點才可將 TWSE raw OHLC 轉為 parent-compatible adjusted OHLC；volume 不調整。
 - [x] 建立不可變 Phase 2 快照 `phase2-gap-adjusted-v1-20260801-ec781a02134f`：236 個官方缺口中重建 202 筆、34 筆 fail-closed；官方完整性 gate 由 0/14 提升至 12/14，原 audited-v2 未覆寫。
+- [x] Evidence Model v2 Phase 0／1：建立 legacy golden snapshot、證據規則 registry 與 U 級規則 fail-closed。
+- [x] Evidence Model v2 Phase 2：完成 Forward EPS／PE immutable revisions、transactional migration、`knowledge_cutoff_at` as-of 查詢與平行 v2 valuation API。
+- [x] Forward EPS 多來源維持分離，不自動平均；verified matrix 只使用 approved symbol-scope PE，draft／revoked PE 不進入估值。
+- [x] Phase 2 驗收：完整回歸 100 passed；未新增外部 Forward EPS Collector，v1 golden snapshot 維持通過。
 
 ### 尚未完成／不得誤解為已完成
 
@@ -52,6 +56,8 @@
 - [ ] Phase 2 已建立 parent-compatible 缺日 adjusted 流程，但仍不是全歷史官方調整價；ETF 分割／反分割、面額變更及股利現金流／總報酬語意仍需獨立的官方全量資料契約。
 - [ ] `006208.TW` 有 32 筆官方成交股數／金額存在但 OHLC 為空，另有 1 筆錨點不足；`2308.TW` 有 1 筆因子共識平手。這 34 筆維持 `insufficient_data`，不得用成交均價或內插補值。
 - [ ] 測試仍有 FastAPI TestClient 對 `httpx` 的第三方棄用警告，暫不影響功能。
+- [ ] Evidence Model v2 尚無外部 Forward EPS Collector；目前只允許人工或已授權來源匯入。
+- [ ] Evidence Model v2 尚未進入 Phase 3 M1B、Phase 4 人工錨點、Phase 5 三等份 planner 與 Phase 7 immutable analysis snapshot。
 
 ### 建議下一步
 
