@@ -36,6 +36,7 @@
       "symbol": "0056.TW",
       "official_integrity_status": "quality_warning",
       "provider_missing_official_trade": 12,
+      "official_trade_without_ohlc": 0,
       "security_no_trade_or_suspended": 0,
       "official_zero_volume": 0,
       "provider_row_on_non_market_day": 0,
@@ -44,7 +45,8 @@
     {
       "symbol": "006208.TW",
       "official_integrity_status": "quality_warning",
-      "provider_missing_official_trade": 69,
+      "provider_missing_official_trade": 37,
+      "official_trade_without_ohlc": 32,
       "security_no_trade_or_suspended": 0,
       "official_zero_volume": 162,
       "provider_row_on_non_market_day": 0,
@@ -54,6 +56,7 @@
       "symbol": "2317.TW",
       "official_integrity_status": "quality_warning",
       "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
       "security_no_trade_or_suspended": 6,
       "official_zero_volume": 2,
       "provider_row_on_non_market_day": 0,
@@ -63,6 +66,7 @@
       "symbol": "2454.TW",
       "official_integrity_status": "quality_warning",
       "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
       "security_no_trade_or_suspended": 0,
       "official_zero_volume": 1,
       "provider_row_on_non_market_day": 0,
@@ -72,6 +76,7 @@
       "symbol": "2308.TW",
       "official_integrity_status": "quality_warning",
       "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
       "security_no_trade_or_suspended": 0,
       "official_zero_volume": 0,
       "provider_row_on_non_market_day": 0,
@@ -81,6 +86,7 @@
       "symbol": "2881.TW",
       "official_integrity_status": "quality_warning",
       "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
       "security_no_trade_or_suspended": 0,
       "official_zero_volume": 0,
       "provider_row_on_non_market_day": 0,
@@ -90,6 +96,7 @@
       "symbol": "2882.TW",
       "official_integrity_status": "quality_warning",
       "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
       "security_no_trade_or_suspended": 0,
       "official_zero_volume": 0,
       "provider_row_on_non_market_day": 0,
@@ -99,6 +106,7 @@
       "symbol": "1301.TW",
       "official_integrity_status": "quality_warning",
       "provider_missing_official_trade": 12,
+      "official_trade_without_ohlc": 0,
       "security_no_trade_or_suspended": 0,
       "official_zero_volume": 0,
       "provider_row_on_non_market_day": 0,
@@ -108,6 +116,7 @@
       "symbol": "2002.TW",
       "official_integrity_status": "quality_warning",
       "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
       "security_no_trade_or_suspended": 0,
       "official_zero_volume": 0,
       "provider_row_on_non_market_day": 0,
@@ -117,6 +126,7 @@
       "symbol": "1101.TW",
       "official_integrity_status": "quality_warning",
       "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
       "security_no_trade_or_suspended": 0,
       "official_zero_volume": 3,
       "provider_row_on_non_market_day": 0,
@@ -126,6 +136,7 @@
       "symbol": "2105.TW",
       "official_integrity_status": "quality_warning",
       "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
       "security_no_trade_or_suspended": 0,
       "official_zero_volume": 0,
       "provider_row_on_non_market_day": 0,
@@ -135,6 +146,7 @@
       "symbol": "1216.TW",
       "official_integrity_status": "quality_warning",
       "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
       "security_no_trade_or_suspended": 0,
       "official_zero_volume": 1,
       "provider_row_on_non_market_day": 0,
@@ -144,6 +156,7 @@
       "symbol": "2412.TW",
       "official_integrity_status": "quality_warning",
       "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
       "security_no_trade_or_suspended": 0,
       "official_zero_volume": 0,
       "provider_row_on_non_market_day": 0,
@@ -153,6 +166,7 @@
       "symbol": "2912.TW",
       "official_integrity_status": "quality_warning",
       "provider_missing_official_trade": 13,
+      "official_trade_without_ohlc": 0,
       "security_no_trade_or_suspended": 0,
       "official_zero_volume": 1,
       "provider_row_on_non_market_day": 0,
@@ -268,7 +282,7 @@
     {
       "symbol": "006208.TW",
       "date": "2014-03-14",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 45,
       "corporate_actions": []
     },
@@ -1458,14 +1472,14 @@
     {
       "symbol": "006208.TW",
       "date": "2017-03-28",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 113,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2017-04-10",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 42,
       "corporate_actions": []
     },
@@ -1500,14 +1514,14 @@
     {
       "symbol": "006208.TW",
       "date": "2017-05-09",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 22,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2017-05-12",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 458,
       "corporate_actions": []
     },
@@ -1528,7 +1542,7 @@
     {
       "symbol": "006208.TW",
       "date": "2017-05-31",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 157,
       "corporate_actions": []
     },
@@ -1542,14 +1556,14 @@
     {
       "symbol": "006208.TW",
       "date": "2017-06-09",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 30,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2017-06-12",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 1240,
       "corporate_actions": []
     },
@@ -1563,35 +1577,35 @@
     {
       "symbol": "006208.TW",
       "date": "2017-06-15",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 221,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2017-06-22",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 598,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2017-07-10",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 335,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2017-07-11",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 87,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2017-07-25",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 82,
       "corporate_actions": []
     },
@@ -1605,21 +1619,21 @@
     {
       "symbol": "006208.TW",
       "date": "2017-08-21",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 291,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2017-08-31",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 381,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2017-09-04",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 962,
       "corporate_actions": []
     },
@@ -1633,63 +1647,63 @@
     {
       "symbol": "006208.TW",
       "date": "2017-10-03",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 188,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2017-10-18",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 85,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2017-10-25",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 64,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2017-11-02",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 114,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2017-11-14",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 92,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2017-12-11",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 558,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2017-12-13",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 959,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2017-12-20",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 882,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2017-12-25",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 990,
       "corporate_actions": []
     },
@@ -1703,49 +1717,49 @@
     {
       "symbol": "006208.TW",
       "date": "2018-03-02",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 242,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2018-03-08",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 300,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2018-03-09",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 999,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2018-03-15",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 218,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2018-03-22",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 500,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2018-03-31",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 988,
       "corporate_actions": []
     },
     {
       "symbol": "006208.TW",
       "date": "2018-04-12",
-      "classification": "provider_missing_official_trade",
+      "classification": "official_trade_without_ohlc",
       "official_volume": 181,
       "corporate_actions": []
     },

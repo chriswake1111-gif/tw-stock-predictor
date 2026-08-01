@@ -881,16 +881,79 @@ def evaluate_symbol_walk_forward(
     if benchmark_df is not None and not benchmark_df.empty and "date" in benchmark_df:
         reference_trading_days = benchmark_df["date"].astype(str).tolist()
     quality = assess_data_quality(df, symbol, reference_trading_days)
+    adjustment_contract = (data_provenance or {}).get("adjustment_contract")
+
+    def provenance_dates(key: str) -> set[str]:
+        value = (data_provenance or {}).get(key)
+        if isinstance(value, str):
+            try:
+                return {str(item) for item in json.loads(value)}
+            except (json.JSONDecodeError, TypeError):
+                return set()
+        if isinstance(value, list):
+            return {str(item) for item in value}
+        return set()
+
+    requested_exempt_dates = provenance_dates("official_reference_exempt_dates")
+    exemption_evidence_dates = provenance_dates(
+        "official_explained_no_bar_dates"
+    ).union(provenance_dates("benchmark_provider_non_market_dates"))
+    exemption_contract_valid = (
+        adjustment_contract == "provider_compatible_adjusted_v1"
+        and requested_exempt_dates.issubset(exemption_evidence_dates)
+    )
+    exempt_dates = requested_exempt_dates if exemption_contract_valid else set()
+    if requested_exempt_dates:
+        quality["official_reference_exemption_contract_valid"] = (
+            exemption_contract_valid
+        )
+        if not exemption_contract_valid:
+            quality["status"] = "quality_warning"
+    if exempt_dates and quality.get("missing_reference_dates"):
+        original_missing = quality["missing_reference_dates"]
+        remaining_missing = [
+            date for date in original_missing if date not in exempt_dates
+        ]
+        quality["missing_reference_dates"] = remaining_missing
+        quality["missing_reference_date_count"] = len(remaining_missing)
+        quality["official_reference_exempt_dates_applied"] = sorted(
+            set(original_missing) - set(remaining_missing)
+        )
+        base_warning = (
+            quality.get("duplicate_dates", 0)
+            or quality.get("invalid_price_rows", 0)
+            or quality.get("large_return_rows_25pct", 0)
+            or quality.get("zero_volume_rows", 0)
+            or remaining_missing
+            or any(quality.get("missing_by_column", {}).values())
+        )
+        quality["status"] = "quality_warning" if base_warning else "available"
     removed_zero_volume_rows = int(
         (data_provenance or {}).get("zero_volume_rows_removed", 0)
     )
     if removed_zero_volume_rows:
-        quality["status"] = "quality_warning"
         quality["zero_volume_rows_removed_before_evaluation"] = removed_zero_volume_rows
         quality["zero_volume_dates_removed_before_evaluation"] = (
             data_provenance or {}
         ).get("zero_volume_dates_removed", [])
-    if data_provenance and data_provenance.get("auto_adjust") is True:
+        if (data_provenance or {}).get("zero_volume_reconciliation_status") != "available":
+            quality["status"] = "quality_warning"
+    official_integrity_status = (data_provenance or {}).get(
+        "official_integrity_status"
+    )
+    if official_integrity_status:
+        quality["official_integrity_status"] = official_integrity_status
+        quality["official_gap_rows_inserted"] = int(
+            (data_provenance or {}).get("official_gap_rows_inserted", 0)
+        )
+        quality["official_gap_rows_unresolved"] = int(
+            (data_provenance or {}).get("official_gap_rows_unresolved", 0)
+        )
+        if official_integrity_status != "available":
+            quality["status"] = "quality_warning"
+    if adjustment_contract == "provider_compatible_adjusted_v1":
+        quality["price_adjustment_contract"] = adjustment_contract
+    elif data_provenance and data_provenance.get("auto_adjust") is True:
         quality["price_adjustment_contract"] = (
             "yfinance auto_adjust=True; actions=False; repair=False"
         )

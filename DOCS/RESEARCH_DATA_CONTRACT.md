@@ -129,10 +129,35 @@ python tools\audit_twse_official_data.py `
 - 14/14 仍為 `quality_warning`，品質合格為 0/14。
 - 多數標的缺少 12～13 個官方有成交日；主要型態包含台灣補行交易的星期六，顯示 yfinance 固定快照並非完整官方交易日集合。
 - 2317 的 6 日無個股官方成交資料被分為停牌／未交易，不再誤判為供應商缺日。
-- 006208 的 162 筆官方零量列被獨立分類，不得當作有效 OHLCV 或推測補值。
+- 006208 的 162 筆官方零量列被獨立分類；另有 32 筆雖有成交股數／金額，但官方 OHLC 為空，均不得當作有效 OHLCV 或以成交均價推測補值。
 - 稽核前後既有 `daily_ohlcv` 均為 52,074 筆；以排序後 pipe 分隔、列間換行且結尾不加換行的 canonical bytes 計算，SHA-256 均為 `2a7e8411f8780906ec78bbba409e5a7dbdd20a0b88b363bf25382fa218a449c3`。
 
 完整分類證據保存於 `official_integrity_audit_v1.json`。Phase 1 只回答「官方市場有無交易、個股有無官方成交列、是否為官方零量、附近有哪些已收錄公司行動」；ETF 分割／反分割、面額變更與調整價還原仍屬 Phase 2，不得由本層推算或自動修補。
+
+## 官方缺日 adjusted snapshot（Phase 2）
+
+Phase 2 使用 `provider_compatible_adjusted_v1` 契約，只處理 Phase 1 已確認為官方市場成交日、但固定 adjusted snapshot 缺少的日期：
+
+- raw OHLCV 必須來自 `twse_daily_raw`；成交量維持官方原始股數。
+- 調整因子只能取自同月份、同公司行動區段的 parent adjusted close／官方 raw close 錨點。
+- 至少兩個錨點須在相對誤差 `1e-6` 內形成唯一最大共識群組；使用該群組因子的中位數。
+- 錨點不足、共識平手、官方 OHLC 缺失或價量無效時回傳 `insufficient_data`，不得內插或用成交均價反推。
+- 官方零量、停牌／未交易及 TWSE 非交易日只能在逐日證據存在時豁免 reference-day gate。
+- 此契約是為了相容 parent yfinance `auto_adjust=True` 快照，不是 TWSE 官方調整價，也不是完整股利現金流／總報酬模型。
+
+重建工具預設只讀來源與 SQLite 官方表，`--execute` 只建立新目錄：
+
+```powershell
+python tools\build_official_gap_snapshot.py `
+  --source-snapshot reports\backtest\expanded-phase-a-audited-v2-20260801-b8e7d89c9854 `
+  --audit-report reports\backtest\expanded-phase-a-audited-v2-20260801-b8e7d89c9854\official_integrity_audit_v1.json `
+  --db-path data\cache.db `
+  --output-root reports\backtest `
+  --run-id phase2-gap-adjusted-v1-20260801 `
+  --dry-run
+```
+
+2026-08-01 正式結果：236 個缺口中 202 筆通過契約並新增，34 筆 fail-closed；12/14 標的通過官方完整性 gate。`006208.TW` 保留 33 筆不可重建資料，`2308.TW` 保留 1 筆調整因子歧義。新快照為 `phase2-gap-adjusted-v1-20260801-ec781a02134f`；source snapshot 不變。完整逐列 ledger 保留於本機並由 manifest SHA-256 固定，Git 只保存必要摘要、未解決清單與 provenance。
 
 ## Adaptive 配置研究契約
 

@@ -36,6 +36,8 @@
 - [x] Audited v2 報告：`reports/backtest/expanded-phase-a-audited-v2-20260801-b8e7d89c9854`；14 檔均有尚未完整解釋的長期交易日／零量差異，品質合格可用數為 0，正式結論為 `hold_for_revision`。
 - [x] 建立 Phase 1 TWSE 官方完整性層：以 `FMTQIK` 建立 3,068 個官方成交日，只針對缺口月份抓取 `STOCK_DAY`，並收錄 `TWT49U`／`TWTAUU` 公司行動；407 個請求具備限速、checkpoint 與同 scope 續跑。
 - [x] 完成 14 檔官方對帳報告 `official_integrity_audit_v1.json`；辨識供應商漏掉的補行星期六交易、2317 停牌／未交易日及 006208 官方零量列。既有 `daily_ohlcv` 52,074 筆與 canonical SHA-256 均未改變。
+- [x] 核准並實作 `provider_compatible_adjusted_v1`：同月份、同公司行動區段至少兩個 `1e-6` 唯一共識錨點才可將 TWSE raw OHLC 轉為 parent-compatible adjusted OHLC；volume 不調整。
+- [x] 建立不可變 Phase 2 快照 `phase2-gap-adjusted-v1-20260801-ec781a02134f`：236 個官方缺口中重建 202 筆、34 筆 fail-closed；官方完整性 gate 由 0/14 提升至 12/14，原 audited-v2 未覆寫。
 
 ### 尚未完成／不得誤解為已完成
 
@@ -47,15 +49,16 @@
 - [ ] `^TWII` 無法直接交易，報告使用 ETF 稅率與單位的「指數代理成本模型」，不是可成交商品的精確重現。
 - [ ] 回測尚未納入股利現金流、個股漲跌停、成交量容量與市場衝擊。
 - [ ] adaptive v1.1 已完成 Phase A 計算，但官方完整性 gate 為 0/14 可用；不得視為跨標的驗證完成，legacy 仍是正式預設策略。
-- [ ] Phase 1 已建立官方交易日曆與公司行動 inventory，但尚未建立調整價還原流程；ETF 分割／反分割、面額變更及股利現金流語意仍需 Phase 2 明確契約。
+- [ ] Phase 2 已建立 parent-compatible 缺日 adjusted 流程，但仍不是全歷史官方調整價；ETF 分割／反分割、面額變更及股利現金流／總報酬語意仍需獨立的官方全量資料契約。
+- [ ] `006208.TW` 有 32 筆官方成交股數／金額存在但 OHLC 為空，另有 1 筆錨點不足；`2308.TW` 有 1 筆因子共識平手。這 34 筆維持 `insufficient_data`，不得用成交均價或內插補值。
 - [ ] 測試仍有 FastAPI TestClient 對 `httpx` 的第三方棄用警告，暫不影響功能。
 
 ### 建議下一步
 
-1. 先設計並核准 Phase 2 調整價語意：明確處理現金股利、除權、減資、ETF 分割／反分割與面額變更；不得直接把官方 raw close 混入既有 adjusted snapshot。
-2. 依核准契約建立可回滾的新 snapshot，補入官方有成交而供應商缺少的日期，再重新計算 SHA-256 與品質 gate；不得用內插或固定值補價量。
-3. 資料完整性達門檻後，以新固定 snapshot 重跑 Phase A；通過前不得針對目前驗證窗調整 adaptive profile。
-4. Phase A 取得至少 10 檔品質合格樣本後，再預註冊 TPEX Phase B 與額外熊市樣本；通過前不得替換 legacy。
+1. 以新固定 snapshot 原樣重跑 Phase A；14 檔預註冊樣本全部保留，006208 與 2308 必須作為品質不合格樣本計入 universe gate，不得事後排除。
+2. 比較新 Phase A 與 audited-v2 的 dataset hash、品質、交易日、報酬與 MDD；不得因結果調整 adaptive profile 或因子門檻。
+3. Phase A 維持至少 10 檔品質合格且原預註冊 gate 通過後，再預註冊 TPEX Phase B 與額外熊市樣本；通過前不得替換 legacy。
+4. 若要建立全歷史官方調整價，須另行處理 ETF 分割／反分割、面額變更與股利現金流，不得將本次 provider-compatible 契約誤稱為官方總報酬。
 5. 完成 CBC 官方資料採集及融資指標的業務公式確認後，再擴充總體／籌碼判定。
 
 ## 📌 當前開發進度 (Current Progress - Fourth Code Review 完成)

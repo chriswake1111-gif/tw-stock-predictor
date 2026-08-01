@@ -150,6 +150,7 @@ def reconcile(
         official_raw = collector.raw_dates(symbol, gaps[symbol])
         counts = {
             "provider_missing_official_trade": 0,
+            "official_trade_without_ohlc": 0,
             "security_no_trade_or_suspended": 0,
             "official_zero_volume": 0,
             "provider_row_on_non_market_day": 0,
@@ -160,6 +161,11 @@ def reconcile(
                 classification = "security_no_trade_or_suspended"
             elif int(raw.get("volume") or 0) <= 0:
                 classification = "official_zero_volume"
+            elif any(
+                raw.get(column) is None
+                for column in ["open", "high", "low", "close"]
+            ):
+                classification = "official_trade_without_ohlc"
             else:
                 classification = "provider_missing_official_trade"
             counts[classification] += 1
@@ -188,6 +194,7 @@ def reconcile(
 
         warning_count = (
             counts["provider_missing_official_trade"]
+            + counts["official_trade_without_ohlc"]
             + counts["provider_row_on_non_market_day"]
         )
         symbol_summaries.append({

@@ -166,3 +166,33 @@ def test_reconciliation_distinguishes_provider_gap_from_suspension(tmp_path):
     assert summary["provider_missing_official_trade"] == 1
     assert summary["security_no_trade_or_suspended"] == 1
     assert summary["official_integrity_status"] == "quality_warning"
+
+
+def test_reconciliation_does_not_infer_prices_from_value_and_volume(tmp_path):
+    snapshot = tmp_path / "snapshot"
+    data_dir = snapshot / "data"
+    data_dir.mkdir(parents=True)
+    pd.DataFrame([{
+        "symbol": "006208.TW", "date": "2017-03-29", "open": 43.2,
+        "high": 43.3, "low": 43.1, "close": 43.2, "volume": 1000,
+    }]).to_csv(data_dir / "006208-TW.csv", index=False)
+    collector = TWSEOfficialCollector(str(tmp_path / "cache.db"))
+    with sqlite3.connect(collector.db_path) as conn:
+        conn.execute("""
+            INSERT INTO twse_daily_raw (
+                symbol, trade_date, open, high, low, close, volume,
+                traded_value_twd, transaction_count, change_text, note,
+                source_dataset, source_url, fetched_at, payload_sha256
+            ) VALUES ('006208.TW','2017-03-28',NULL,NULL,NULL,NULL,113,
+                4859,3,'0.00','','STOCK_DAY','official','now','hash')
+        """)
+
+    result = reconcile(
+        collector, snapshot, ["006208.TW"], {"2017-03-28", "2017-03-29"},
+        {"006208.TW": ["2017-03-28"]}, "2017-03-01", "2017-03-31",
+    )
+
+    assert result["classifications"][0]["classification"] == (
+        "official_trade_without_ohlc"
+    )
+    assert result["symbol_summaries"][0]["official_trade_without_ohlc"] == 1

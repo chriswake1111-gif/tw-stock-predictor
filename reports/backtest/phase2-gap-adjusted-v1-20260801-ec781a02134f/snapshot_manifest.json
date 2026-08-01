@@ -1,0 +1,39 @@
+{
+  "schema_version": 2,
+  "mode": "official_gap_adjusted_snapshot_build",
+  "execution_capability": "historical_research_data_only",
+  "contract_version": "provider_compatible_adjusted_v1",
+  "source_snapshot_dir": "D:\\Tools\\tw-stock-predictor\\reports\\backtest\\expanded-phase-a-audited-v2-20260801-b8e7d89c9854",
+  "source_audit_report": "D:\\Tools\\tw-stock-predictor\\reports\\backtest\\expanded-phase-a-audited-v2-20260801-b8e7d89c9854\\official_integrity_audit_v1.json",
+  "source_audit_sha256": "73e39d04aae11e7ee4cd14bf19f87fabf5e8c69c426ba5f3c4702109dff1a284",
+  "target_symbol_count": 14,
+  "official_gap_count": 236,
+  "resolved_gap_count": 202,
+  "unresolved_gap_count": 34,
+  "quality_approved_symbol_count": 12,
+  "quality_approved_symbols": [
+    "0056.TW",
+    "1101.TW",
+    "1216.TW",
+    "1301.TW",
+    "2002.TW",
+    "2105.TW",
+    "2317.TW",
+    "2412.TW",
+    "2454.TW",
+    "2881.TW",
+    "2882.TW",
+    "2912.TW"
+  ],
+  "quality_warning_symbols": [
+    "006208.TW",
+    "2308.TW"
+  ],
+  "official_gap_adjustment_records_sha256": "aaa93625c98cfe9e68d42ea2f423f4263c5d4849322b32aab82b37ef72c4e519",
+  "official_gap_unresolved_records_sha256": "e58213b2cda51140e24d73b9570bf626eb5e387fb67114343fd25398a7839e76",
+  "zero_volume_reconciliation_records_sha256": "e5730673ac8b862a0735136f8dc466c5e96454206d7fb467120aa73180542053",
+  "source_snapshot_mutated": false,
+  "snapshot_fingerprint_sha256": "ec781a02134f1f08fc943eefcb8d3aa44baf3eae983d046ce62e4fc834f72692",
+  "output_dir": "D:\\Tools\\tw-stock-predictor\\reports\\backtest\\phase2-gap-adjusted-v1-20260801-ec781a02134f",
+  "dry_run": false
+}
