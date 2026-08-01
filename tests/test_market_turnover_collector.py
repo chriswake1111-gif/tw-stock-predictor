@@ -53,3 +53,27 @@ def test_market_turnover_official_json_fixtures(temp_db):
 
         assert twse_val == 380000000000.0
         assert tpex_val == 90000000000.0
+
+
+def test_v2_official_openapi_parsing_and_partial_persistence(temp_db):
+    collector = MarketTurnoverCollector(db_path=temp_db)
+    with open("tests/fixtures/twse_fmtqik_openapi.json", encoding="utf-8") as source:
+        twse = json.load(source)
+    with open("tests/fixtures/tpex_daily_trading_index_openapi.json", encoding="utf-8") as source:
+        tpex = json.load(source)
+    assert collector.parse_twse_openapi(twse, "2026-07-30") == 380_000_000_000
+    assert collector.parse_tpex_openapi(tpex, "2026-07-30") == 90_000_000_000
+    complete = collector.import_official_turnover(
+        "2026-07-30", twse, tpex,
+        "2026-07-30T09:00:00+08:00", "2026-07-30T09:01:00+08:00",
+        ingested_at="2026-07-30T09:02:00+08:00",
+    )
+    assert complete["status"] == "available"
+    assert complete["total_turnover_twd"] == 470_000_000_000
+    partial = collector.import_official_turnover(
+        "2026-07-31", [{"Date": "115/07/31", "TradeValue": "1,000"}], [],
+        "2026-07-31T09:00:00+08:00", "2026-07-31T09:01:00+08:00",
+        ingested_at="2026-07-31T09:02:00+08:00",
+    )
+    assert partial["status"] == "partial"
+    assert partial["total_turnover_twd"] is None

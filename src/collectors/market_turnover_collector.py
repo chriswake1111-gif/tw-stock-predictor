@@ -3,8 +3,13 @@ import sqlite3
 import logging
 import requests
 import pandas as pd
+import hashlib
+import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
+
+from src.domain.liquidity import MarketTurnoverObservation
+from src.repositories.liquidity_repository import LiquidityRepository
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -22,6 +27,84 @@ class MarketTurnoverCollector:
         self.db_path = db_path
         os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
         self._init_db()
+
+    TWSE_OPENAPI_URL = "https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK"
+    TPEX_OPENAPI_URL = "https://www.tpex.org.tw/openapi/v1/tpex_daily_trading_index"
+
+    @staticmethod
+    def _iso_date(value: str) -> str:
+        text = str(value).strip().replace(".", "/")
+        parts = text.split("/")
+        if len(parts) != 3:
+            return datetime.strptime(text, "%Y-%m-%d").date().isoformat()
+        year = int(parts[0])
+        if year < 1911:
+            year += 1911
+        return f"{year:04d}-{int(parts[1]):02d}-{int(parts[2]):02d}"
+
+    @classmethod
+    def parse_twse_openapi(cls, payload: list[dict], trade_date: str) -> float | None:
+        for row in payload:
+            if cls._iso_date(row.get("Date", "")) == trade_date:
+                return float(str(row["TradeValue"]).replace(",", ""))
+        return None
+
+    @classmethod
+    def parse_tpex_openapi(cls, payload: list[dict], trade_date: str) -> float | None:
+        for row in payload:
+            if cls._iso_date(row.get("Date", "")) == trade_date:
+                return float(str(row["TradeAmount"]).replace(",", ""))
+        return None
+
+    @staticmethod
+    def _payload_hash(payload: object) -> str:
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+
+    def import_official_turnover(
+        self,
+        trade_date: str,
+        twse_payload: list[dict],
+        tpex_payload: list[dict],
+        available_at: str,
+        fetched_at: str,
+        revision: int = 1,
+        ingested_at: str | None = None,
+    ) -> dict[str, Any]:
+        twse = self.parse_twse_openapi(twse_payload, trade_date)
+        tpex = self.parse_tpex_openapi(tpex_payload, trade_date)
+        observation = MarketTurnoverObservation(
+            trade_date=trade_date,
+            twse_turnover_twd=twse,
+            tpex_turnover_twd=tpex,
+            twse_source="TWSE" if twse is not None else None,
+            tpex_source="TPEx" if tpex is not None else None,
+            twse_dataset="exchangeReport/FMTQIK" if twse is not None else None,
+            tpex_dataset="tpex_daily_trading_index" if tpex is not None else None,
+            twse_payload_hash=self._payload_hash(twse_payload),
+            tpex_payload_hash=self._payload_hash(tpex_payload),
+            available_at=available_at,
+            fetched_at=fetched_at,
+            revision=revision,
+        )
+        return LiquidityRepository(self.db_path).add_turnover(
+            observation, ingested_at=ingested_at
+        )
+
+    def fetch_official_turnover(self, trade_date: str, fetched_at: str) -> dict[str, Any]:
+        twse_response = requests.get(self.TWSE_OPENAPI_URL, timeout=15)
+        tpex_response = requests.get(self.TPEX_OPENAPI_URL, timeout=15)
+        twse_response.raise_for_status()
+        tpex_response.raise_for_status()
+        # Current OpenAPI retrieval proves availability no earlier than fetch time.
+        return self.import_official_turnover(
+            trade_date,
+            twse_response.json(),
+            tpex_response.json(),
+            available_at=fetched_at,
+            fetched_at=fetched_at,
+        )
 
     def _init_db(self):
         """初始化市場總成交金額表"""
