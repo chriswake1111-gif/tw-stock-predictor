@@ -8,6 +8,7 @@ import pandas as pd
 from src.research.backtest_evaluation import (
     CostModel,
     build_walk_forward_windows,
+    clean_ohlcv,
     classify_market_regime,
     cost_model_for_symbol,
     dataframe_sha256,
@@ -111,6 +112,31 @@ def test_explicit_adjusted_source_overrides_legacy_quality_label():
     assert evaluation["data_quality"]["price_adjustment_contract"] == (
         "yfinance auto_adjust=True; actions=False; repair=False"
     )
+
+
+def test_zero_volume_rows_are_not_strategy_observations_and_missing_market_days_warn():
+    frame = make_market_df(days=300)
+    missing_date = frame.iloc[100]["date"]
+    target = frame.drop(index=100).copy()
+    target.loc[target.index[120], "volume"] = 0
+
+    cleaned = clean_ohlcv(target)
+    evaluation = evaluate_symbol_walk_forward(
+        "2330.TW",
+        target,
+        requested_start=frame.iloc[150]["date"],
+        requested_end=frame.iloc[-1]["date"],
+        validation_months=3,
+        warmup_bars=50,
+        min_validation_bars=40,
+        benchmark_df=frame,
+        sensitivity_enabled=False,
+    )
+
+    assert len(cleaned) == len(target) - 1
+    assert evaluation["data_quality"]["status"] == "quality_warning"
+    assert missing_date in evaluation["data_quality"]["missing_reference_dates"]
+    assert evaluation["adaptive_research_gate"]["checks"]["data_quality_available"] is False
 
 
 def test_parameter_sensitivity_uses_training_data_before_validation_only():
@@ -236,6 +262,25 @@ def test_walk_forward_evaluation_and_report_artifacts(tmp_path):
         {"2330.TW": frame},
         output_dir=str(tmp_path / "reports"),
         run_timestamp="test-run",
+        universe_assessment={
+            "universe_id": "test-universe",
+            "status": "candidate_for_phase_b",
+            "passed": True,
+            "promotion_to_default": False,
+            "total_symbols": 1,
+            "usable_symbols": 1,
+            "passed_symbols": 1,
+            "gate_pass_rate": 1.0,
+            "maximum_adaptive_mdd_pct": 8.0,
+            "thresholds": {},
+            "checks": {"minimum_usable_symbols_met": True},
+            "category_summary": [{
+                "category": "test",
+                "total_symbols": 1,
+                "usable_symbols": 1,
+                "passed_symbols": 1,
+            }],
+        },
     )
 
     assert (run_dir / "report.json").exists()
@@ -248,10 +293,13 @@ def test_walk_forward_evaluation_and_report_artifacts(tmp_path):
     assert (run_dir / "parameter_sensitivity.csv").exists()
     assert (run_dir / "adaptive_profile_selection.csv").exists()
     assert (run_dir / "adaptive_research_gate.csv").exists()
+    assert (run_dir / "universe_gate.csv").exists()
+    assert (run_dir / "universe_category_summary.csv").exists()
     assert (run_dir / "SUMMARY.md").exists()
     report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
     assert report["schema_version"] == 2
     assert report["execution_capability"] == "simulated_orders_only"
+    assert report["universe_assessment"]["promotion_to_default"] is False
     windows_csv = (run_dir / "windows.csv").read_text(encoding="utf-8")
     assert "execution_log" not in windows_csv.splitlines()[0]
 

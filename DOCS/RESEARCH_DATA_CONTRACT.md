@@ -28,6 +28,15 @@
 
 供應商可能回溯修改調整價的小數或除權息因子。因此，可重現研究以報告內的 CSV snapshot 與 `normalized_snapshot_sha256` 為準，不以重新抓取結果相同作為前提。
 
+## 交易日完整性與官方補值
+
+- `volume <= 0` 的供應商列不得作為策略觀測 bar；清理數量與日期必須寫入 provenance。
+- 個股日期須與同批 `^TWII` 參考交易日比對；缺日或曾移除零量列時標記 `quality_warning`，research gate 採 fail-closed。
+- `tools/audit_twse_snapshot.py` 只讀取固定快照並與 TWSE 官方月成交資料比對，不得自動修改快照。
+- 官方補值只能由預註冊 universe 指向的 `config/research_snapshot_overrides.yaml` 逐筆新增；不得覆寫既有日期。
+- 每筆補值須保存 TWSE 原始 OHLCV、調整因子、因子推導方式、官方 URL 與補值列 SHA-256。
+- 單月稽核通過不代表完整長期資料已驗證；在全期間官方日曆與公司行動契約完成前，不得用於策略升格。
+
 ## Walk-forward 契約
 
 - `data-start` 至第一個驗證窗之間只作指標暖機。
@@ -80,6 +89,17 @@ python tools\run_backtest.py `
 ```
 
 CLI 會在執行前比對 `normalized_snapshot_sha256`；不相符時以 exit code 3 停止。
+
+官方月成交稽核範例：
+
+```powershell
+python tools\audit_twse_snapshot.py `
+  --snapshot-dir reports\backtest\expanded-phase-a-audited-v2-20260801-b8e7d89c9854 `
+  --check 1301.TW:2025-08 `
+  --check 2317.TW:2018-10
+```
+
+發現缺日或零量列時以 exit code 1 表示品質警告；完全對齊時回傳 0。
 
 ## Adaptive 配置研究契約
 

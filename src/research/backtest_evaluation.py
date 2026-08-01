@@ -150,7 +150,11 @@ def load_cached_ohlcv(
     return df
 
 
-def assess_data_quality(df: pd.DataFrame, requested_symbol: str) -> Dict[str, Any]:
+def assess_data_quality(
+    df: pd.DataFrame,
+    requested_symbol: str,
+    reference_trading_days: Optional[Iterable[str]] = None,
+) -> Dict[str, Any]:
     if df.empty:
         return {
             "status": "insufficient_data",
@@ -169,6 +173,10 @@ def assess_data_quality(df: pd.DataFrame, requested_symbol: str) -> Dict[str, An
         (df[["open", "high", "low", "close"]] <= 0).any(axis=1)
         | (df["high"] < df["low"])
     ).sum())
+    zero_volume_rows = int((pd.to_numeric(df["volume"], errors="coerce") <= 0).sum())
+    zero_volume_dates = df.loc[
+        pd.to_numeric(df["volume"], errors="coerce") <= 0, "date"
+    ].astype(str).tolist()
     non_monotonic_dates = not df["date"].is_monotonic_increasing
     close_returns = df["close"].pct_change(fill_method=None).replace(
         [np.inf, -np.inf], np.nan
@@ -181,9 +189,26 @@ def assess_data_quality(df: pd.DataFrame, requested_symbol: str) -> Dict[str, An
     )
     date_gaps = pd.to_datetime(df["date"], errors="coerce").diff().dt.days
     max_calendar_gap_days = int(date_gaps.max()) if date_gaps.notna().any() else 0
+    missing_reference_dates: List[str] = []
+    if reference_trading_days is not None:
+        observed = set(df["date"].astype(str))
+        start_date = str(df["date"].min())
+        end_date = str(df["date"].max())
+        missing_reference_dates = sorted(
+            str(date)
+            for date in reference_trading_days
+            if start_date <= str(date) <= end_date and str(date) not in observed
+        )
 
     status = "available"
-    if duplicate_dates or invalid_price_rows or large_return_rows or any(missing_by_column.values()):
+    if (
+        duplicate_dates
+        or invalid_price_rows
+        or large_return_rows
+        or zero_volume_rows
+        or missing_reference_dates
+        or any(missing_by_column.values())
+    ):
         status = "quality_warning"
 
     return {
@@ -195,6 +220,10 @@ def assess_data_quality(df: pd.DataFrame, requested_symbol: str) -> Dict[str, An
         "duplicate_dates": duplicate_dates,
         "missing_by_column": missing_by_column,
         "invalid_price_rows": invalid_price_rows,
+        "zero_volume_rows": zero_volume_rows,
+        "zero_volume_dates": zero_volume_dates,
+        "missing_reference_date_count": len(missing_reference_dates),
+        "missing_reference_dates": missing_reference_dates,
         "non_monotonic_dates": bool(non_monotonic_dates),
         "large_return_rows_25pct": large_return_rows,
         "max_abs_daily_return_pct": max_abs_daily_return_pct,
@@ -209,6 +238,7 @@ def clean_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     clean = df.dropna(subset=REQUIRED_OHLCV_COLUMNS).copy()
     clean = clean[(clean[["open", "high", "low", "close"]] > 0).all(axis=1)]
     clean = clean[clean["high"] >= clean["low"]]
+    clean = clean[pd.to_numeric(clean["volume"], errors="coerce") > 0]
     clean.sort_values("date", inplace=True)
     clean.drop_duplicates(subset=["date"], keep="last", inplace=True)
     clean.reset_index(drop=True, inplace=True)
@@ -847,7 +877,19 @@ def evaluate_symbol_walk_forward(
     sensitivity_enabled: bool = True,
 ) -> Dict[str, Any]:
     costs = costs or cost_model_for_symbol(symbol)
-    quality = assess_data_quality(df, symbol)
+    reference_trading_days = None
+    if benchmark_df is not None and not benchmark_df.empty and "date" in benchmark_df:
+        reference_trading_days = benchmark_df["date"].astype(str).tolist()
+    quality = assess_data_quality(df, symbol, reference_trading_days)
+    removed_zero_volume_rows = int(
+        (data_provenance or {}).get("zero_volume_rows_removed", 0)
+    )
+    if removed_zero_volume_rows:
+        quality["status"] = "quality_warning"
+        quality["zero_volume_rows_removed_before_evaluation"] = removed_zero_volume_rows
+        quality["zero_volume_dates_removed_before_evaluation"] = (
+            data_provenance or {}
+        ).get("zero_volume_dates_removed", [])
     if data_provenance and data_provenance.get("auto_adjust") is True:
         quality["price_adjustment_contract"] = (
             "yfinance auto_adjust=True; actions=False; repair=False"
@@ -982,6 +1024,7 @@ def evaluate_symbol_walk_forward(
         "adaptive_tu_strategy", {}
     )
     adaptive_gate_checks = {
+        "data_quality_available": quality.get("status") == "available",
         "return_improves_legacy": (
             adaptive_aggregate.get("status") == "available"
             and legacy_aggregate.get("status") == "available"
@@ -1069,11 +1112,88 @@ def evaluate_symbol_walk_forward(
     }
 
 
+def assess_expanded_universe(
+    evaluations: List[Dict[str, Any]],
+    universe_config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Apply a preregistered aggregate gate without dropping failed symbols."""
+    configured_symbols = universe_config.get("symbols", [])
+    category_by_symbol = {
+        normalize_symbol(item["symbol"]): item["category"]
+        for item in configured_symbols
+    }
+    thresholds = universe_config["promotion_policy"]["universe_gate"]
+    available = [
+        item
+        for item in evaluations
+        if item.get("status") == "available"
+        and item.get("data_quality", {}).get("status") == "available"
+    ]
+    passed = [
+        item
+        for item in available
+        if item.get("adaptive_research_gate", {}).get("passed") is True
+    ]
+    mdds = [
+        item.get("aggregates", {})
+        .get("adaptive_tu_strategy", {})
+        .get("worst_window_drawdown_pct")
+        for item in available
+    ]
+    mdds = [float(value) for value in mdds if value is not None]
+    usable_count = len(available)
+    total_count = len(configured_symbols)
+    pass_rate = len(passed) / total_count if total_count else 0.0
+    maximum_mdd = max(mdds) if mdds else None
+
+    categories: Dict[str, Dict[str, int]] = {}
+    for evaluation in evaluations:
+        category = category_by_symbol.get(evaluation.get("symbol"), "unclassified")
+        row = categories.setdefault(category, {"total_symbols": 0, "usable_symbols": 0, "passed_symbols": 0})
+        row["total_symbols"] += 1
+        if (
+            evaluation.get("status") == "available"
+            and evaluation.get("data_quality", {}).get("status") == "available"
+        ):
+            row["usable_symbols"] += 1
+            if evaluation.get("adaptive_research_gate", {}).get("passed") is True:
+                row["passed_symbols"] += 1
+
+    checks = {
+        "minimum_usable_symbols_met": usable_count
+        >= int(thresholds["minimum_usable_symbols"]),
+        "minimum_gate_pass_rate_met": pass_rate
+        >= float(thresholds["minimum_gate_pass_rate"]),
+        "maximum_symbol_mdd_met": maximum_mdd is not None
+        and maximum_mdd <= float(thresholds["maximum_symbol_mdd_pct"]),
+    }
+    overall_passed = all(checks.values())
+    return {
+        "universe_id": universe_config["universe_id"],
+        "preregistration_status": universe_config["status"],
+        "status": "candidate_for_phase_b" if overall_passed else "hold_for_revision",
+        "passed": overall_passed,
+        "promotion_to_default": False,
+        "total_symbols": total_count,
+        "usable_symbols": usable_count,
+        "passed_symbols": len(passed),
+        "gate_pass_rate": pass_rate,
+        "maximum_adaptive_mdd_pct": maximum_mdd,
+        "thresholds": thresholds,
+        "checks": checks,
+        "category_summary": [
+            {"category": category, **counts}
+            for category, counts in sorted(categories.items())
+        ],
+    }
+
+
 def write_walk_forward_report(
     evaluations: List[Dict[str, Any]],
     snapshots: Dict[str, pd.DataFrame],
     output_dir: str,
     run_timestamp: Optional[str] = None,
+    universe_assessment: Optional[Dict[str, Any]] = None,
 ) -> Path:
     timestamp = run_timestamp or datetime.now().strftime("%Y%m%dT%H%M%S")
     fingerprint = [
@@ -1096,7 +1216,11 @@ def write_walk_forward_report(
         for item in evaluations
     ]
     combined_hash = hashlib.sha256(
-        json.dumps(fingerprint, sort_keys=True, ensure_ascii=True).encode("utf-8")
+        json.dumps(
+            {"evaluations": fingerprint, "universe_assessment": universe_assessment},
+            sort_keys=True,
+            ensure_ascii=True,
+        ).encode("utf-8")
     ).hexdigest()[:12]
     run_dir = Path(output_dir) / f"{timestamp}-{combined_hash}"
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -1114,6 +1238,7 @@ def write_walk_forward_report(
         "execution_capability": "simulated_orders_only",
         "disclaimer": "僅供個人市場研究與決策參考，不構成投資建議、報酬保證或真實委託指令。",
         "evaluations": evaluations,
+        "universe_assessment": universe_assessment,
     }
     (run_dir / "report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -1238,6 +1363,20 @@ def write_walk_forward_report(
     pd.DataFrame(adaptive_gate_rows).to_csv(
         run_dir / "adaptive_research_gate.csv", index=False, encoding="utf-8"
     )
+    if universe_assessment is not None:
+        pd.DataFrame([{
+            key: value
+            for key, value in universe_assessment.items()
+            if key not in {"checks", "category_summary", "thresholds"}
+        } | {
+            f"threshold_{key}": value
+            for key, value in universe_assessment.get("thresholds", {}).items()
+        } | universe_assessment.get("checks", {})]).to_csv(
+            run_dir / "universe_gate.csv", index=False, encoding="utf-8"
+        )
+        pd.DataFrame(universe_assessment.get("category_summary", [])).to_csv(
+            run_dir / "universe_category_summary.csv", index=False, encoding="utf-8"
+        )
 
     lines = [
         "# Walk-forward 台股歷史研究報告",
@@ -1279,6 +1418,21 @@ def write_walk_forward_report(
             f"| {row.get('bear_compounded_return_above_minus_5pct')} "
             f"| {row.get('promotion_to_default')} |"
         )
+    if universe_assessment is not None:
+        maximum_mdd = universe_assessment.get("maximum_adaptive_mdd_pct")
+        maximum_mdd_text = f"{maximum_mdd:.2f}%" if maximum_mdd is not None else "-"
+        lines.extend([
+            "",
+            "## Universe research gate",
+            "",
+            f"- Universe: `{universe_assessment.get('universe_id')}`",
+            f"- Status: `{universe_assessment.get('status')}`",
+            f"- Usable symbols: {universe_assessment.get('usable_symbols')} / "
+            f"{universe_assessment.get('total_symbols')}",
+            f"- Gate pass rate: {universe_assessment.get('gate_pass_rate', 0):.2%}",
+            f"- Maximum adaptive MDD: {maximum_mdd_text}",
+            "- Promotion to default: false",
+        ])
     lines.extend([
         "",
         "## 行情分層",

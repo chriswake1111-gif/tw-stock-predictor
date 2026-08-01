@@ -29,6 +29,11 @@
 - [x] adaptive v1.1 長期報告：`reports/backtest/adaptive-v1-1-20260801-193192967aed`。
 - [x] aggressive adaptive v1 因 2330 最差 MDD 達 18.17%，僅保留 `reports/backtest/adaptive-v1-20260801-8353b098396a` 作失敗實驗證據。
 - [x] adaptive v1.1 三標的報酬均高於 legacy，最差 MDD 分別為 4.82%、6.43%、11.63%；僅列為擴大驗證候選，未升格預設。
+- [x] 以 `config/expanded_validation_universe.yaml` 預註冊 Phase A 的 14 檔 TWSE 分層樣本，固定選樣、日期與整體門檻後才執行回測。
+- [x] 初步擴大驗證報告：`reports/backtest/expanded-phase-a-20260801-1c3d9e6d79ab`；未加入官方交易日完整性 gate 時，14 檔皆完成計算、僅 0056 與 006208 通過策略 gate。此報告只保留為前後比較，不作升格證據。
+- [x] 報告新增 `universe_gate.csv` 與類別覆蓋摘要；不可事後移除失敗／缺資料標的，且 `promotion_to_default` 固定為 `false`。
+- [x] 新增 TWSE 月成交唯讀稽核、零量列移除、參考交易日缺口與逐筆官方補值契約；1301 2025-08 與 2317 2018-10 已和官方資料完全對齊。
+- [x] Audited v2 報告：`reports/backtest/expanded-phase-a-audited-v2-20260801-b8e7d89c9854`；14 檔均有尚未完整解釋的長期交易日／零量差異，品質合格可用數為 0，正式結論為 `hold_for_revision`。
 
 ### 尚未完成／不得誤解為已完成
 
@@ -39,14 +44,15 @@
 - [ ] yfinance 為非官方供應路徑，實測重新抓取時調整價末位小數可能回溯改變；重現既有結果須使用報告內固定快照。
 - [ ] `^TWII` 無法直接交易，報告使用 ETF 稅率與單位的「指數代理成本模型」，不是可成交商品的精確重現。
 - [ ] 回測尚未納入股利現金流、個股漲跌停、成交量容量與市場衝擊。
-- [ ] adaptive v1.1 尚未跨更多 ETF、產業與中小型股驗證；legacy 仍是正式預設策略。
+- [ ] adaptive v1.1 已完成 Phase A 計算，但官方完整性 gate 為 0/14 可用；不得視為跨標的驗證完成，legacy 仍是正式預設策略。
+- [ ] yfinance 在長期樣本中含市場休市零量列、停牌合成列及市場開市缺日；仍需建立全期間 TWSE 原始交易日曆與公司行動還原流程。
 - [ ] 測試仍有 FastAPI TestClient 對 `httpx` 的第三方棄用警告，暫不影響功能。
 
 ### 建議下一步
 
-1. 以 TWSE 原始行情抽樣交叉查核 snapshot，並評估是否建立官方原始價＋公司行動的自有調整流程。
-2. 以固定 snapshot 擴充 ETF、產業龍頭及中小型股標的池，驗證 adaptive v1.1 是否跨標的成立。
-3. 擴充熊市樣本，再判斷 adaptive 的低回撤效果是否穩健；通過前不得替換 legacy。
+1. 建立全期間 TWSE 原始交易日曆與公司行動還原流程，逐月解決 14 檔 `quality_warning`；不得以大量推算補值取代官方來源。
+2. 資料完整性達門檻後，以新的固定 snapshot 重跑 Phase A；通過前不得針對目前驗證窗調整 adaptive profile。
+3. Phase A 取得至少 10 檔品質合格樣本後，再預註冊 TPEX Phase B 與額外熊市樣本；通過前不得替換 legacy。
 4. 完成 CBC 官方資料採集及融資指標的業務公式確認後，再擴充總體／籌碼判定。
 
 ## 📌 當前開發進度 (Current Progress - Fourth Code Review 完成)

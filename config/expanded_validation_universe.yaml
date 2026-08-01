@@ -1,0 +1,54 @@
+schema_version: 1
+universe_id: twse_stratified_phase_a_2012_anchor
+status: preregistered_before_backtest
+preregistered_at: "2026-08-01"
+selection_policy:
+  description: >-
+    依 2012 年底前已上市、長期資料可得性與產業分散預先選定；
+    不使用 adaptive v1.1 回測績效挑選或排除標的。
+  anchor_source: "https://www.twse.com.tw/downloads/zh/about/company/factbook/2013/1.04.htm"
+  validation_start: "2015-01-01"
+  data_start: "2014-01-01"
+  validation_end: "2026-07-31"
+  snapshot_override_file: "research_snapshot_overrides.yaml"
+  exclusions:
+    - "本階段不含上櫃股票；TPEX 中小型股另列 Phase B。"
+    - "原始三標的 ^TWII、0050.TW、2330.TW 作既有參考，不重複列入新增池。"
+
+symbols:
+  - symbol: "0056.TW"
+    category: "equity_etf_high_dividend"
+  - symbol: "006208.TW"
+    category: "equity_etf_market_cap"
+  - symbol: "2317.TW"
+    category: "electronics_manufacturing"
+  - symbol: "2454.TW"
+    category: "semiconductor"
+  - symbol: "2308.TW"
+    category: "electronic_components"
+  - symbol: "2881.TW"
+    category: "financial_holding"
+  - symbol: "2882.TW"
+    category: "financial_holding"
+  - symbol: "1301.TW"
+    category: "plastics"
+  - symbol: "2002.TW"
+    category: "steel"
+  - symbol: "1101.TW"
+    category: "cement"
+  - symbol: "2105.TW"
+    category: "rubber"
+  - symbol: "1216.TW"
+    category: "consumer_staples"
+  - symbol: "2412.TW"
+    category: "telecommunications"
+  - symbol: "2912.TW"
+    category: "retail"
+
+promotion_policy:
+  per_symbol_gate: "沿用 adaptive_research_gate，不放寬門檻。"
+  universe_gate:
+    minimum_usable_symbols: 10
+    minimum_gate_pass_rate: 0.70
+    maximum_symbol_mdd_pct: 12.0
+  default_promotion: false

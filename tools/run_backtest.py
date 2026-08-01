@@ -6,12 +6,14 @@ import sys
 from datetime import datetime
 
 import pandas as pd
+import yaml
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.collectors.twse_collector import TWSECollector
 from src.research.backtest_evaluation import (
     DEFAULT_SYMBOLS,
+    assess_expanded_universe,
     clean_ohlcv,
     dataframe_sha256,
     evaluate_symbol_walk_forward,
@@ -31,6 +33,131 @@ def parse_symbols(raw_symbols: str, legacy_symbols: list[str] | None) -> list[st
     return normalized
 
 
+def zero_volume_audit(frame: pd.DataFrame) -> dict:
+    if frame.empty or "volume" not in frame or "date" not in frame:
+        return {"zero_volume_rows_removed": 0, "zero_volume_dates_removed": []}
+    mask = pd.to_numeric(frame["volume"], errors="coerce") <= 0
+    return {
+        "zero_volume_rows_removed": int(mask.sum()),
+        "zero_volume_dates_removed": frame.loc[mask, "date"].astype(str).tolist(),
+    }
+
+
+def load_universe_config(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as handle:
+        config = yaml.safe_load(handle) or {}
+    required = {"universe_id", "status", "selection_policy", "symbols", "promotion_policy"}
+    missing = sorted(required - set(config))
+    if missing:
+        raise ValueError(f"universe config missing keys: {', '.join(missing)}")
+    if config["status"] != "preregistered_before_backtest":
+        raise ValueError("universe config must be preregistered before backtest")
+    if not config["symbols"] or any(
+        not item.get("symbol") or not item.get("category")
+        for item in config["symbols"]
+    ):
+        raise ValueError("each universe symbol requires symbol and category")
+    normalized = [normalize_symbol(item["symbol"]) for item in config["symbols"]]
+    if len(normalized) != len(set(normalized)):
+        raise ValueError("universe config contains duplicate symbols")
+    reference_symbols = set(DEFAULT_SYMBOLS)
+    if reference_symbols.intersection(normalized):
+        raise ValueError("expanded universe must not include reference symbols")
+    gate = config["promotion_policy"].get("universe_gate", {})
+    if int(gate.get("minimum_usable_symbols", 0)) < 1:
+        raise ValueError("minimum_usable_symbols must be positive")
+    if int(gate["minimum_usable_symbols"]) > len(normalized):
+        raise ValueError("minimum_usable_symbols cannot exceed universe size")
+    pass_rate = float(gate.get("minimum_gate_pass_rate", -1))
+    if not 0 <= pass_rate <= 1:
+        raise ValueError("minimum_gate_pass_rate must be between 0 and 1")
+    if float(gate.get("maximum_symbol_mdd_pct", 0)) <= 0:
+        raise ValueError("maximum_symbol_mdd_pct must be positive")
+    return config
+
+
+def load_snapshot_overrides(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as handle:
+        config = yaml.safe_load(handle) or {}
+    if config.get("schema_version") != 1 or not isinstance(config.get("overrides"), list):
+        raise ValueError("snapshot override file requires schema_version 1 and overrides")
+    required = {
+        "symbol", "date", "mode", "raw_ohlcv", "adjustment_factor",
+        "factor_derivation", "factor_anchors", "source_url",
+    }
+    for item in config["overrides"]:
+        missing = required - set(item)
+        if missing:
+            raise ValueError(f"snapshot override missing keys: {', '.join(sorted(missing))}")
+        if item["mode"] != "insert_missing_adjusted_ohlcv":
+            raise ValueError("only insert_missing_adjusted_ohlcv is supported")
+        if not str(item["source_url"]).startswith("https://www.twse.com.tw/"):
+            raise ValueError("snapshot override source_url must be an official TWSE URL")
+        if float(item["adjustment_factor"]) <= 0:
+            raise ValueError("snapshot override adjustment_factor must be positive")
+        if not item["factor_anchors"]:
+            raise ValueError("snapshot override requires factor_anchors")
+    return config
+
+
+def apply_snapshot_overrides(
+    snapshots: dict[str, pd.DataFrame],
+    provenance: dict[str, dict],
+    override_config: dict,
+) -> None:
+    for item in override_config["overrides"]:
+        symbol = normalize_symbol(item["symbol"])
+        if symbol not in snapshots or snapshots[symbol].empty:
+            raise ValueError(f"override target snapshot is unavailable: {symbol}")
+        frame = snapshots[symbol].copy()
+        date = str(item["date"])
+        if date in set(frame["date"].astype(str)):
+            raise ValueError(f"override refuses to replace existing row: {symbol} {date}")
+        raw = item["raw_ohlcv"]
+        factor = float(item["adjustment_factor"])
+        for anchor in item["factor_anchors"]:
+            anchor_date = str(anchor["date"])
+            matching_anchor = frame.loc[frame["date"].astype(str) == anchor_date]
+            if matching_anchor.empty:
+                raise ValueError(f"override factor anchor is unavailable: {symbol} {anchor_date}")
+            observed_ratio = (
+                float(matching_anchor.iloc[0]["close"])
+                / float(anchor["official_raw_close"])
+            )
+            if abs(observed_ratio - factor) > 0.000001:
+                raise ValueError(
+                    f"override adjustment factor is stale: {symbol} {anchor_date}"
+                )
+        row = {
+            "symbol": symbol,
+            "date": date,
+            "open": float(raw["open"]) * factor,
+            "high": float(raw["high"]) * factor,
+            "low": float(raw["low"]) * factor,
+            "close": float(raw["close"]) * factor,
+            "volume": float(raw["volume"]),
+        }
+        snapshots[symbol] = clean_ohlcv(
+            pd.concat([frame, pd.DataFrame([row])], ignore_index=True)
+        )
+        audit_record = {
+            "date": date,
+            "mode": item["mode"],
+            "source_url": item["source_url"],
+            "adjustment_factor": factor,
+            "factor_derivation": item["factor_derivation"],
+            "factor_anchors": item["factor_anchors"],
+            "raw_ohlcv": raw,
+            "adjusted_row_sha256": dataframe_sha256(pd.DataFrame([row])),
+        }
+        provenance.setdefault(symbol, {}).setdefault("snapshot_overrides", []).append(
+            audit_record
+        )
+        provenance[symbol]["normalized_snapshot_sha256"] = dataframe_sha256(
+            snapshots[symbol]
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="台股研究模式：離線固定快照、walk-forward 與基準策略比較"
@@ -39,6 +166,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--symbols",
         default=",".join(DEFAULT_SYMBOLS),
         help="逗號分隔標的，預設 ^TWII,0050.TW,2330.TW",
+    )
+    parser.add_argument(
+        "--universe-config",
+        default=None,
+        help="預註冊擴大驗證 YAML；標的與驗證日期由此檔案固定。",
     )
     parser.add_argument(
         "--symbol",
@@ -69,6 +201,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="既有報告目錄；直接讀取 data/*.csv 與 data_provenance.csv",
     )
+    parser.add_argument(
+        "--snapshot-overrides",
+        default=None,
+        help="逐筆、可稽核的官方資料補值 YAML；只允許新增缺失日期。",
+    )
     parser.add_argument("--run-id", default=None, help="自訂可重現執行識別字；僅允許英數、底線與連字號")
     parser.add_argument("--refresh", action="store_true", help="從資料來源完整重抓研究區間並更新快取")
     parser.add_argument(
@@ -94,7 +231,32 @@ def main(argv: list[str] | None = None) -> int:
     if args.snapshot_dir and args.refresh:
         parser.error("--snapshot-dir 與 --refresh 不得同時使用")
 
-    symbols = parse_symbols(args.symbols, args.legacy_symbols)
+    universe_config = None
+    if args.universe_config:
+        if args.legacy_symbols:
+            parser.error("--universe-config 不可與 --symbol 併用")
+        try:
+            universe_config = load_universe_config(args.universe_config)
+        except (OSError, TypeError, ValueError, KeyError, yaml.YAMLError) as exc:
+            parser.error(str(exc))
+        symbols = [normalize_symbol(item["symbol"]) for item in universe_config["symbols"]]
+        selection = universe_config["selection_policy"]
+        args.data_start = selection["data_start"]
+        args.start = selection["validation_start"]
+        args.end = selection["validation_end"]
+        configured_overrides = selection.get("snapshot_override_file")
+        if configured_overrides:
+            resolved_overrides = os.path.join(
+                os.path.dirname(os.path.abspath(args.universe_config)),
+                configured_overrides,
+            )
+            if args.snapshot_overrides and os.path.abspath(args.snapshot_overrides) != resolved_overrides:
+                parser.error("--snapshot-overrides must match the preregistered universe config")
+            args.snapshot_overrides = resolved_overrides
+        if args.data_start > args.start or args.start > args.end:
+            parser.error("universe config dates must satisfy data_start <= validation_start <= validation_end")
+    else:
+        symbols = parse_symbols(args.symbols, args.legacy_symbols)
     if not symbols:
         parser.error("至少需要一個標的")
 
@@ -150,6 +312,15 @@ def main(argv: list[str] | None = None) -> int:
                 return 3
             source_contract["snapshot_reused_from"] = snapshot_root
             source_contract["normalized_snapshot_sha256"] = actual_hash
+            raw_zero_audit = zero_volume_audit(raw_df)
+            source_contract.setdefault(
+                "zero_volume_rows_removed",
+                raw_zero_audit["zero_volume_rows_removed"],
+            )
+            source_contract.setdefault(
+                "zero_volume_dates_removed",
+                raw_zero_audit["zero_volume_dates_removed"],
+            )
             provenance[symbol] = source_contract
     elif args.refresh:
         collector = TWSECollector(db_path=args.db_path)
@@ -162,6 +333,7 @@ def main(argv: list[str] | None = None) -> int:
             if not raw_df.empty and "symbol" not in raw_df.columns:
                 raw_df.insert(0, "symbol", symbol)
             snapshots[symbol] = clean_ohlcv(raw_df)
+            source_contract.update(zero_volume_audit(raw_df))
             source_contract["normalized_snapshot_sha256"] = dataframe_sha256(
                 snapshots[symbol]
             ) if not snapshots[symbol].empty else None
@@ -186,7 +358,15 @@ def main(argv: list[str] | None = None) -> int:
                 "row_count": int(len(raw_df)),
                 "adjustment_contract": "legacy_cache_unknown",
                 "dataset_sha256": None,
+                **zero_volume_audit(raw_df),
             }
+
+    if args.snapshot_overrides and not args.snapshot_dir:
+        try:
+            override_config = load_snapshot_overrides(args.snapshot_overrides)
+            apply_snapshot_overrides(snapshots, provenance, override_config)
+        except (OSError, TypeError, ValueError, KeyError, yaml.YAMLError) as exc:
+            parser.error(str(exc))
 
     evaluations = []
     for symbol in symbols:
@@ -216,11 +396,17 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(message, ensure_ascii=False, indent=2) if args.json else message["reason"])
         return 2
 
+    universe_assessment = (
+        assess_expanded_universe(evaluations, universe_config)
+        if universe_config is not None
+        else None
+    )
     run_dir = write_walk_forward_report(
         evaluations,
         snapshots,
         output_dir=args.output_dir,
         run_timestamp=args.run_id,
+        universe_assessment=universe_assessment,
     )
 
     terminal_summary = {
@@ -228,6 +414,7 @@ def main(argv: list[str] | None = None) -> int:
         "mode": "walk_forward_historical_research",
         "execution_capability": "simulated_orders_only",
         "report_dir": str(run_dir.resolve()),
+        "universe_assessment": universe_assessment,
         "symbols": [
             {
                 "symbol": item["symbol"],
