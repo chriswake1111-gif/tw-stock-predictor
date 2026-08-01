@@ -1,0 +1,22 @@
+{
+  "status": "available",
+  "mode": "research_only",
+  "execution_capability": "none",
+  "symbol": "2330.TW",
+  "input_symbol": "2330",
+  "as_of_date": "2026-07-31",
+  "latest_price": 1000.0,
+  "date": "2026-07-31",
+  "is_resonance": false,
+  "eps": {"status": "available", "value": 40.0, "unit": "TWD_per_share"},
+  "valuation": {"status": "available", "cheap_price": 400.0, "fair_price": 800.0, "expensive_price": 1000.0},
+  "eva_valuation": {"status": "unsupported", "value": null, "reason": "Required EVA inputs are not available from verified data sources"},
+  "wave_analysis": {
+    "realtime_confirmed": {"mode": "realtime_confirmed", "status": "available", "targets": []},
+    "hindsight_visualization": {"mode": "hindsight_visualization", "status": "available", "targets": []}
+  },
+  "sentiment": {"status": "insufficient_data", "value": null},
+  "ma_deductions": {},
+  "kline_data": [{"date": "2026-07-31", "open": 990.0, "high": 1010.0, "low": 985.0, "close": 1000.0, "volume": 1000000}],
+  "disclaimer": "Research and decision-support only; not investment advice."
+}

@@ -27,3 +27,11 @@ jobs:
     - name: Run PyTest test suite
       run: |
         python -m pytest tests/ -v
+
+    - name: Reject tracked runtime cache files
+      shell: bash
+      run: |
+        if git ls-files | grep -E '(^|/)(__pycache__/|data/cache\.db$)|\.py[co]$'; then
+          echo "Tracked runtime cache files are not allowed."
+          exit 1
+        fi
