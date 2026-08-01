@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from src.analysis_service import analyze_symbol, normalize_symbol
+from src.api.routes.v2_valuation import router as v2_valuation_router
 from src.domain.model_status import LEGACY_V1_MODEL_METADATA
 from src.scheduler import AutoScheduler
 from src.services.rule_registry import RuleRegistry
@@ -52,6 +53,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(v2_valuation_router)
 
 @app.get("/api/health")
 def health_check():
