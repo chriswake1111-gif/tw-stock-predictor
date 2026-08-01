@@ -87,9 +87,16 @@ class ForwardPEValuationEngine:
         rules_used = [
             self._rule_trace("VAL-01", knowledge_cutoff_at),
             self._rule_trace("VAL-02", knowledge_cutoff_at, forecast_approval_ids),
-            self._rule_trace("VAL-03", knowledge_cutoff_at),
-            self._rule_trace("VAL-04", knowledge_cutoff_at, pe_approval_ids),
         ]
+        if any(
+            row.get("evidence_basis_rule_id") == "VAL-03"
+            and float(row["pe_value"]) in {20.0, 21.0, 25.0}
+            for row in symbol_scenarios
+        ):
+            rules_used.append(self._rule_trace("VAL-03", knowledge_cutoff_at))
+        rules_used.append(
+            self._rule_trace("VAL-04", knowledge_cutoff_at, pe_approval_ids)
+        )
         base = {
             "knowledge_cutoff_at": knowledge_cutoff_at,
             "forward_eps": [self._public_record(row) for row in observation_states],
@@ -154,6 +161,13 @@ class ForwardPEValuationEngine:
                     applicable = float(eps_value) > 0
                     if applicable:
                         applicable_count += 1
+                    rule_ids = ["VAL-01", "VAL-02"]
+                    if (
+                        pe_scenario.get("evidence_basis_rule_id") == "VAL-03"
+                        and float(pe_scenario["pe_value"]) in {20.0, 21.0, 25.0}
+                    ):
+                        rule_ids.append("VAL-03")
+                    rule_ids.append("VAL-04")
                     cells.append({
                         "status": "available" if applicable else "not_applicable",
                         "observation_id": observation["id"],
@@ -171,7 +185,7 @@ class ForwardPEValuationEngine:
                         "pe_value": float(pe_scenario["pe_value"]),
                         "target_price": round(float(eps_value) * float(pe_scenario["pe_value"]), 4) if applicable else None,
                         "formula": "forward_eps * approved_symbol_pe",
-                        "rule_ids": ["VAL-01", "VAL-02", "VAL-03", "VAL-04"],
+                        "rule_ids": rule_ids,
                         "approval_ids": {
                             "VAL-02": observation["verified_approval_id"],
                             "VAL-04": pe_scenario["verified_approval_id"],

@@ -171,6 +171,7 @@ class PEScenario:
     approved_at: str | None = None
     effective_from: str | None = None
     effective_to: str | None = None
+    evidence_basis_rule_id: str | None = None
     revision_of: str | None = None
     version: str = "2.0.0"
 
@@ -213,6 +214,11 @@ class PEScenario:
             effective_to = parse_aware_timestamp(self.effective_to, "effective_to")
             if effective_from >= effective_to:
                 raise ValueError("effective_from must be earlier than effective_to")
+        if self.evidence_basis_rule_id is not None:
+            if self.evidence_basis_rule_id != "VAL-03":
+                raise ValueError("unsupported PE evidence_basis_rule_id")
+            if pe_value not in {20.0, 21.0, 25.0}:
+                raise ValueError("VAL-03 evidence basis requires PE 20, 21, or 25")
         return self
 
     def canonical_payload(self) -> dict[str, Any]:
@@ -235,6 +241,7 @@ class PEScenario:
             "approved_at": normalize_utc_timestamp(self.approved_at, "approved_at") if self.approved_at else None,
             "effective_from": normalize_utc_timestamp(self.effective_from, "effective_from") if self.effective_from else None,
             "effective_to": normalize_utc_timestamp(self.effective_to, "effective_to") if self.effective_to else None,
+            "evidence_basis_rule_id": self.evidence_basis_rule_id,
             "version": self.version,
         }
 

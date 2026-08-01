@@ -191,8 +191,9 @@ class ForwardEPSRepository:
                     id,idempotency_key,payload_fingerprint,logical_series_id,
                     revision_number,revision_of,label,pe_value,rationale,evidence_level,
                     scope,symbol,industry,market,available_at,ingested_at,
-                    approval_status,approved_by,approved_at,effective_from,effective_to,version
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    approval_status,approved_by,approved_at,effective_from,effective_to,
+                    evidence_basis_rule_id,version
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     record_id, idempotency_key, fingerprint,
@@ -202,7 +203,8 @@ class ForwardEPSRepository:
                     payload["symbol"], payload["industry"], payload["market"],
                     payload["available_at"], ingested, payload["approval_status"],
                     payload["approved_by"], payload["approved_at"],
-                    payload["effective_from"], payload["effective_to"], payload["version"],
+                    payload["effective_from"], payload["effective_to"],
+                    payload["evidence_basis_rule_id"], payload["version"],
                 ),
             )
             result = _row_dict(conn.execute(

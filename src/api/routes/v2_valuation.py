@@ -65,6 +65,7 @@ class PEScenarioRequest(StrictRequest):
     available_at: str
     effective_from: str | None = None
     effective_to: str | None = None
+    evidence_basis_rule_id: str | None = None
     version: str = "2.0.0"
 
 
@@ -198,6 +199,7 @@ def create_pe_scenario(
             approval_status=ApprovalStatus.DRAFT,
             effective_from=payload.effective_from,
             effective_to=payload.effective_to,
+            evidence_basis_rule_id=payload.evidence_basis_rule_id,
             version=payload.version,
         )
         result = _service().ingest_pe_scenario(scenario, idempotency_key)

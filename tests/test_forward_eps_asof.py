@@ -85,6 +85,9 @@ def test_migration_is_versioned_transactional_and_rerunnable(tmp_path):
                 "SELECT name FROM sqlite_master WHERE type='table'"
             )
         }
+        pe_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(pe_scenarios)")
+        }
     assert migration_rows == [(migration_id,) for migration_id in MIGRATION_IDS]
     assert {
         "forward_eps_observations",
@@ -92,6 +95,7 @@ def test_migration_is_versioned_transactional_and_rerunnable(tmp_path):
         "valuation_approvals",
         "valuation_idempotency_keys",
     }.issubset(tables)
+    assert "evidence_basis_rule_id" in pe_columns
 
 
 def test_migration_creates_missing_database_parent_directory(tmp_path):

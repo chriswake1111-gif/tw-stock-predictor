@@ -13,6 +13,7 @@ from src.domain.valuation import utc_now_timestamp
 MIGRATION_IDS = (
     "20260801_01_evidence_model_v2_valuation",
     "20260801_02_evidence_model_v2_approval_hardening",
+    "20260801_03_pe_evidence_basis",
 )
 MIGRATION_ID = MIGRATION_IDS[-1]
 MIGRATION_FILES = tuple(
