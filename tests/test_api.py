@@ -24,6 +24,9 @@ def test_api_analysis_tsmc():
     assert "valuation" in data
     assert "eva_valuation" in data
     assert "sentiment" in data
+    assert data["mode"] == "research_only"
+    assert data["execution_capability"] == "none"
+    assert "不構成投資建議" in data["disclaimer"]
     
     # 驗證 TWD 單位與契約
     assert data["eps"]["unit"] == "TWD_per_share"

@@ -4,12 +4,7 @@ from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from src.collectors.twse_collector import TWSECollector
-from src.collectors.finmind_collector import FinMindCollector
-from src.engine.wave_fibonacci import WaveFibonacciEngine
-from src.engine.ma_deduction import MADeductionEngine
-from src.engine.valuation_eva import ValuationEVAEngine
-from src.engine.market_sentiment import MarketSentimentEngine
+from src.analysis_service import analyze_symbol
 from src.ui_alert.notifier import MultiChannelNotifier
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -29,62 +24,42 @@ class AutoScheduler:
         logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 啟動 14:30 盤後自動管線 (標的: {symbol})...")
         
         try:
-            # 1. 抓取最新數據
-            twse = TWSECollector(db_path=self.db_path)
-            finmind = FinMindCollector(db_path=self.db_path)
-            
-            df = twse.get_ohlcv(symbol)
-            if df.empty:
-                logger.warning(f"管線獲取 {symbol} K 線數據為空")
-                return
+            analysis, _ = analyze_symbol(
+                symbol,
+                db_path=self.db_path,
+                config_path=self.config_path,
+            )
+            if analysis.get("status") != "available":
+                logger.warning(f"管線分析 {symbol} 資料不足: {analysis.get('reason')}")
+                return analysis
 
-            latest_row = df.iloc[-1]
-            close_price = latest_row["close"]
+            realtime_wave = analysis["wave_analysis"]["realtime_confirmed"]
+            targets = realtime_wave.get("targets", {})
+            time_win = realtime_wave.get("time_window", {})
+            sentiment = analysis["sentiment"]
+            screener = analysis["two_lows_one_high"]
 
-            # 2. 計算波浪與均線扣抵
-            wave_engine = WaveFibonacciEngine(config_path=self.config_path)
-            ma_engine = MADeductionEngine(config_path=self.config_path)
-            
-            targets = wave_engine.calculate_wave_targets(p0=370.0, p1=546.0, p2=489.0)
-            time_win = wave_engine.check_time_window(df, pivot_date="2022-10-25")
-            
-            analyzed_df = ma_engine.calculate_ma_and_deductions(df)
-            resonance_series = ma_engine.detect_resonance_signal(analyzed_df)
-            is_resonance = bool(resonance_series.iloc[-1])
-
-            # 3. 計算估值與市場熱度
-            val_engine = ValuationEVAEngine(config_path=self.config_path)
-            sentiment_engine = MarketSentimentEngine(db_path=self.db_path, config_path=self.config_path)
-
-            val_df = finmind.get_valuation("2330")
-            screener_passed = False
-            if not val_df.empty:
-                last_val = val_df.iloc[-1]
-                screener_res = val_engine.screen_two_lows_one_high(
-                    pe=last_val.get("pe", 0), 
-                    pb=last_val.get("pb", 0), 
-                    yield_rate=last_val.get("yield_rate", 0)
-                )
-                screener_passed = screener_res["passed"]
-
-            vol_overheat = sentiment_engine.check_volume_m1b_overheat(daily_volume_billion=4500.0)
-
-            # 4. 生成簡報並發送推播
             msg = self.notifier.generate_daily_report(
                 symbol=symbol,
-                close_price=close_price,
-                resonance_signal=is_resonance,
-                wave3_target=targets["wave3_1.618"],
-                fib_window_msg=time_win["status_message"],
-                volume_m1b_msg=vol_overheat["status_message"],
-                screener_passed=screener_passed
+                close_price=analysis["latest_price"],
+                resonance_signal=analysis["is_resonance"],
+                wave3_target=targets.get("wave3_1.618"),
+                fib_window_msg=time_win.get("status_message", "資料不足"),
+                volume_m1b_msg=sentiment.get("status_message", "資料不足"),
+                screener_passed=screener.get("passed"),
             )
             
-            self.notifier.send_notification(msg)
+            notification_result = self.notifier.send_notification(msg)
             logger.info("14:30 盤後自動管線成功執行完畢!")
+            return {
+                "status": "success",
+                "analysis_status": analysis["status"],
+                "notification": notification_result,
+            }
 
         except Exception as e:
             logger.error(f"盤後管線執行失敗: {str(e)}")
+            return {"status": "error", "reason": str(e)}
 
     def start(self, cron_hour: int = 14, cron_minute: int = 30):
         """啟動背景 Cron 排程 (每週一至週五指定時間觸發)"""

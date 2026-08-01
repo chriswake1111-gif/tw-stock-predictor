@@ -61,6 +61,9 @@ def test_backtester_execution():
     assert "final_value" in res
     assert "total_return_pct" in res
     assert "execution_log" in res
+    assert res["mode"] == "historical_backtest_only"
+    assert res["execution_capability"] == "simulated_orders_only"
+    assert "average_capital_utilization_pct" in res
     
     # 驗證交易日誌結構與 Stage 流轉
     log = res["execution_log"]
@@ -70,3 +73,17 @@ def test_backtester_execution():
         assert "action" in first_trade
         assert "stage_after" in first_trade
         assert "commission" in first_trade
+        assert "signal_date" in first_trade
+        assert "execution_date" in first_trade
+        if first_trade["action"] != "sell_terminal_liquidation":
+            assert first_trade["signal_date"] < first_trade["execution_date"]
+
+
+def test_backtester_rejects_invalid_sensitivity_parameters():
+    with pytest.raises(ValueError, match="持倉比例"):
+        TuBacktester(strategy_params={"stage1_ratio": 0.7, "stage2_ratio": 0.5})
+
+    with pytest.raises(ValueError, match="拉回參數"):
+        TuBacktester(
+            strategy_params={"pullback_min_pct": 0.2, "pullback_max_pct": 0.1}
+        )

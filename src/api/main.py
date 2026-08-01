@@ -2,9 +2,7 @@ import os
 import sys
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
-import pandas as pd
-import numpy as np
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,14 +11,7 @@ from fastapi.staticfiles import StaticFiles
 # 將專案根目錄加入 PYTHONPATH
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from src.collectors.twse_collector import TWSECollector
-from src.collectors.finmind_collector import FinMindCollector
-from src.collectors.cbc_collector import CBCCollector
-from src.collectors.market_turnover_collector import MarketTurnoverCollector
-from src.engine.wave_fibonacci import WaveFibonacciEngine
-from src.engine.ma_deduction import MADeductionEngine
-from src.engine.valuation_eva import ValuationEVAEngine
-from src.engine.market_sentiment import MarketSentimentEngine
+from src.analysis_service import analyze_symbol, normalize_symbol
 from src.scheduler import AutoScheduler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -46,7 +37,7 @@ async def lifespan(app: FastAPI):
         scheduler_instance.stop()
 
 app = FastAPI(
-    title="杜金龍台股量化預測機構級 API 終端",
+    title="台股市場研究與決策支援 API",
     version="1.0.0",
     lifespan=lifespan
 )
@@ -60,15 +51,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def normalize_symbol(symbol: str) -> str:
-    """Symbol 正規化：2330 -> 2330.TW, 0000 -> ^TWII"""
-    clean = symbol.strip().upper()
-    if clean in ["0000", "TAIEX"]:
-        return "^TWII"
-    if not (clean.startswith("^") or ".TW" in clean or ".TWO" in clean):
-        return f"{clean}.TW"
-    return clean
-
 @app.get("/api/health")
 def health_check():
     return {
@@ -79,126 +61,10 @@ def health_check():
 
 @app.get("/api/analysis/{symbol}")
 def get_analysis(symbol: str):
-    real_symbol = normalize_symbol(symbol)
-    db_path = "data/cache.db"
-
-    twse = TWSECollector(db_path=db_path)
-    finmind = FinMindCollector(db_path=db_path)
-    turnover_collector = MarketTurnoverCollector(db_path=db_path)
-    wave_engine = WaveFibonacciEngine(config_path="config/config.yaml")
-    ma_engine = MADeductionEngine(config_path="config/config.yaml")
-    val_engine = ValuationEVAEngine(config_path="config/config.yaml")
-    sentiment_engine = MarketSentimentEngine(db_path=db_path, config_path="config/config.yaml")
-
-    end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = (datetime.now() - timedelta(days=365*2)).strftime("%Y-%m-%d")
-    
-    df = twse.get_ohlcv(real_symbol, start_date=start_date, end_date=end_date)
-    if df.empty:
+    analysis, _ = analyze_symbol(symbol, db_path="data/cache.db")
+    if analysis.get("status") != "available":
         raise HTTPException(status_code=404, detail=f"無法獲取標的 {symbol} 的 K 線數據")
-
-    clean_df = df.dropna(subset=['open', 'high', 'low', 'close']).copy()
-    latest_row = clean_df.iloc[-1]
-    latest_close = float(latest_row['close'])
-
-    # 1. 波浪分析 (realtime_confirmed 與 hindsight_visualization 雙軌分立)
-    realtime_wave = wave_engine.get_realtime_confirmed_wave_params(real_symbol, clean_df)
-    hindsight_wave = wave_engine.get_hindsight_wave_params(real_symbol, clean_df)
-
-    # 2. 均線扣抵與共振
-    analyzed_df = ma_engine.calculate_ma_and_deductions(clean_df)
-    resonance_series = ma_engine.detect_resonance_signal(analyzed_df)
-    is_resonance = bool(resonance_series.iloc[-1])
-
-    # 3. 真實 EPS 估值與 Contract (零代理假資料)
-    clean_code = real_symbol.replace(".TW", "").replace(".TWO", "").replace("^", "")
-    ttm_res = finmind.get_ttm_eps(clean_code)
-    
-    eps_contract = ttm_res.get("eps") or {
-        "value": None,
-        "type": "historical_ttm",
-        "unit": "TWD_per_share",
-        "source": "FinMind TaiwanStockFinancialStatements",
-        "calculation": "sum_latest_four_reported_quarter_eps",
-        "status": "insufficient_data"
-    }
-
-    valuation_contract = {
-        "status": "insufficient_data",
-        "cheap_price": None,
-        "fair_price": None,
-        "expensive_price": None,
-        "estimated_eps": None
-    }
-
-    if eps_contract and eps_contract.get("value"):
-        ttm_val = float(eps_contract["value"])
-        dog_val = val_engine.calculate_dog_master_valuation(eps=ttm_val)
-        valuation_contract.update({
-            "status": "available",
-            "cheap_price": dog_val["cheap_price"],
-            "fair_price": dog_val["fair_price"],
-            "expensive_price": dog_val["expensive_price"],
-            "estimated_eps": dog_val["estimated_eps"]
-        })
-
-    # EVA 暫停使用標記 (未完備財報標準化前不給予假資料)
-    eva_contract = {
-        "status": "unsupported",
-        "reason": "Financial statement normalization is not implemented in current release",
-        "eva_floor_price": None
-    }
-
-    # 4. 大盤與 M1B 熱度 Contract (來自 MarketTurnoverCollector & CBCCollector)
-    turnover_res = turnover_collector.get_latest_available_turnover(end_date=end_date)
-    market_turnover_info = turnover_res.get("market_turnover")
-    market_turnover_twd = market_turnover_info.get("value") if market_turnover_info else None
-
-    sentiment_res = sentiment_engine.check_turnover_m1b_overheat(market_turnover_twd=market_turnover_twd)
-    sentiment_res["market_turnover_detail"] = market_turnover_info
-
-    # 5. TradingView Lightweight Charts K 線資料 (time: YYYY-MM-DD)
-    kline_list = []
-    for _, r in clean_df.iterrows():
-        kline_list.append({
-            "time": str(r["date"]),
-            "open": float(r["open"]),
-            "high": float(r["high"]),
-            "low": float(r["low"]),
-            "close": float(r["close"]),
-            "volume": float(r["volume"])
-        })
-
-    # 扣抵點數據
-    ma_deductions = {}
-    for period in [8, 13, 21, 55, 144]:
-        if f"SMA_{period}" in analyzed_df.columns:
-            sma_v = float(analyzed_df[f"SMA_{period}"].iloc[-1])
-            deduct_v = float(analyzed_df[f"deduct_val_{period}"].iloc[-1]) if not np.isnan(analyzed_df[f"deduct_val_{period}"].iloc[-1]) else latest_close
-            slope_u = bool(latest_close > deduct_v)
-            ma_deductions[str(period)] = {
-                "sma": round(sma_v, 2),
-                "deduct_val": round(deduct_v, 2),
-                "slope_up": slope_u
-            }
-
-    return {
-        "symbol": real_symbol,
-        "input_symbol": symbol,
-        "latest_price": round(latest_close, 2),
-        "date": str(latest_row["date"]),
-        "is_resonance": is_resonance,
-        "eps": eps_contract,
-        "wave_analysis": {
-            "realtime_confirmed": realtime_wave,
-            "hindsight_visualization": hindsight_wave
-        },
-        "valuation": valuation_contract,
-        "eva_valuation": eva_contract,
-        "sentiment": sentiment_res,
-        "ma_deductions": ma_deductions,
-        "kline_data": kline_list
-    }
+    return analysis
 
 # 掛載靜態網頁端點
 static_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../ui_alert/web"))

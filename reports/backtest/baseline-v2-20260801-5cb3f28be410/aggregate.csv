@@ -1,0 +1,10 @@
+symbol,model,status,window_count,requested_window_count,compounded_return_pct,worst_window_drawdown_pct,average_window_sharpe,total_trades,win_rate_pct,commission_and_tax_paid,turnover_twd,exposure_pct,observation_days,excess_vs_buy_hold_pct,excess_vs_sma_pct
+^TWII,tu_strategy,available,4,4,13.3691,3.43,0.43,16,50.0,148290.62,76638182.8,45.14,968,-188.1874,-117.0215
+^TWII,buy_and_hold,available,4,4,201.5565,27.466,1.6267,4,75.0,189688.86,94677308.88,100.0,968,,
+^TWII,sma_8_21,available,4,4,130.3906,15.2814,1.3667,23,56.52,909675.27,469476224.44,68.91,968,,
+0050.TW,tu_strategy,available,1,1,11.44,3.82,1.68,5,80.0,62672.69,32243695.37,76.95,243,-101.7367,-68.7083
+0050.TW,buy_and_hold,available,1,1,113.1767,10.8255,3.2594,1,100.0,65942.91,31299273.19,100.0,243,,
+0050.TW,sma_8_21,available,1,1,80.1483,9.2685,2.8411,4,100.0,194553.53,98934460.21,81.89,243,,
+2330.TW,tu_strategy,available,4,4,17.4848,6.09,0.6275,17,64.71,255625.98,86370551.78,47.62,968,-386.9103,-190.13
+2330.TW,buy_and_hold,available,4,4,404.3951,28.8701,1.6094,4,100.0,324223.73,99175149.41,100.0,968,,
+2330.TW,sma_8_21,available,4,4,207.6148,18.1361,1.3315,24,62.5,1432147.35,481450182.55,65.08,968,,

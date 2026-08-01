@@ -48,28 +48,33 @@ class MultiChannelNotifier:
         symbol: str,
         close_price: float,
         resonance_signal: bool,
-        wave3_target: float,
+        wave3_target: Optional[float],
         fib_window_msg: str,
         volume_m1b_msg: str,
-        screener_passed: bool
+        screener_passed: Optional[bool]
     ) -> str:
         """格式化產出 14:30 盤後精簡報告文字"""
         resonance_str = "[亮燈: 多空共振發動]" if resonance_signal else "[中立: 未觸發 (區間整理)]"
-        screener_str = "[符合: 二低一高優質標的]" if screener_passed else "[中立: 一般天數/未篩中]"
+        if screener_passed is None:
+            screener_str = "[資料不足: 尚無法評估]"
+        else:
+            screener_str = "[符合: 二低一高研究條件]" if screener_passed else "[未符合: 研究條件未全數成立]"
+        wave_target_str = f"${wave3_target} 元" if wave3_target is not None else "資料不足"
 
         report = f"""
 ====================================
-【杜金龍台股量化預測】14:30 盤後日報
+【台股市場研究與決策支援】14:30 盤後觀察
 ====================================
 標的代號: {symbol}
 今日收盤價: ${close_price} 元
 
 多空共振狀態: {resonance_str}
-浪 3 主升段目標價: ${wave3_target} 元
+浪 3 研究推導目標價: {wave_target_str}
 費氏時間轉折視窗: {fib_window_msg}
 大盤頭部過熱評估: {volume_m1b_msg}
 二低一高選股評估: {screener_str}
 ====================================
+僅供個人研究與決策參考，不構成投資建議或真實委託指令。
 """
         return report.strip()
 

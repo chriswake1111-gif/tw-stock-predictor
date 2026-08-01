@@ -31,18 +31,23 @@ class MarketSentimentEngine:
     def check_turnover_m1b_overheat(
         self,
         market_turnover_twd: Optional[float] = None,
-        m1b_twd: Optional[float] = None
+        m1b_twd: Optional[float] = None,
+        as_of_date: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         計算大盤成交金額 / M1B 頭部過熱比率 (turnover_m1b_ratio = market_turnover_twd / m1b_twd)
         若任一必要資料缺失，絕不使用假值或預設備援，一律回傳 status: "insufficient_data"。
         """
-        threshold = self.config.get("sentiment", {}).get("volume_m1b_threshold", 0.020)
+        sentiment_cfg = self.config.get("sentiment", {})
+        threshold = sentiment_cfg.get(
+            "turnover_m1b_threshold",
+            sentiment_cfg.get("volume_m1b_threshold", 0.020)
+        )
         m1b_contract = None
 
         # 1. 若未傳入 M1B，嘗試從 CBCCollector 獲取 Contract
         if m1b_twd is None:
-            m1b_res = self.cbc_collector.get_latest_m1b()
+            m1b_res = self.cbc_collector.get_latest_m1b(as_of_date=as_of_date)
             if m1b_res.get("status") == "available":
                 m1b_contract = m1b_res
                 m1b_billion = m1b_res["value"]
@@ -74,6 +79,7 @@ class MarketSentimentEngine:
                 "source": "CBC"
             },
             "turnover_m1b_ratio": ratio,
+            "as_of_date": as_of_date,
             "threshold": threshold,
             "is_overheat": is_overheat,
             "status_message": f"大盤成交金額 / M1B 比率: {ratio*100:.2f}%" + 
@@ -82,7 +88,11 @@ class MarketSentimentEngine:
 
     def check_margin_leverage_heat(self, symbol: str = "^TWII") -> Dict[str, Any]:
         """全市場融資槓桿過熱溫度計"""
-        threshold = self.config.get("sentiment", {}).get("margin_return_threshold", 0.08)
+        sentiment_cfg = self.config.get("sentiment", {})
+        threshold = sentiment_cfg.get(
+            "margin_balance_growth_threshold",
+            sentiment_cfg.get("margin_return_threshold", 0.08)
+        )
         
         try:
             with sqlite3.connect(self.db_path) as conn:
@@ -116,6 +126,8 @@ class MarketSentimentEngine:
 
             return {
                 "status": "available",
+                "metric": "margin_balance_growth",
+                "observation_count": len(df),
                 "recent_balance": recent_balance,
                 "margin_growth_rate": round(growth_rate, 4),
                 "threshold": threshold,

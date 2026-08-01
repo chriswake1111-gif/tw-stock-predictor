@@ -64,16 +64,28 @@ class MADeductionEngine:
         2. 均線多頭排列 (SMA_8 > SMA_13 > SMA_21 > SMA_55)
         :return: 布林 Series
         """
-        if df.empty or "SMA_8" not in df.columns:
+        if df.empty:
+            return pd.Series(False, index=df.index, dtype=bool)
+
+        required_columns = {
+            "SMA_8", "SMA_13", "SMA_21", "SMA_55",
+            "ma_slope_up_8", "ma_slope_up_13", "ma_slope_up_21",
+            "ma_slope_up_55", "ma_slope_up_144"
+        }
+        if not required_columns.issubset(df.columns) and "close" in df.columns:
             df = self.calculate_ma_and_deductions(df)
+
+        if not required_columns.issubset(df.columns):
+            logger.warning("均線扣抵欄位不完整，依 fail-closed 原則不產生共振訊號")
+            return pd.Series(False, index=df.index, dtype=bool)
 
         # 1. 扣抵全向上條件
         deduct_all_up = (
-            df.get("ma_slope_up_8", True) & 
-            df.get("ma_slope_up_13", True) & 
-            df.get("ma_slope_up_21", True) & 
-            df.get("ma_slope_up_55", True) & 
-            df.get("ma_slope_up_144", True)
+            df["ma_slope_up_8"] &
+            df["ma_slope_up_13"] &
+            df["ma_slope_up_21"] &
+            df["ma_slope_up_55"] &
+            df["ma_slope_up_144"]
         )
 
         # 2. 均線多頭排列條件

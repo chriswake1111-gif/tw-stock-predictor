@@ -33,3 +33,31 @@ def test_scheduler_init():
     job_info = scheduler.get_job_info()
     assert isinstance(job_info, dict)
     assert "cron_time" in job_info
+
+def test_scheduler_uses_shared_research_contract(monkeypatch):
+    scheduler = AutoScheduler()
+    analysis = {
+        "status": "available",
+        "latest_price": 925.0,
+        "is_resonance": True,
+        "wave_analysis": {
+            "realtime_confirmed": {
+                "targets": {"wave3_1.618": 949.77},
+                "time_window": {"status_message": "研究時間窗"},
+            }
+        },
+        "sentiment": {"status_message": "市場熱度正常"},
+        "two_lows_one_high": {"passed": True},
+    }
+    monkeypatch.setattr("src.scheduler.analyze_symbol", lambda *args, **kwargs: (analysis, None))
+    monkeypatch.setattr(
+        scheduler.notifier,
+        "send_notification",
+        lambda message: {"status": "success", "message": message},
+    )
+
+    result = scheduler.run_daily_pipeline("2330.TW")
+
+    assert result["status"] == "success"
+    assert result["analysis_status"] == "available"
+    assert "不構成投資建議或真實委託指令" in result["notification"]["message"]

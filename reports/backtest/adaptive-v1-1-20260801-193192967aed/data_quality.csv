@@ -1,0 +1,4 @@
+status,symbol,row_count,start_date,end_date,duplicate_dates,missing_by_column,invalid_price_rows,non_monotonic_dates,large_return_rows_25pct,max_abs_daily_return_pct,max_calendar_gap_days,price_adjustment_contract
+available,^TWII,3059,2014-01-02,2026-07-31,0,"{'date': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}",0,False,0,9.6997,13,yfinance auto_adjust=True; actions=False; repair=False
+available,0050.TW,3064,2014-01-02,2026-07-31,0,"{'date': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}",0,False,0,10.0,13,yfinance auto_adjust=True; actions=False; repair=False
+available,2330.TW,3063,2014-01-02,2026-07-31,0,"{'date': 0, 'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0}",0,False,0,9.9788,13,yfinance auto_adjust=True; actions=False; repair=False

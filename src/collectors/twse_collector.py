@@ -1,6 +1,8 @@
 import sqlite3
 import os
 import logging
+import hashlib
+import importlib.metadata
 from datetime import datetime, timedelta
 import pandas as pd
 import yfinance as yf
@@ -130,11 +132,52 @@ class TWSECollector:
             """, records)
             conn.commit()
 
+    def _replace_cache_range(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        df: pd.DataFrame,
+    ):
+        """在單一交易中以完整快照取代指定區間，避免殘留供應商已移除的列。"""
+        records = []
+        for _, row in df.iterrows():
+            date_str = (
+                row["date"]
+                if isinstance(row["date"], str)
+                else row["date"].strftime("%Y-%m-%d")
+            )
+            records.append((
+                symbol,
+                date_str,
+                float(row["open"]),
+                float(row["high"]),
+                float(row["low"]),
+                float(row["close"]),
+                float(row["volume"]),
+            ))
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "DELETE FROM daily_ohlcv WHERE symbol = ? AND date >= ? AND date <= ?",
+                (symbol, start_date, end_date),
+            )
+            if records:
+                conn.executemany("""
+                    INSERT INTO daily_ohlcv (symbol, date, open, high, low, close, volume)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, records)
+
     def _fetch_from_yfinance(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         """使用 yfinance API 抓取 OHLCV"""
         try:
             ticker = yf.Ticker(symbol)
-            df = ticker.history(start=start_date, end=end_date)
+            df = ticker.history(
+                start=start_date,
+                end=end_date,
+                auto_adjust=True,
+                actions=False,
+                repair=False,
+            )
             if df.empty:
                 return pd.DataFrame()
 
@@ -153,3 +196,72 @@ class TWSECollector:
         except Exception as e:
             logger.error(f"yfinance 抓取 {symbol} 失敗: {str(e)}")
             return pd.DataFrame()
+
+    def fetch_research_snapshot(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        persist_cache: bool = True,
+    ):
+        """完整重抓單一研究區間，回傳資料與可稽核來源契約。
+
+        研究快照刻意不使用增量拼接，避免不同抓取時間的調整因子混在同一份資料。
+        ``end_date`` 對呼叫端為含當日，轉交 yfinance 時改為排他上限。
+        """
+        if symbol == "0000" or symbol == "TAIEX":
+            target_symbol = "^TWII"
+        elif not symbol.startswith("^") and not symbol.endswith(".TW") and not symbol.endswith(".TWO"):
+            target_symbol = f"{symbol}.TW"
+        else:
+            target_symbol = symbol
+
+        exclusive_end = (
+            datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+        ).strftime("%Y-%m-%d")
+        fetched_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        frame = self._fetch_from_yfinance(target_symbol, start_date, exclusive_end)
+        if persist_cache and not frame.empty:
+            self._replace_cache_range(
+                target_symbol,
+                start_date,
+                end_date,
+                frame,
+            )
+
+        canonical = frame.to_csv(
+            index=False,
+            columns=["date", "open", "high", "low", "close", "volume"]
+            if not frame.empty
+            else None,
+            float_format="%.10g",
+            lineterminator="\n",
+        )
+        provenance = {
+            "provider": "Yahoo Finance via yfinance",
+            "official_exchange_source": False,
+            "provider_data_mutability": (
+                "historical adjusted values may be revised by provider; "
+                "use the normalized snapshot hash for run identity"
+            ),
+            "symbol": target_symbol,
+            "requested_start": start_date,
+            "requested_end_inclusive": end_date,
+            "actual_start": str(frame["date"].min()) if not frame.empty else None,
+            "actual_end": str(frame["date"].max()) if not frame.empty else None,
+            "row_count": int(len(frame)),
+            "fetched_at_local": fetched_at,
+            "library": "yfinance",
+            "library_version": importlib.metadata.version("yfinance"),
+            "interval": "1d",
+            "auto_adjust": True,
+            "actions": False,
+            "repair": False,
+            "end_parameter_semantics": "exclusive",
+            "currency_expected": "TWD",
+            "exchange_timezone_expected": "Asia/Taipei",
+            "provider_payload_sha256": hashlib.sha256(
+                canonical.encode("utf-8")
+            ).hexdigest(),
+        }
+        return frame, provenance

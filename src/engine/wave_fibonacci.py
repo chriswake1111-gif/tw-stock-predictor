@@ -92,13 +92,26 @@ class WaveFibonacciEngine:
         嚴格驗證轉折時間順序：index(P0) < index(P1) 且 price(P0) < price(P1)。
         若不足時回傳 status: "insufficient_data"，絕不安裝預設備援極值。
         """
-        if df.empty:
+        if df.empty or 'date' not in df.columns:
             return {"status": "insufficient_data", "reason": "K line dataframe is empty"}
 
-        if as_of_date is None:
-            as_of_date = str(df['date'].iloc[-1])
+        df_as_of = df.copy()
+        df_as_of["date"] = df_as_of["date"].astype(str)
+        df_as_of.sort_values("date", inplace=True)
 
-        pivots = self.detect_confirmed_pivots(df)
+        if as_of_date is None:
+            as_of_date = str(df_as_of['date'].iloc[-1])
+
+        as_of_date = str(as_of_date)
+        df_as_of = df_as_of[df_as_of["date"] <= as_of_date].copy()
+        if df_as_of.empty:
+            return {
+                "status": "insufficient_data",
+                "mode": "realtime_confirmed",
+                "reason": f"No K line data is available on or before {as_of_date}"
+            }
+
+        pivots = self.detect_confirmed_pivots(df_as_of)
         valid_pivots = [p for p in pivots if p.confirmed_at <= as_of_date]
 
         low_pivots = [p for p in valid_pivots if p.pivot_type == "low"]
@@ -136,7 +149,7 @@ class WaveFibonacciEngine:
         p2_proj = round(p1 - (p1 - p0) * 0.382, 2)
 
         targets = self.calculate_wave_targets(p0=p0, p1=p1, p2=p2_proj)
-        time_win = self.check_time_window(df, pivot_date=last_low.pivot_date)
+        time_win = self.check_time_window(df_as_of, pivot_date=last_low.pivot_date, as_of_date=as_of_date)
 
         return {
             "status": "available",
@@ -217,12 +230,27 @@ class WaveFibonacciEngine:
         }
         return targets
 
-    def check_time_window(self, df: pd.DataFrame, pivot_date: str, is_monthly: bool = False) -> Dict[str, Any]:
+    def check_time_window(
+        self,
+        df: pd.DataFrame,
+        pivot_date: str,
+        is_monthly: bool = False,
+        as_of_date: Optional[str] = None
+    ) -> Dict[str, Any]:
         if df.empty or 'date' not in df.columns:
             return {"is_in_window": False, "reason": "DataFrame 為空或無 date 欄位"}
 
         fib_numbers = self.config.get("fibonacci", {}).get("numbers", self.DEFAULT_FIB_NUMBERS)
-        df_sorted = df.sort_values("date").reset_index(drop=True)
+        df_sorted = df.copy()
+        df_sorted["date"] = df_sorted["date"].astype(str)
+        if as_of_date is not None:
+            df_sorted = df_sorted[df_sorted["date"] <= str(as_of_date)]
+        df_sorted = df_sorted.sort_values("date").reset_index(drop=True)
+        if df_sorted.empty:
+            return {
+                "is_in_window": False,
+                "reason": f"No K line data is available on or before {as_of_date}"
+            }
         latest_date_str = df_sorted["date"].iloc[-1]
         
         if is_monthly:
