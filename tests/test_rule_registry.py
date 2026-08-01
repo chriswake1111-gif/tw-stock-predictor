@@ -42,8 +42,13 @@ def test_u_level_rule_cannot_be_loaded_as_verified_core():
 def test_human_approval_rule_fails_closed_without_approval_id():
     registry = RuleRegistry()
 
-    assert registry.evaluate_use("VAL-01", "valuation_scenario")["status"] == "needs_human_input"
-    assert registry.evaluate_use("VAL-01", "valuation_scenario", approval_id="review-001")["status"] == "available"
+    assert registry.evaluate_use("VAL-02", "forward_eps_observation")["status"] == "needs_human_input"
+    assert registry.evaluate_use(
+        "VAL-02", "forward_eps_observation", approval_id="review-001"
+    )["status"] == "available"
+    assert registry.evaluate_use("VAL-01", "valuation_scenario")["status"] == "available"
+    assert registry.evaluate_use("VAL-03", "valuation_scenario")["status"] == "available"
+    assert registry.evaluate_use("VAL-04", "valuation_scenario")["status"] == "needs_human_input"
 
 
 def test_forbidden_usage_takes_priority():

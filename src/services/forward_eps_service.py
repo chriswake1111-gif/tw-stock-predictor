@@ -46,7 +46,7 @@ class ForwardEPSService:
     ) -> dict:
         allowed_rule_ids = {
             ApprovalResourceType.FORWARD_EPS: {"VAL-02"},
-            ApprovalResourceType.PE_SCENARIO: {"VAL-03", "VAL-04"},
+            ApprovalResourceType.PE_SCENARIO: {"VAL-04"},
         }
         if rule_id not in allowed_rule_ids[resource_type]:
             raise ValueError(

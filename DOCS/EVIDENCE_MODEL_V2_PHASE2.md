@@ -50,6 +50,10 @@ PE scenarios are immutable revisions with one explicit scope:
 
 Only an approved, effective, non-revoked `symbol` scenario with non-U evidence is automatically used in the verified valuation matrix. C-level approvals are explicitly marked as project operationalization. Industry and market scenarios are returned as reference data only. Draft, revoked, not-yet-effective, and expired revisions are excluded. Evidence level and approver identity are assigned by the protected backend approval flow, not by import callers.
 
+The approval policy is rule-specific: `VAL-02` approves Forward EPS and `VAL-04` approves company-specific PE selection. `VAL-01` is the deterministic multiplication formula and `VAL-03` is parameterized scenario support, so neither borrows a PE approval ID. Rule Trace contains only approval IDs whose ledger event has that exact Rule ID.
+
+Forward EPS states are reported separately: no observation is `insufficient_data`, a draft observation is `needs_human_input`, all latest decisions revoked is `insufficient_data` with reason `forward_eps_approval_revoked`, and a valid `VAL-02` approval is `available`. Public records expose `import_status` and ledger-derived `effective_approval_status`.
+
 ## Formula and non-applicable EPS
 
 ```text
@@ -104,3 +108,7 @@ Sections belonging to Phase 3 or later return `unsupported` or `needs_human_inpu
 - No Phase 3 M1B integration.
 - No Phase 4 anchor or wave workflow.
 - No immutable full-analysis snapshot yet; `snapshot_id` remains `null` until Phase 7.
+
+## Reproducible test dependencies
+
+CI installs `requirements-dev.txt`, which applies `constraints.txt`. The compatibility set pins FastAPI, Starlette, Pydantic, httpx2, pytest, and pytest-cov; CI does not perform an additional unconstrained test-tool installation.

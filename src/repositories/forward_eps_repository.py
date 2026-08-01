@@ -246,6 +246,22 @@ class ForwardEPSRepository:
             ).fetchone()
             if resource is None:
                 raise ValueError("approval resource does not exist")
+            previous_decision = conn.execute(
+                """
+                SELECT available_at FROM valuation_approvals
+                WHERE resource_type = ? AND resource_id = ?
+                ORDER BY available_at DESC, ingested_at DESC, approval_event_id DESC
+                LIMIT 1
+                """,
+                (payload["resource_type"], payload["resource_id"]),
+            ).fetchone()
+            if (
+                previous_decision is not None
+                and payload["available_at"] < previous_decision["available_at"]
+            ):
+                raise ValueError(
+                    "approval available_at cannot precede the previous decision"
+                )
             if (
                 approval.resource_type is ApprovalResourceType.PE_SCENARIO
                 and approval.decision.value == "approved"
@@ -312,7 +328,9 @@ class ForwardEPSRepository:
             if previous[field] != payload[field]:
                 raise ValueError(f"revision cannot change identity field: {field}")
 
-    def forward_eps_as_of(self, symbol: str, knowledge_cutoff_at: str) -> list[dict[str, Any]]:
+    def forward_eps_state_as_of(
+        self, symbol: str, knowledge_cutoff_at: str
+    ) -> list[dict[str, Any]]:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
         with self._connect() as conn:
             rows = conn.execute(
@@ -336,24 +354,35 @@ class ForwardEPSRepository:
                 )
                 SELECT ranked.*,
                        approval_ranked.approval_id AS verified_approval_id,
+                       approval_ranked.decision AS effective_approval_status,
                        approval_ranked.rule_id AS approval_rule_id,
                        approval_ranked.evidence_level AS approved_evidence_level,
                        approval_ranked.project_operationalization,
                        approval_ranked.approved_by AS verified_approved_by,
                        approval_ranked.rationale AS approval_rationale
-                FROM ranked JOIN approval_ranked
+                FROM ranked LEFT JOIN approval_ranked
                   ON approval_ranked.resource_id = ranked.id
                  AND approval_ranked.approval_rank = 1
                 WHERE ranked.revision_rank = 1 AND ranked.status = 'active'
-                  AND approval_ranked.decision = 'approved'
-                  AND approval_ranked.evidence_level != 'U'
-                  AND (approval_ranked.evidence_level != 'C'
-                       OR approval_ranked.project_operationalization = 1)
                 ORDER BY fiscal_year, source_name, logical_series_id
                 """,
                 (symbol.strip().upper(), cutoff, cutoff, cutoff, cutoff),
             ).fetchall()
         return [_row_dict(row) for row in rows]
+
+    def forward_eps_as_of(
+        self, symbol: str, knowledge_cutoff_at: str
+    ) -> list[dict[str, Any]]:
+        return [
+            row for row in self.forward_eps_state_as_of(symbol, knowledge_cutoff_at)
+            if row["effective_approval_status"] == "approved"
+            and row["approval_rule_id"] == "VAL-02"
+            and row["approved_evidence_level"] != "U"
+            and (
+                row["approved_evidence_level"] != "C"
+                or row["project_operationalization"] == 1
+            )
+        ]
 
     def pe_scenarios_as_of(
         self,
@@ -385,6 +414,7 @@ class ForwardEPSRepository:
                 )
                 SELECT ranked.*,
                        approval_ranked.approval_id AS verified_approval_id,
+                       approval_ranked.decision AS effective_approval_status,
                        approval_ranked.rule_id AS approval_rule_id,
                        approval_ranked.evidence_level AS approved_evidence_level,
                        approval_ranked.project_operationalization,
@@ -395,6 +425,7 @@ class ForwardEPSRepository:
                  AND approval_ranked.approval_rank = 1
                 WHERE ranked.revision_rank = 1
                   AND approval_ranked.decision = 'approved'
+                  AND approval_ranked.rule_id = 'VAL-04'
                   AND approval_ranked.evidence_level != 'U'
                   AND (approval_ranked.evidence_level != 'C'
                        OR approval_ranked.project_operationalization = 1)

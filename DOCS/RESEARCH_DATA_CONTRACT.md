@@ -172,6 +172,9 @@ python tools\build_official_gap_snapshot.py `
 - Forward EPS 與 PE 必須先經受保護的人工作業核准；矩陣與 Rule Trace 保存 approval ID。U 級一律 fail-closed，C 級標示 project operationalization。
 - 寫入 API 預設關閉，啟用後仍須管理 API key；匯入只能建立 draft，`approved_by` 由伺服器管理設定決定。
 - 所有 POST 需要 idempotency key；永久 ledger 綁定每個 key、SHA-256 fingerprint 與 resource ID，public DTO 不揭露 key 或 fingerprint。
+- Forward EPS 無 observation 為 `insufficient_data`；有 draft 但缺 VAL-02 核准為 `needs_human_input`；最新 decision 全為 revoked 時回傳 `forward_eps_approval_revoked`。
+- 單一 PE 核准規則為 VAL-04；VAL-01 與 VAL-03 不借用其 approval ID。公開資料以 `import_status` 與 ledger 派生的 `effective_approval_status` 區分匯入及有效核准狀態。
+- 同一 resource 的新 approval event 不得使用早於前一 decision 的 `available_at`，避免晚錄入的回溯 revoke 改寫既有 as-of 語意。
 - 詳細契約見 `DOCS/EVIDENCE_MODEL_V2_PHASE2.md`。
 
 ## Adaptive 配置研究契約

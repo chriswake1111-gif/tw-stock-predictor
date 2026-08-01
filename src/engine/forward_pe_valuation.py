@@ -20,11 +20,19 @@ class ForwardPEValuationEngine:
 
     @staticmethod
     def _public_record(record: dict[str, Any]) -> dict[str, Any]:
-        return {
+        public = {
             key: value
             for key, value in record.items()
-            if key not in {"idempotency_key", "payload_fingerprint", "revision_rank"}
+            if key not in {
+                "idempotency_key", "payload_fingerprint", "revision_rank",
+                "approval_status",
+            }
         }
+        public["import_status"] = record.get("approval_status") or "draft"
+        public["effective_approval_status"] = (
+            record.get("effective_approval_status") or "draft"
+        )
+        return public
 
     def _rule_trace(
         self,
@@ -53,7 +61,19 @@ class ForwardPEValuationEngine:
         knowledge_cutoff_at = normalize_utc_timestamp(
             knowledge_cutoff_at, "knowledge_cutoff_at"
         )
-        observations = self.repository.forward_eps_as_of(symbol, knowledge_cutoff_at)
+        observation_states = self.repository.forward_eps_state_as_of(
+            symbol, knowledge_cutoff_at
+        )
+        observations = [
+            row for row in observation_states
+            if row["effective_approval_status"] == "approved"
+            and row["approval_rule_id"] == "VAL-02"
+            and row["approved_evidence_level"] != "U"
+            and (
+                row["approved_evidence_level"] != "C"
+                or row["project_operationalization"] == 1
+            )
+        ]
         pe_by_scope = self.repository.pe_scenarios_as_of(
             symbol, knowledge_cutoff_at, industry=industry, market=market
         )
@@ -65,17 +85,14 @@ class ForwardPEValuationEngine:
             row["verified_approval_id"] for row in symbol_scenarios
         ]
         rules_used = [
-            self._rule_trace(
-                "VAL-01", knowledge_cutoff_at,
-                forecast_approval_ids + pe_approval_ids,
-            ),
+            self._rule_trace("VAL-01", knowledge_cutoff_at),
             self._rule_trace("VAL-02", knowledge_cutoff_at, forecast_approval_ids),
-            self._rule_trace("VAL-03", knowledge_cutoff_at, pe_approval_ids),
+            self._rule_trace("VAL-03", knowledge_cutoff_at),
             self._rule_trace("VAL-04", knowledge_cutoff_at, pe_approval_ids),
         ]
         base = {
             "knowledge_cutoff_at": knowledge_cutoff_at,
-            "forward_eps": [self._public_record(row) for row in observations],
+            "forward_eps": [self._public_record(row) for row in observation_states],
             "pe_scenarios": [self._public_record(row) for row in symbol_scenarios],
             "reference_pe_scenarios": {
                 "industry": [self._public_record(row) for row in pe_by_scope["industry"]],
@@ -96,11 +113,24 @@ class ForwardPEValuationEngine:
             "multiple_sources_aggregated": False,
             "official_affiliation": False,
         }
-        if not observations:
+        if not observation_states:
             return {
                 **base,
                 "status": "insufficient_data",
                 "reason": "forward_eps_missing_at_knowledge_cutoff",
+            }
+        if not observations:
+            all_revoked = all(
+                row["effective_approval_status"] == "revoked"
+                for row in observation_states
+            )
+            return {
+                **base,
+                "status": "insufficient_data" if all_revoked else "needs_human_input",
+                "reason": (
+                    "forward_eps_approval_revoked"
+                    if all_revoked else "approved_forward_eps_required"
+                ),
             }
         if not symbol_scenarios:
             return {
@@ -143,8 +173,8 @@ class ForwardPEValuationEngine:
                         "formula": "forward_eps * approved_symbol_pe",
                         "rule_ids": ["VAL-01", "VAL-02", "VAL-03", "VAL-04"],
                         "approval_ids": {
-                            "forward_eps": observation["verified_approval_id"],
-                            "pe_scenario": pe_scenario["verified_approval_id"],
+                            "VAL-02": observation["verified_approval_id"],
+                            "VAL-04": pe_scenario["verified_approval_id"],
                         },
                     })
         return {

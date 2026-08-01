@@ -232,6 +232,25 @@ def test_revoked_forward_eps_is_removed_after_revocation_cutoff(tmp_path):
     assert repo.forward_eps_as_of("2330.TW", "2026-08-02T12:00:00Z") == []
 
 
+def test_backdated_revocation_is_rejected(tmp_path):
+    repo = ForwardEPSRepository(str(tmp_path / "valuation.db"))
+    resource = repo.add_forward_eps(
+        observation(), "eps", ingested_at="2026-08-01T01:00:00Z"
+    )
+    approve_eps(
+        repo, resource["id"], key="approved",
+        available_at="2026-08-02T02:00:00Z",
+        ingested_at="2026-08-02T02:00:00Z",
+    )
+    with pytest.raises(ValueError, match="cannot precede"):
+        approve_eps(
+            repo, resource["id"], key="backdated-revoke",
+            decision=ApprovalStatus.REVOKED,
+            available_at="2026-08-01T02:00:00Z",
+            ingested_at="2026-08-03T02:00:00Z",
+        )
+
+
 def test_idempotency_ledger_binds_every_key_to_fingerprint(tmp_path):
     repo = ForwardEPSRepository(str(tmp_path / "valuation.db"))
     first = repo.add_forward_eps(observation(), "key-a")

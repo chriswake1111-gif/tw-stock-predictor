@@ -288,7 +288,12 @@ def get_v2_analysis(
 
     valuation_available = valuation["status"] in {"available", "not_applicable"}
     missing = [] if valuation_available else ["forward_valuation"]
-    needs_human = ["approved_symbol_pe"] if valuation["status"] == "needs_human_input" else []
+    needs_human = []
+    if valuation["status"] == "needs_human_input":
+        if valuation["reason"] == "approved_forward_eps_required":
+            needs_human.append("approved_forward_eps")
+        elif valuation["reason"] == "approved_symbol_pe_missing_at_knowledge_cutoff":
+            needs_human.append("approved_symbol_pe")
     return {
         "status": "partial",
         "symbol": normalized_symbol,

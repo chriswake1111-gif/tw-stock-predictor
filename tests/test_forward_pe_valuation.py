@@ -22,7 +22,7 @@ def approve(repo, resource_type, resource_id, key, *, evidence="B", project=Fals
         ValuationApproval(
             approval_id=f"approval-{key}", resource_type=resource_type,
             resource_id=resource_id, decision=decision,
-            rule_id=rule_id or ("VAL-02" if resource_type is ApprovalResourceType.FORWARD_EPS else "VAL-03"),
+            rule_id=rule_id or ("VAL-02" if resource_type is ApprovalResourceType.FORWARD_EPS else "VAL-04"),
             evidence_level=evidence, project_operationalization=project,
             approved_by="admin", rationale="reviewed evidence",
             available_at="2026-08-01T00:02:00Z",
@@ -90,10 +90,20 @@ def test_verified_matrix_uses_only_approved_symbol_scope_pe(tmp_path):
     assert {r["id"] for r in result["reference_pe_scenarios"]["industry"]} == {industry_pe["id"]}
     assert {r["id"] for r in result["reference_pe_scenarios"]["market"]} == {market_pe["id"]}
     cell = result["target_matrix"][0]
-    assert cell["approval_ids"]["forward_eps"] == "approval-eps-source-a"
-    assert cell["approval_ids"]["pe_scenario"] == "approval-pe-symbol-pe-1"
+    assert cell["approval_ids"]["VAL-02"] == "approval-eps-source-a"
+    assert cell["approval_ids"]["VAL-04"] == "approval-pe-symbol-pe-1"
     assert eps["id"] == cell["observation_id"]
     assert any("approval-eps-source-a" in t["approval_ids"] for t in result["rules_used"])
+    trace = {row["rule_id"]: row["approval_ids"] for row in result["rules_used"]}
+    assert trace == {
+        "VAL-01": [],
+        "VAL-02": ["approval-eps-source-a"],
+        "VAL-03": [],
+        "VAL-04": ["approval-pe-symbol-pe-1"],
+    }
+    assert result["pe_scenarios"][0]["import_status"] == "draft"
+    assert result["pe_scenarios"][0]["effective_approval_status"] == "approved"
+    assert "approval_status" not in result["pe_scenarios"][0]
 
 
 def test_unapproved_or_revoked_forward_eps_is_excluded(tmp_path):
@@ -111,9 +121,29 @@ def test_unapproved_or_revoked_forward_eps_is_excluded(tmp_path):
     )
     add_pe(repo, series="symbol-pe", scope=PEScope.SYMBOL, pe=15.0)
     result = ForwardPEValuationEngine(repo).evaluate("2330.TW", CUTOFF)
-    assert result["status"] == "insufficient_data"
-    assert result["forward_eps"] == []
+    assert result["status"] == "needs_human_input"
+    assert result["reason"] == "approved_forward_eps_required"
+    assert {row["effective_approval_status"] for row in result["forward_eps"]} == {
+        "draft", "revoked"
+    }
     assert draft["id"] != revoked["id"]
+
+
+def test_all_revoked_forward_eps_has_explicit_reason(tmp_path):
+    repo = ForwardEPSRepository(str(tmp_path / "valuation.db"))
+    revoked = add_eps(repo, series="revoked", source="Revoked", eps=11.0)
+    repo.add_approval(
+        ValuationApproval(
+            approval_id="approval-revoked", resource_type=ApprovalResourceType.FORWARD_EPS,
+            resource_id=revoked["id"], decision=ApprovalStatus.REVOKED,
+            rule_id="VAL-02", evidence_level="A", project_operationalization=False,
+            approved_by="admin", rationale="withdrawn",
+            available_at="2026-08-01T00:04:00Z",
+        ), "approval-revoked", ingested_at="2026-08-01T00:05:00Z",
+    )
+    result = ForwardPEValuationEngine(repo).evaluate("2330.TW", CUTOFF)
+    assert result["status"] == "insufficient_data"
+    assert result["reason"] == "forward_eps_approval_revoked"
 
 
 def test_u_pe_fails_closed_and_c_is_project_operationalization(tmp_path):

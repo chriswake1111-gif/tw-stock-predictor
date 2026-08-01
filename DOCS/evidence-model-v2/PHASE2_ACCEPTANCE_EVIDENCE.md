@@ -16,9 +16,10 @@ git diff --check
 ## Results
 
 - Phase 2 review-hardening focus tests: 28 passed.
-- Full repository regression: 115 passed.
+- Clean-environment full repository regression: 119 passed.
 - Independent v1 API golden snapshot: 2 passed.
-- Existing warning: Starlette TestClient/httpx deprecation.
+- Clean environment compatibility set: FastAPI 0.141.1, Starlette 1.3.1, Pydantic 2.13.4, httpx2 2.9.1, pytest 9.1.1, pytest-cov 7.0.0.
+- Remaining warnings are existing NumPy timedelta deprecations in backtest research tests; TestClient collection succeeds without the legacy httpx package.
 - No live network dependency was used by the new tests.
 
 ## Acceptance coverage
@@ -42,6 +43,9 @@ git diff --check
 - Cross-symbol/year/source/unit/scope revision rejection: covered.
 - Permanent multi-key idempotency bindings: covered.
 - Fresh-clone migration with missing parent directory: covered.
+- Draft, missing, revoked, and approved Forward EPS states: covered.
+- VAL-02 Forward EPS and VAL-04 PE approval IDs map only to their exact Rule Trace entries: covered.
+- Backdated approval/revocation events are rejected: covered.
 
 ## Boundary evidence
 

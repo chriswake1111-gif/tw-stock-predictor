@@ -43,6 +43,7 @@
 - [x] Forward EPS 多來源維持分離，不自動平均；verified matrix 只使用 approved symbol-scope PE，draft／revoked PE 不進入估值。
 - [x] Evidence Model v2 Phase 2 review hardening：寫入預設關閉、管理 API key、draft-only import、immutable approval ledger、U 級 fail-closed、C 級 operationalization 與永久 idempotency ledger。
 - [x] Phase 2 驗收：完整回歸結果與 v1 golden snapshot 證據更新於 `DOCS/evidence-model-v2/PHASE2_ACCEPTANCE_EVIDENCE.md`；未新增外部 Forward EPS Collector。
+- [x] Phase 2 CI／approval follow-up：固定 FastAPI／Starlette／Pydantic／httpx2／pytest 相容組、draft/revoked EPS 狀態、VAL-02／VAL-04 精確核准對應與 backdated decision 防護。
 
 ### 尚未完成／不得誤解為已完成
 

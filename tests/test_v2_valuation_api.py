@@ -99,7 +99,7 @@ def test_protected_approval_enters_matrix_and_rule_trace(monkeypatch, tmp_path):
         headers=headers(admin, "approve-eps"),
     )
     pe_approval = client.post(
-        f"/api/v2/pe-scenarios/{pe_id}/approval", json=approval_payload("VAL-03"),
+        f"/api/v2/pe-scenarios/{pe_id}/approval", json=approval_payload("VAL-04"),
         headers=headers(admin, "approve-pe"),
     )
     assert eps_approval.status_code == pe_approval.status_code == 200
@@ -124,7 +124,7 @@ def test_date_only_cutoff_prevents_same_day_lookahead(monkeypatch, tmp_path):
     client.post(f"/api/v2/forward-eps/{eps['observation']['id']}/approval",
                 json=approval_payload("VAL-02"), headers=headers(admin, "approve-eps"))
     client.post(f"/api/v2/pe-scenarios/{pe['pe_scenario']['id']}/approval",
-                json=approval_payload("VAL-03"), headers=headers(admin, "approve-pe"))
+                json=approval_payload("VAL-04"), headers=headers(admin, "approve-pe"))
     date_only = client.get("/api/v2/analysis/2330?as_of_date=2026-08-01")
     assert date_only.json()["knowledge_cutoff_at"] == "2026-07-31T16:00:00.000000Z"
     assert date_only.json()["cutoff_policy"]["mode"] == "date_start_of_day"
@@ -139,3 +139,32 @@ def test_partial_data_does_not_fail_v2_analysis(monkeypatch, tmp_path):
     assert data["status"] == "partial"
     assert data["valuation"]["status"] == "insufficient_data"
     assert data["model"]["official_affiliation"] is False
+
+
+def test_draft_forward_eps_requires_human_approval(monkeypatch, tmp_path):
+    admin = enable_writes(monkeypatch, tmp_path)
+    created = client.post(
+        "/api/v2/forward-eps", json=eps_payload(), headers=headers(admin, "draft-eps")
+    )
+    assert created.status_code == 200
+    response = client.get(
+        "/api/v2/analysis/2330?knowledge_cutoff_at=2026-08-03T00:00:00Z"
+    )
+    data = response.json()
+    assert data["valuation"]["status"] == "needs_human_input"
+    assert data["valuation"]["reason"] == "approved_forward_eps_required"
+    assert data["data_quality"]["needs_human_input"] == ["approved_forward_eps"]
+    assert data["valuation"]["forward_eps"][0]["effective_approval_status"] == "draft"
+
+
+def test_pe_approval_rejects_noncanonical_rule(monkeypatch, tmp_path):
+    admin = enable_writes(monkeypatch, tmp_path)
+    pe = client.post(
+        "/api/v2/pe-scenarios", json=pe_payload(), headers=headers(admin, "pe")
+    ).json()
+    response = client.post(
+        f"/api/v2/pe-scenarios/{pe['pe_scenario']['id']}/approval",
+        json=approval_payload("VAL-03"), headers=headers(admin, "wrong-rule"),
+    )
+    assert response.status_code == 422
+    assert "cannot approve" in response.json()["detail"]
