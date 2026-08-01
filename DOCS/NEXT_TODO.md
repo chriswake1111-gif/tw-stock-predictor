@@ -34,6 +34,8 @@
 - [x] 報告新增 `universe_gate.csv` 與類別覆蓋摘要；不可事後移除失敗／缺資料標的，且 `promotion_to_default` 固定為 `false`。
 - [x] 新增 TWSE 月成交唯讀稽核、零量列移除、參考交易日缺口與逐筆官方補值契約；1301 2025-08 與 2317 2018-10 已和官方資料完全對齊。
 - [x] Audited v2 報告：`reports/backtest/expanded-phase-a-audited-v2-20260801-b8e7d89c9854`；14 檔均有尚未完整解釋的長期交易日／零量差異，品質合格可用數為 0，正式結論為 `hold_for_revision`。
+- [x] 建立 Phase 1 TWSE 官方完整性層：以 `FMTQIK` 建立 3,068 個官方成交日，只針對缺口月份抓取 `STOCK_DAY`，並收錄 `TWT49U`／`TWTAUU` 公司行動；407 個請求具備限速、checkpoint 與同 scope 續跑。
+- [x] 完成 14 檔官方對帳報告 `official_integrity_audit_v1.json`；辨識供應商漏掉的補行星期六交易、2317 停牌／未交易日及 006208 官方零量列。既有 `daily_ohlcv` 52,074 筆與 canonical SHA-256 均未改變。
 
 ### 尚未完成／不得誤解為已完成
 
@@ -45,15 +47,16 @@
 - [ ] `^TWII` 無法直接交易，報告使用 ETF 稅率與單位的「指數代理成本模型」，不是可成交商品的精確重現。
 - [ ] 回測尚未納入股利現金流、個股漲跌停、成交量容量與市場衝擊。
 - [ ] adaptive v1.1 已完成 Phase A 計算，但官方完整性 gate 為 0/14 可用；不得視為跨標的驗證完成，legacy 仍是正式預設策略。
-- [ ] yfinance 在長期樣本中含市場休市零量列、停牌合成列及市場開市缺日；仍需建立全期間 TWSE 原始交易日曆與公司行動還原流程。
+- [ ] Phase 1 已建立官方交易日曆與公司行動 inventory，但尚未建立調整價還原流程；ETF 分割／反分割、面額變更及股利現金流語意仍需 Phase 2 明確契約。
 - [ ] 測試仍有 FastAPI TestClient 對 `httpx` 的第三方棄用警告，暫不影響功能。
 
 ### 建議下一步
 
-1. 建立全期間 TWSE 原始交易日曆與公司行動還原流程，逐月解決 14 檔 `quality_warning`；不得以大量推算補值取代官方來源。
-2. 資料完整性達門檻後，以新的固定 snapshot 重跑 Phase A；通過前不得針對目前驗證窗調整 adaptive profile。
-3. Phase A 取得至少 10 檔品質合格樣本後，再預註冊 TPEX Phase B 與額外熊市樣本；通過前不得替換 legacy。
-4. 完成 CBC 官方資料採集及融資指標的業務公式確認後，再擴充總體／籌碼判定。
+1. 先設計並核准 Phase 2 調整價語意：明確處理現金股利、除權、減資、ETF 分割／反分割與面額變更；不得直接把官方 raw close 混入既有 adjusted snapshot。
+2. 依核准契約建立可回滾的新 snapshot，補入官方有成交而供應商缺少的日期，再重新計算 SHA-256 與品質 gate；不得用內插或固定值補價量。
+3. 資料完整性達門檻後，以新固定 snapshot 重跑 Phase A；通過前不得針對目前驗證窗調整 adaptive profile。
+4. Phase A 取得至少 10 檔品質合格樣本後，再預註冊 TPEX Phase B 與額外熊市樣本；通過前不得替換 legacy。
+5. 完成 CBC 官方資料採集及融資指標的業務公式確認後，再擴充總體／籌碼判定。
 
 ## 📌 當前開發進度 (Current Progress - Fourth Code Review 完成)
 - [x] **第四次 Code Review 全面巡檢與極限邊界優化 (Fourth Code Review Complete)**

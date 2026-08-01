@@ -2,40 +2,24 @@
 
 import argparse
 import json
+import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 import requests
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-def roc_date_to_iso(value: str) -> str:
-    year, month, day = (int(part) for part in value.strip().split("/"))
-    return f"{year + 1911:04d}-{month:02d}-{day:02d}"
-
-
-def parse_twse_stock_day(payload: dict) -> list[dict]:
-    if payload.get("stat") != "OK":
-        raise ValueError(f"TWSE response is not OK: {payload.get('stat')}")
-    rows = []
-    for raw in payload.get("data", []):
-        rows.append({
-            "date": roc_date_to_iso(raw[0]),
-            "volume": int(str(raw[1]).replace(",", "")),
-            "open": float(str(raw[3]).replace(",", "")),
-            "high": float(str(raw[4]).replace(",", "")),
-            "low": float(str(raw[5]).replace(",", "")),
-            "close": float(str(raw[6]).replace(",", "")),
-            "change": str(raw[7]).strip(),
-        })
-    return rows
+from src.collectors.twse_official_collector import parse_twse_stock_day
 
 
 def audit_month(symbol: str, month: str, snapshot: pd.DataFrame, official_rows: list[dict]) -> dict:
     month_prefix = datetime.strptime(month, "%Y-%m").strftime("%Y-%m")
     provider = snapshot[snapshot["date"].astype(str).str.startswith(month_prefix)].copy()
     provider_dates = set(provider["date"].astype(str))
-    official_dates = {row["date"] for row in official_rows}
+    official_dates = {row["trade_date"] for row in official_rows}
     zero_volume_dates = sorted(
         provider.loc[pd.to_numeric(provider["volume"], errors="coerce") <= 0, "date"]
         .astype(str)
@@ -52,7 +36,9 @@ def audit_month(symbol: str, month: str, snapshot: pd.DataFrame, official_rows: 
         "missing_official_dates": missing,
         "provider_only_dates": provider_only,
         "zero_volume_provider_dates": zero_volume_dates,
-        "official_missing_rows": [row for row in official_rows if row["date"] in missing],
+        "official_missing_rows": [
+            row for row in official_rows if row["trade_date"] in missing
+        ],
     }
 
 

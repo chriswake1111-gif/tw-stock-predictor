@@ -101,6 +101,39 @@ python tools\audit_twse_snapshot.py `
 
 發現缺日或零量列時以 exit code 1 表示品質警告；完全對齊時回傳 0。
 
+## TWSE 官方完整性層（Phase 1）
+
+Phase 1 僅新增平行的官方原始事實表，不覆寫既有 `daily_ohlcv`，也不自動建立調整價：
+
+- `twse_market_calendar`：TWSE `FMTQIK` 市場實際成交日與市場成交統計。
+- `twse_daily_raw`：只針對快照缺口月份查詢 `STOCK_DAY` 的未調整個股日資料。
+- `twse_corporate_actions`：`TWT49U` 除權息與 `TWTAUU` 減資事件。
+- `twse_data_audit_runs`：稽核 scope、請求計畫、checkpoint、完成狀態與摘要。
+
+所有表均保留來源 dataset、來源 URL、抓取時間與原始 payload SHA-256。相同 `audit_id` 只有在快照、日期範圍與標的完全相同時才能續跑；scope 不一致時必須停止，避免混合稽核紀錄。
+
+```powershell
+python tools\audit_twse_official_data.py `
+  --snapshot-dir reports\backtest\expanded-phase-a-audited-v2-20260801-b8e7d89c9854 `
+  --db-path data\cache.db `
+  --start 2014-01-01 `
+  --end 2026-07-31 `
+  --dry-run
+```
+
+確認請求數後，將 `--dry-run` 改為 `--execute`，並指定可重用的 `--audit-id`。執行時預設每次官方請求間隔 150 ms；中斷後可用相同參數與 audit ID 續跑。exit code 1 表示完成稽核但仍有 `quality_warning`，不是抓取程序失敗。
+
+2026-08-01 稽核 `twse-phase1-20260801` 的範圍為 2014-01-01 至 2026-07-31、14 檔 TWSE 標的：
+
+- 官方市場成交日 3,068 日，407 個官方請求全部完成。
+- 14/14 仍為 `quality_warning`，品質合格為 0/14。
+- 多數標的缺少 12～13 個官方有成交日；主要型態包含台灣補行交易的星期六，顯示 yfinance 固定快照並非完整官方交易日集合。
+- 2317 的 6 日無個股官方成交資料被分為停牌／未交易，不再誤判為供應商缺日。
+- 006208 的 162 筆官方零量列被獨立分類，不得當作有效 OHLCV 或推測補值。
+- 稽核前後既有 `daily_ohlcv` 均為 52,074 筆；以排序後 pipe 分隔、列間換行且結尾不加換行的 canonical bytes 計算，SHA-256 均為 `2a7e8411f8780906ec78bbba409e5a7dbdd20a0b88b363bf25382fa218a449c3`。
+
+完整分類證據保存於 `official_integrity_audit_v1.json`。Phase 1 只回答「官方市場有無交易、個股有無官方成交列、是否為官方零量、附近有哪些已收錄公司行動」；ETF 分割／反分割、面額變更與調整價還原仍屬 Phase 2，不得由本層推算或自動修補。
+
 ## Adaptive 配置研究契約
 
 - legacy 訊號、退場與風控規則維持不變；adaptive 只改變 Stage 配置比例。
