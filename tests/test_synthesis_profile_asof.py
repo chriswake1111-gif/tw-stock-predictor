@@ -114,6 +114,83 @@ def test_evidence_strength_labels_must_increase_with_thresholds():
         invalid.canonical_payload()
 
 
+def test_profile_selectors_are_mutually_exclusive_at_service_boundary(tmp_path):
+    service = EvidenceAnalysisService(str(tmp_path / "selector-conflict.db"))
+    with pytest.raises(
+        ValueError, match="synthesis_profile_selectors_are_mutually_exclusive"
+    ):
+        service.select_profile(
+            "2330.TW",
+            "2026-06-01T00:00:00Z",
+            logical_profile_id="profile-a",
+            profile_revision_id="profile-b-revision",
+        )
+
+
+def test_future_available_revision_is_not_visible_and_does_not_hide_rev1(tmp_path):
+    db_path = tmp_path / "future-available.db"
+    repo = SynthesisProfileRepository(str(db_path))
+    rev1 = repo.add_revision(
+        profile(), "rev1", ingested_at="2026-01-01T00:00:00Z"
+    )
+    repo.add_approval(
+        approval(rev1["id"]), "approve-rev1", ingested_at="2026-01-02T00:00:00Z"
+    )
+    rev2 = repo.add_revision(
+        profile(2, rev1["id"]), "rev2", ingested_at="2026-02-01T00:00:00Z"
+    )
+    service = EvidenceAnalysisService(str(db_path))
+    selected, hidden = service.select_profile(
+        "2330.TW",
+        "2026-01-15T00:00:00Z",
+        profile_revision_id=rev2["id"],
+    )
+    assert selected is None
+    assert hidden == {
+        "status": "needs_human_input",
+        "reason": "synthesis_profile_revision_not_visible_at_cutoff",
+    }
+    historical, error = service.select_profile(
+        "2330.TW",
+        "2026-01-15T00:00:00Z",
+        profile_revision_id=rev1["id"],
+    )
+    assert error is None
+    assert historical["id"] == rev1["id"]
+
+
+def test_future_ingested_revision_is_not_visible_and_does_not_hide_rev1(tmp_path):
+    db_path = tmp_path / "future-ingested.db"
+    repo = SynthesisProfileRepository(str(db_path))
+    rev1 = repo.add_revision(
+        profile(), "rev1", ingested_at="2026-01-01T00:00:00Z"
+    )
+    repo.add_approval(
+        approval(rev1["id"]), "approve-rev1", ingested_at="2026-01-02T00:00:00Z"
+    )
+    rev2 = repo.add_revision(
+        profile(2, rev1["id"]), "rev2", ingested_at="2026-09-01T00:00:00Z"
+    )
+    service = EvidenceAnalysisService(str(db_path))
+    selected, hidden = service.select_profile(
+        "2330.TW",
+        "2026-06-01T00:00:00Z",
+        profile_revision_id=rev2["id"],
+    )
+    assert selected is None
+    assert hidden == {
+        "status": "needs_human_input",
+        "reason": "synthesis_profile_revision_not_visible_at_cutoff",
+    }
+    historical, error = service.select_profile(
+        "2330.TW",
+        "2026-06-01T00:00:00Z",
+        profile_revision_id=rev1["id"],
+    )
+    assert error is None
+    assert historical["id"] == rev1["id"]
+
+
 def test_explicit_profile_cannot_resurrect_superseded_revision(tmp_path):
     db_path = tmp_path / "superseded.db"
     repo = SynthesisProfileRepository(str(db_path))

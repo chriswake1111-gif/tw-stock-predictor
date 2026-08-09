@@ -48,6 +48,13 @@ revision requires a new approval. The latest revoke does not fall back to an old
 revision. If selection is omitted, zero profiles requires human input and multiple applicable
 profiles requires explicit selection; there is no hidden symbol/global/latest precedence.
 
+`logical_synthesis_profile_id` and `synthesis_profile_revision_id` are mutually exclusive
+alternative selectors. Supplying both is rejected with
+`synthesis_profile_selectors_are_mutually_exclusive`. Exact revision lookup is cutoff-safe: both
+`available_at` and `ingested_at` must be within `knowledge_cutoff_at`. A future-hidden exact ID
+returns only `synthesis_profile_revision_not_visible_at_cutoff` and does not disclose its logical
+identity, lineage, revision number, or effective visible revision.
+
 ## Immutable analysis snapshot
 
 `POST /api/v2/analysis/{symbol}/refresh` computes the same additive analysis used by the GET path

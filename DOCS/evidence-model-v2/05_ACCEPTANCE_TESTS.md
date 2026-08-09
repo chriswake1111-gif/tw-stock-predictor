@@ -147,3 +147,8 @@ Acceptance includes unit conversion, explicit CBC release timestamp, M1B revisio
 13. Capture mode is server controlled; explicit cutoff is historical reconstruction.
 14. Fresh DB, existing Phase 6 DB, rerun, transaction rollback, and checksum behavior pass.
 15. v1 golden remains unchanged and no runtime cache artifacts are tracked.
+16. Logical-profile and exact-revision selectors are mutually exclusive at service and API layers.
+17. A conflicting refresh request creates neither a snapshot nor an idempotency binding.
+18. Exact profile lookup enforces both `available_at` and `ingested_at` knowledge cutoffs.
+19. A future-hidden revision discloses no identity or lineage metadata.
+20. A historically visible approved revision remains valid until a newer revision becomes visible.

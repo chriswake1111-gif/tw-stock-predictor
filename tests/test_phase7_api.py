@@ -1,6 +1,9 @@
+import sqlite3
+
 from fastapi.testclient import TestClient
 
 from src.api.main import app
+from src.repositories.analysis_snapshot_repository import AnalysisSnapshotRepository
 
 
 client = TestClient(app)
@@ -219,3 +222,52 @@ def test_server_controls_live_capture_mode_and_rejects_caller_override(monkeypat
         json={"capture_mode": "live_refresh"},
     )
     assert forged.status_code == 422
+
+
+def test_get_analysis_rejects_conflicting_synthesis_selectors(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "get-conflict.db"))
+    response = client.get(
+        "/api/v2/analysis/2330.TW",
+        params={
+            "logical_synthesis_profile_id": "profile-a",
+            "synthesis_profile_revision_id": "profile-b-revision",
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        "synthesis_profile_selectors_are_mutually_exclusive"
+    )
+
+
+def test_refresh_selector_conflict_creates_no_snapshot_or_idempotency_binding(
+    monkeypatch, tmp_path
+):
+    key = configure(monkeypatch, tmp_path)
+    db_path = tmp_path / "phase7-api.db"
+    AnalysisSnapshotRepository(str(db_path))
+    with sqlite3.connect(db_path) as conn:
+        before_snapshots = conn.execute(
+            "SELECT COUNT(*) FROM analysis_snapshots"
+        ).fetchone()[0]
+        before_bindings = conn.execute(
+            "SELECT COUNT(*) FROM analysis_snapshot_idempotency_keys"
+        ).fetchone()[0]
+    response = client.post(
+        "/api/v2/analysis/2330.TW/refresh",
+        headers=headers(key, "selector-conflict-refresh"),
+        json={
+            "logical_synthesis_profile_id": "profile-a",
+            "synthesis_profile_revision_id": "profile-b-revision",
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        "synthesis_profile_selectors_are_mutually_exclusive"
+    )
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM analysis_snapshots"
+        ).fetchone()[0] == before_snapshots
+        assert conn.execute(
+            "SELECT COUNT(*) FROM analysis_snapshot_idempotency_keys"
+        ).fetchone()[0] == before_bindings

@@ -825,6 +825,8 @@ def get_v2_analysis(
         cutoff, cutoff_policy = resolve_knowledge_cutoff(
             knowledge_cutoff_at, as_of_date
         )
+        if logical_synthesis_profile_id and synthesis_profile_revision_id:
+            raise ValueError("synthesis_profile_selectors_are_mutually_exclusive")
         normalized_symbol = normalize_symbol(symbol)
         valuation = _service().analyze(
             normalized_symbol, cutoff, industry=industry, market=market
@@ -950,6 +952,7 @@ def get_v2_analysis(
             "approved_synthesis_profile_required": "approved_synthesis_profile",
             "synthesis_profile_selection_required": "synthesis_profile_selection",
             "synthesis_profile_revision_superseded": "approved_synthesis_profile",
+            "synthesis_profile_revision_not_visible_at_cutoff": "approved_synthesis_profile",
             "synthesis_profile_approval_revoked": "approved_synthesis_profile",
             "synthesis_profile_revoked": "approved_synthesis_profile",
         }.get(target_confluence.get("reason"))

@@ -50,6 +50,16 @@ no output; PASS
 The local warning category is unchanged from the baseline local environment. GitHub Actions is
 recorded after the Draft PR run.
 
+## First review remediation
+
+- Synthesis logical-ID and exact-revision selectors are mutually exclusive in both the route and
+  service boundaries.
+- Conflicting refresh requests are rejected before snapshot or idempotency persistence.
+- Exact revision lookup now enforces cutoff-visible `available_at` and `ingested_at`.
+- Future-hidden exact revisions return a non-disclosing reason and cannot alter historical rev1
+  selection.
+- Visible superseded and revoked-latest no-fallback behavior remains unchanged.
+
 ## Workspace safety
 
 The user-owned untracked specification package remains untracked, unstaged, and unchanged. Its

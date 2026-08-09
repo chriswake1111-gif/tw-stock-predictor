@@ -217,3 +217,9 @@ distinct target-family `support_count`, dependency-component `independent_method
 profile-controlled evidence strength, cross-role FB-04 alignment, exact profile revision and
 approval, Rule Trace, and `summary_policy=maximum_cluster_strength`. No primary or recommended
 target field is emitted.
+
+The two synthesis selectors are mutually exclusive. GET analysis and POST refresh return HTTP 422
+with `synthesis_profile_selectors_are_mutually_exclusive` when both are supplied; refresh creates
+no snapshot or idempotency binding. An exact revision hidden by either `available_at` or
+`ingested_at` returns section-local `synthesis_profile_revision_not_visible_at_cutoff` without
+future identity metadata.

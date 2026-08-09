@@ -312,10 +312,16 @@ class SynthesisProfileRepository:
             ).fetchall()
         return [self._public_profile(dict(row)) for row in rows]
 
-    def get_revision(self, profile_revision_id: str) -> dict[str, Any] | None:
+    def get_revision_as_of(
+        self, profile_revision_id: str, knowledge_cutoff_at: str
+    ) -> dict[str, Any] | None:
+        cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM synthesis_profile_revisions WHERE id = ?",
-                (profile_revision_id,),
+                """
+                SELECT * FROM synthesis_profile_revisions
+                WHERE id = ? AND available_at <= ? AND ingested_at <= ?
+                """,
+                (profile_revision_id, cutoff, cutoff),
             ).fetchone()
         return self._public_profile(dict(row)) if row else None

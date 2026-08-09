@@ -85,29 +85,35 @@ class EvidenceAnalysisService:
         profile_revision_id: str | None = None,
     ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
+        if logical_profile_id and profile_revision_id:
+            raise ValueError("synthesis_profile_selectors_are_mutually_exclusive")
         states = self.profile_repository.effective_states_as_of(cutoff)
         if profile_revision_id:
-            selected = [state for state in states if state["id"] == profile_revision_id]
-            if not selected:
-                requested = self.profile_repository.get_revision(profile_revision_id)
-                if requested:
-                    latest = [
-                        state for state in states
-                        if state["logical_profile_id"] == requested["logical_profile_id"]
-                    ]
-                    if latest and latest[0]["id"] != profile_revision_id:
-                        return None, {
-                            "status": "needs_human_input",
-                            "reason": "synthesis_profile_revision_superseded",
-                            "profile_revision_id": profile_revision_id,
-                            "effective_profile_revision_id": latest[0]["id"],
-                        }
+            requested = self.profile_repository.get_revision_as_of(
+                profile_revision_id, cutoff
+            )
+            if requested is None:
+                return None, {
+                    "status": "needs_human_input",
+                    "reason": "synthesis_profile_revision_not_visible_at_cutoff",
+                }
+            latest = [
+                state for state in states
+                if state["logical_profile_id"] == requested["logical_profile_id"]
+            ]
+            if not latest:
                 return None, {
                     "status": "needs_human_input",
                     "reason": "approved_synthesis_profile_required",
-                    "profile_revision_id": profile_revision_id,
                 }
-            candidates = selected
+            if latest[0]["id"] != profile_revision_id:
+                return None, {
+                    "status": "needs_human_input",
+                    "reason": "synthesis_profile_revision_superseded",
+                    "profile_revision_id": profile_revision_id,
+                    "effective_profile_revision_id": latest[0]["id"],
+                }
+            candidates = latest
         elif logical_profile_id:
             candidates = [
                 state for state in states
