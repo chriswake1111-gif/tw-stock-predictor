@@ -1,5 +1,11 @@
 # DATA_REQUIREMENTS.md
 
+## Phase 3 additive liquidity contracts
+
+`cbc_m1b_monthly` preserves CBC EF15M01 raw values (`TWD_million`) and normalized `value_twd`, with period, data date, explicit official-release-derived `available_at`, fetch／ingest timestamps, source metadata, immutable revision and status. Unknown historical release time is `needs_human_input`; it is never inferred from fetch time.
+
+`market_turnover_daily` preserves TWSE `exchangeReport/FMTQIK.TradeValue` and TPEx `tpex_daily_trading_index.TradeAmount` independently in TWD. A total is present only when both markets are present; otherwise the record is `partial`.
+
 ## 1. 核心資料表
 
 ### 1.1 `forward_eps_observations`

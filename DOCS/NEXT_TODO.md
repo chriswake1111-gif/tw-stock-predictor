@@ -92,3 +92,7 @@
 
 - [x] **GitHub 遠端公開倉庫**
   - GitHub Repository URL: [https://github.com/chriswake1111-gif/tw-stock-predictor](https://github.com/chriswake1111-gif/tw-stock-predictor)
+
+## Evidence Model V2 Phase 3 status (2026-08-01)
+
+M1B／市場成交額 additive contracts、as-of repository、流動性 engine／service 與 v2 API section 已進入本階段驗收。CBC 歷史月份若沒有經官方發布日曆或新聞稿核對的 `available_at` mapping，必須保持 `needs_human_input`；不得用抓取時間回填。Phase 4 尚未開始。

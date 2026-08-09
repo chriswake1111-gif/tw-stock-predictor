@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import hmac
 import sqlite3
+import yaml
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
@@ -24,6 +25,7 @@ from src.domain.valuation import (
     utc_now_timestamp,
 )
 from src.services.forward_eps_service import ForwardEPSService
+from src.services.market_liquidity_service import MarketLiquidityService
 from src.services.rule_registry import RuleRegistry
 
 
@@ -78,6 +80,18 @@ class ApprovalRequest(StrictRequest):
 
 def _service() -> ForwardEPSService:
     return ForwardEPSService(os.getenv("DATABASE_PATH", "data/cache.db"))
+
+
+def _liquidity_service() -> MarketLiquidityService:
+    config_path = os.getenv("CONFIG_PATH", "config/config.yaml")
+    try:
+        with open(config_path, encoding="utf-8") as config_file:
+            config = yaml.safe_load(config_file) or {}
+    except OSError:
+        config = {}
+    return MarketLiquidityService(
+        os.getenv("DATABASE_PATH", "data/cache.db"), config=config
+    )
 
 
 def _require_write_access(api_key: str | None) -> str:
@@ -288,8 +302,27 @@ def get_v2_analysis(
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    try:
+        liquidity = _liquidity_service().analyze(cutoff)
+    except (ValueError, RuntimeError, sqlite3.Error) as exc:
+        liquidity = {
+            "status": "insufficient_data",
+            "reason": f"liquidity_data_unavailable: {exc}",
+            "rules_used": [],
+        }
+
     valuation_available = valuation["status"] in {"available", "not_applicable"}
-    missing = [] if valuation_available else ["forward_valuation"]
+    liquidity_available = liquidity["status"] == "available"
+    available_sections = []
+    missing = []
+    if valuation_available:
+        available_sections.append("valuation")
+    else:
+        missing.append("forward_valuation")
+    if liquidity_available:
+        available_sections.append("liquidity")
+    else:
+        missing.append("liquidity")
     needs_human = []
     if valuation["status"] == "needs_human_input":
         if valuation["reason"] == "approved_forward_eps_required":
@@ -308,20 +341,20 @@ def get_v2_analysis(
         },
         "data_quality": {
             "status": "partial",
-            "available_sections": ["valuation"] if valuation_available else [],
+            "available_sections": available_sections,
             "missing_sections": missing,
             "stale_sections": [],
             "needs_human_input": needs_human,
         },
         "valuation": valuation,
-        "liquidity": {"status": "unsupported", "reason": "phase_3_not_implemented"},
+        "liquidity": liquidity,
         "technical_support": {"status": "unsupported", "reason": "phase_4_not_implemented"},
         "wave_scenarios": {"status": "needs_human_input", "reason": "phase_4_not_implemented"},
         "fibonacci_scenarios": {"status": "unsupported", "reason": "phase_4_not_implemented"},
         "target_confluence": {"status": "unsupported", "reason": "phase_7_not_implemented"},
         "deployment_plan": {"status": "unsupported", "reason": "phase_5_not_implemented"},
         "invalidation": valuation["invalidation_conditions"],
-        "rules_used": valuation["rules_used"],
+        "rules_used": valuation["rules_used"] + liquidity.get("rules_used", []),
         "unsupported": ["eva_formula", "margin_return_8_percent_formula"],
         "snapshot_id": None,
     }

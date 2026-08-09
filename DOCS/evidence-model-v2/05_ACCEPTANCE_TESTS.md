@@ -1,5 +1,9 @@
 # ACCEPTANCE_TESTS.md
 
+## Phase 3 additions
+
+Acceptance includes unit conversion, explicit CBC release timestamp, M1B revision visibility, revoked revision behavior, both-market completeness, partial data, exact 20／60-observation rolling means, deterministic `<=` percentile ties, insufficient history, 3.3%～3.4% reference-only alert, LIQ-03 exclusion, symbol-invariant API output, section independence, clean／rerunnable migration, full regression and unchanged v1 golden snapshots.
+
 ## A. 規則治理
 
 1. `U` 級規則不能被註冊為 `verified_core`。

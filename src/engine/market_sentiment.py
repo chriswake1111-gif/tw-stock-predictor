@@ -11,6 +11,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class MarketSentimentEngine:
+    # Legacy v1 compatibility only. The fixed threshold is not a verified v2 rule;
+    # Evidence Model v2 Phase 3 uses MarketLiquidityService instead.
     """市場過熱與情緒溫度計演算引擎 (零假值與零 fallback 備援保護)"""
 
     def __init__(self, db_path: str = "data/cache.db", config_path: str = "config/config.yaml"):

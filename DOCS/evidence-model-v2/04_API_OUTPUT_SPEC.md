@@ -1,5 +1,9 @@
 # API_OUTPUT_SPEC.md
 
+## Phase 3 liquidity section
+
+`GET /api/v2/analysis/{symbol}` additively returns a symbol-invariant `liquidity` section with its own status, market components in TWD, M1B period／availability, percentage ratio, 20／60-day observations, 5／10-year deterministic percentiles, alert, reference-case limitation, Rule Trace and data quality. Section failure does not turn another section into HTTP 500. Only LIQ-01 and LIQ-02 may appear; no sell or market-top boolean is emitted.
+
 ## 1. 新增平行 API
 
 ```text

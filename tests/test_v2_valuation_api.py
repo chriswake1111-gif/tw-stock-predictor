@@ -7,6 +7,10 @@ client = TestClient(app)
 
 
 def enable_writes(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "src.repositories.forward_eps_repository.utc_now_timestamp",
+        lambda: "2026-08-01T08:00:00.000000Z",
+    )
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "valuation.db"))
     monkeypatch.setenv("EVIDENCE_V2_WRITES_ENABLED", "true")
     monkeypatch.setenv("EVIDENCE_V2_ADMIN_API_KEY", "test-secret")

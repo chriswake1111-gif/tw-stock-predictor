@@ -26,6 +26,14 @@ sentiment:
   turnover_m1b_threshold: 0.020       # 大盤單日成交金額 / M1B 頭部過熱臨界比率
   margin_balance_growth_threshold: 0.08  # 融資餘額觀察期成長率警示門檻 (8%)
 
+# Evidence Model v2 Phase 3 project-operationalized context thresholds.
+# These classify historical percentile context; they are not sell/top signals.
+liquidity_v2:
+  elevated_percentile: 80.0
+  historically_high_percentile: 95.0
+  min_observations_5y: 1000
+  min_observations_10y: 2000
+
 notifier:
   # LINE Messaging API (LINE Bot) 推播金鑰與 User ID
   line_token: ""
