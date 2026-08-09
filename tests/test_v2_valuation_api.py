@@ -157,7 +157,7 @@ def test_draft_forward_eps_requires_human_approval(monkeypatch, tmp_path):
     data = response.json()
     assert data["valuation"]["status"] == "needs_human_input"
     assert data["valuation"]["reason"] == "approved_forward_eps_required"
-    assert data["data_quality"]["needs_human_input"] == ["approved_forward_eps"]
+    assert "approved_forward_eps" in data["data_quality"]["needs_human_input"]
     assert data["valuation"]["forward_eps"][0]["effective_approval_status"] == "draft"
 
 

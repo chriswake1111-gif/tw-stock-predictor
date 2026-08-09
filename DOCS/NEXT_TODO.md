@@ -44,6 +44,8 @@
 - [x] Evidence Model v2 Phase 2 review hardening：寫入預設關閉、管理 API key、draft-only import、immutable approval ledger、U 級 fail-closed、C 級 operationalization 與永久 idempotency ledger。
 - [x] Phase 2 驗收：完整回歸結果與 v1 golden snapshot 證據更新於 `DOCS/evidence-model-v2/PHASE2_ACCEPTANCE_EVIDENCE.md`；未新增外部 Forward EPS Collector。
 - [x] Phase 2 CI／approval follow-up：固定 FastAPI／Starlette／Pydantic／httpx2／pytest 相容組、draft/revoked EPS 狀態、VAL-02／VAL-04 精確核准對應與 backdated decision 防護。
+- [x] Evidence Model v2 Phase 3：完成 CBC M1B、TWSE＋TPEx turnover 的 as-of 對齊、partial／revoked fail-closed 與 LIQ-01／LIQ-02 trace。
+- [x] Evidence Model v2 Phase 4：完成 symbol-bound 人工錨點 immutable revision、rule-specific approval 與 FB-03／FB-04 情境參考。
 
 ### 尚未完成／不得誤解為已完成
 
@@ -59,7 +61,7 @@
 - [ ] `006208.TW` 有 32 筆官方成交股數／金額存在但 OHLC 為空，另有 1 筆錨點不足；`2308.TW` 有 1 筆因子共識平手。這 34 筆維持 `insufficient_data`，不得用成交均價或內插補值。
 - [ ] 測試仍有 FastAPI TestClient 對 `httpx` 的第三方棄用警告，暫不影響功能。
 - [ ] Evidence Model v2 尚無外部 Forward EPS Collector；目前只允許人工或已授權來源匯入。
-- [ ] Evidence Model v2 尚未進入 Phase 3 M1B、Phase 4 人工錨點、Phase 5 三等份 planner 與 Phase 7 immutable analysis snapshot。
+- [ ] Evidence Model v2 尚未進入 Phase 5 三等份 planner 與 Phase 7 immutable analysis snapshot；Phase 4 不含自動錨點、自動數浪或費氏時間窗。
 
 ### 建議下一步
 

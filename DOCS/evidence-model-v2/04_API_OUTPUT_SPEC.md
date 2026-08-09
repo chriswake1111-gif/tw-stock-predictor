@@ -148,3 +148,23 @@ POST /api/v2/deployment-plan
   "missing_sections": ["forward_valuation"]
 }
 ```
+
+---
+
+## Phase 4 technical support section
+
+受保護的寫入端點：
+
+```text
+POST /api/v2/anchors
+POST /api/v2/anchors/{anchor_revision_id}/approval
+GET  /api/v2/anchors/{symbol}
+```
+
+寫入預設關閉，沿用 `EVIDENCE_V2_WRITES_ENABLED`、管理 API key 與 server-controlled actor。`GET /api/v2/analysis/{symbol}` 的 `technical_support` 獨立回傳已核准 FB-03／FB-04 scenario。每個 scenario 包含公式、方向、TWD per share 計算層級、明確角色 anchors、anchor revision ID、approval ID 及完整 Rule Trace。
+
+`formula` 是穩定的 machine-readable identifier：FB-03 為 `equal_move`，FB-04 為 `retracement_0382`。`formula_expression` 分別保存 `C + (B - A)` 與 `B - 0.382 * (B - A)`，兩者不得混用。
+
+沒有 anchor 或只有 draft 時回 `needs_human_input`；technical section 失敗不使 valuation 或 liquidity 回傳 HTTP 500。`wave_scenarios`、費氏時間窗與自動波浪仍未實作。所有 scenario 都明示僅為參考、不是預測、保證目標或交易指令。
+
+Top-level `data_quality.needs_human_input` 對應如下：`manual_anchor_required` → `manual_anchor`；`approved_manual_anchor_required` 或 `anchor_approval_revoked` → `approved_manual_anchor`。有有效 scenario 時不得保留這兩個缺口。

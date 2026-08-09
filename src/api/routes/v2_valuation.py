@@ -24,9 +24,17 @@ from src.domain.valuation import (
     normalize_utc_timestamp,
     utc_now_timestamp,
 )
+from src.domain.technical_anchor import (
+    AnchorPoint,
+    AnchorRevisionStatus,
+    AnchorRole,
+    AnchorType,
+    ManualAnchorSetRevision,
+)
 from src.services.forward_eps_service import ForwardEPSService
 from src.services.market_liquidity_service import MarketLiquidityService
 from src.services.rule_registry import RuleRegistry
+from src.services.technical_scenario_service import TechnicalScenarioService
 
 
 router = APIRouter(prefix="/api/v2", tags=["evidence-model-v2"])
@@ -78,6 +86,33 @@ class ApprovalRequest(StrictRequest):
     available_at: str
 
 
+class AnchorPointRequest(StrictRequest):
+    role: AnchorRole
+    price: float
+    market_date: str
+    anchor_type: AnchorType = AnchorType.MANUAL_PRICE_ANCHOR
+
+
+class ManualAnchorRequest(StrictRequest):
+    logical_anchor_set_id: str
+    revision_number: int
+    revision_of: str | None = None
+    symbol: str
+    evidence_basis_rule_id: str
+    anchors: list[AnchorPointRequest]
+    available_at: str
+    source: str
+    source_note: str | None = None
+    status: AnchorRevisionStatus = AnchorRevisionStatus.AVAILABLE
+
+
+class TechnicalApprovalRequest(StrictRequest):
+    decision: ApprovalStatus
+    rule_id: str
+    rationale: str
+    approved_at: str
+
+
 def _service() -> ForwardEPSService:
     return ForwardEPSService(os.getenv("DATABASE_PATH", "data/cache.db"))
 
@@ -92,6 +127,10 @@ def _liquidity_service() -> MarketLiquidityService:
     return MarketLiquidityService(
         os.getenv("DATABASE_PATH", "data/cache.db"), config=config
     )
+
+
+def _technical_service() -> TechnicalScenarioService:
+    return TechnicalScenarioService(os.getenv("DATABASE_PATH", "data/cache.db"))
 
 
 def _require_write_access(api_key: str | None) -> str:
@@ -109,11 +148,17 @@ def _require_write_access(api_key: str | None) -> str:
 
 
 def _public_dto(record: dict) -> dict:
-    return {
-        key: value
-        for key, value in record.items()
-        if key not in {"idempotency_key", "payload_fingerprint"}
-    }
+    def scrub(value):
+        if isinstance(value, dict):
+            return {
+                key: scrub(item) for key, item in value.items()
+                if key not in {"idempotency_key", "payload_fingerprint"}
+            }
+        if isinstance(value, list):
+            return [scrub(item) for item in value]
+        return value
+
+    return scrub(record)
 
 
 def resolve_knowledge_cutoff(
@@ -283,6 +328,80 @@ def approve_pe_scenario(
     )
 
 
+@router.post("/anchors")
+def create_manual_anchor_set(
+    payload: ManualAnchorRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    admin_api_key: str | None = Header(default=None, alias="X-Admin-API-Key"),
+):
+    try:
+        actor = _require_write_access(admin_api_key)
+        revision = ManualAnchorSetRevision(
+            logical_anchor_set_id=payload.logical_anchor_set_id,
+            revision_number=payload.revision_number,
+            revision_of=payload.revision_of,
+            symbol=normalize_symbol(payload.symbol),
+            evidence_basis_rule_id=payload.evidence_basis_rule_id,
+            anchors=tuple(AnchorPoint(
+                role=point.role, price=point.price, market_date=point.market_date,
+                anchor_type=point.anchor_type,
+            ) for point in payload.anchors),
+            available_at=payload.available_at,
+            created_by=actor,
+            source=payload.source,
+            source_note=payload.source_note,
+            status=payload.status,
+        )
+        result = _technical_service().ingest(revision, idempotency_key)
+        return {"status": "available", "approval_status": "draft", "anchor_set": _public_dto(result)}
+    except (ValueError, RuntimeError, sqlite3.IntegrityError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/anchors/{anchor_revision_id}/approval")
+def approve_manual_anchor_set(
+    anchor_revision_id: str,
+    payload: TechnicalApprovalRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    admin_api_key: str | None = Header(default=None, alias="X-Admin-API-Key"),
+):
+    try:
+        actor = _require_write_access(admin_api_key)
+        result = _technical_service().record_approval(
+            anchor_revision_id=anchor_revision_id,
+            decision=payload.decision,
+            rule_id=payload.rule_id,
+            rationale=payload.rationale,
+            approved_at=payload.approved_at,
+            approved_by=actor,
+            idempotency_key=idempotency_key,
+        )
+        return {"status": "available", "approval": _public_dto(result)}
+    except (ValueError, RuntimeError, sqlite3.IntegrityError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/anchors/{symbol}")
+def list_manual_anchor_sets(
+    symbol: str,
+    knowledge_cutoff_at: str | None = Query(default=None),
+    as_of_date: str | None = Query(default=None),
+):
+    try:
+        cutoff, cutoff_policy = resolve_knowledge_cutoff(knowledge_cutoff_at, as_of_date)
+        normalized_symbol = normalize_symbol(symbol)
+        states = _technical_service().repository.states_as_of(normalized_symbol, cutoff)
+        return {
+            "status": "available" if states else "needs_human_input",
+            "symbol": normalized_symbol,
+            "knowledge_cutoff_at": cutoff,
+            "cutoff_policy": cutoff_policy,
+            "anchor_sets": [_public_dto(state) for state in states],
+        }
+    except (ValueError, RuntimeError, sqlite3.Error) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/analysis/{symbol}")
 def get_v2_analysis(
     symbol: str,
@@ -311,8 +430,19 @@ def get_v2_analysis(
             "rules_used": [],
         }
 
+    try:
+        technical_support = _technical_service().analyze(normalized_symbol, cutoff)
+    except (ValueError, RuntimeError, sqlite3.Error) as exc:
+        technical_support = {
+            "status": "insufficient_data",
+            "reason": f"technical_anchor_data_unavailable: {exc}",
+            "scenarios": [],
+            "rules_used": [],
+        }
+
     valuation_available = valuation["status"] in {"available", "not_applicable"}
     liquidity_available = liquidity["status"] == "available"
+    technical_available = technical_support["status"] == "available"
     available_sections = []
     missing = []
     if valuation_available:
@@ -323,12 +453,24 @@ def get_v2_analysis(
         available_sections.append("liquidity")
     else:
         missing.append("liquidity")
+    if technical_available:
+        available_sections.append("technical_support")
+    else:
+        missing.append("technical_support")
     needs_human = []
     if valuation["status"] == "needs_human_input":
         if valuation["reason"] == "approved_forward_eps_required":
             needs_human.append("approved_forward_eps")
         elif valuation["reason"] == "approved_symbol_pe_missing_at_knowledge_cutoff":
             needs_human.append("approved_symbol_pe")
+    if technical_support["status"] == "needs_human_input":
+        technical_requirement = {
+            "manual_anchor_required": "manual_anchor",
+            "approved_manual_anchor_required": "approved_manual_anchor",
+            "anchor_approval_revoked": "approved_manual_anchor",
+        }.get(technical_support.get("reason"))
+        if technical_requirement:
+            needs_human.append(technical_requirement)
     return {
         "status": "partial",
         "symbol": normalized_symbol,
@@ -348,13 +490,13 @@ def get_v2_analysis(
         },
         "valuation": valuation,
         "liquidity": liquidity,
-        "technical_support": {"status": "unsupported", "reason": "phase_4_not_implemented"},
+        "technical_support": technical_support,
         "wave_scenarios": {"status": "needs_human_input", "reason": "phase_4_not_implemented"},
-        "fibonacci_scenarios": {"status": "unsupported", "reason": "phase_4_not_implemented"},
+        "fibonacci_scenarios": {"status": "unsupported", "reason": "use_technical_support_phase_4"},
         "target_confluence": {"status": "unsupported", "reason": "phase_7_not_implemented"},
         "deployment_plan": {"status": "unsupported", "reason": "phase_5_not_implemented"},
         "invalidation": valuation["invalidation_conditions"],
-        "rules_used": valuation["rules_used"] + liquidity.get("rules_used", []),
+        "rules_used": valuation["rules_used"] + liquidity.get("rules_used", []) + technical_support.get("rules_used", []),
         "unsupported": ["eva_formula", "margin_return_8_percent_formula"],
         "snapshot_id": None,
     }
