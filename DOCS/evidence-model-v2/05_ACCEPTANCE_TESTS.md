@@ -57,6 +57,13 @@ Acceptance includes unit conversion, explicit CBC release timestamp, M1B revisio
 3. 等幅 A/B/C 時序錯誤時拒絕。
 4. 錨點版本改變時產生新 snapshot。
 5. 計算結果附 formula、anchor IDs、as_of_date。
+6. market date 早於人工 available_at 時，歷史 cutoff 不可提前看見 anchor。
+7. 新 revision 未重新核准時，不得沿用舊 revision approval。
+8. 最新 anchor 或 approval revoked 時，不得回退舊版。
+9. FB-03 保留 `B-A` 方向，向上與向下範例均 deterministic。
+10. FB-04 只接受規格明定的 `B>A` 上升波；向下關係 fail closed。
+11. 0.618、1.618 或 FB-05 不得進入 Phase 4 verified scenario。
+12. 2330 的 anchor 不得被 2317 使用。
 
 ## G. 時間窗
 

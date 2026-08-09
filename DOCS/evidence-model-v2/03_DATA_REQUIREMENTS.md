@@ -176,3 +176,13 @@ Collector 不負責：
 - 選 PE。
 - 產生交易訊號。
 - 編寫自然語言結論。
+
+---
+
+## Phase 4 additive manual-anchor contract
+
+`technical_anchor_revisions` 保存人工輸入的 anchor set revision。每組只屬於一個 symbol 與一個 evidence basis Rule ID；角色明確映射為 `origin (A)`、`swing_end (B)`，FB-03 另需 `projection_origin (C)`。價格單位固定為 `TWD_per_share`，anchor type 只允許不暗示市場結構的 `manual_price_anchor`。
+
+Revision 採 append-only，`logical_anchor_set_id`、symbol、Rule ID 與單位不可跨 revision 改變。查詢同時要求 `available_at <= knowledge_cutoff_at` 與 `ingested_at <= knowledge_cutoff_at`，先選 cutoff 可見的最高 revision，再解讀 `available`／`revoked`；revoked 不得回退舊版。
+
+`technical_anchor_approvals` 是 rule-specific immutable event。事件綁定特定 anchor revision；新 revision 不繼承舊 approval。查詢同時要求 `approved_at` 與 `ingested_at` 不晚於 cutoff。核准及撤銷事件不可回溯排序。
