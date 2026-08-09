@@ -38,6 +38,7 @@ class MarketLiquidityService:
         ).date().isoformat()
         turnover_rows = self.repository.turnover_as_of(knowledge_cutoff_at)
         observations = []
+        source_resource_versions = []
         for turnover in turnover_rows:
             if turnover["status"] != "available" or turnover["total_turnover_twd"] is None:
                 continue
@@ -58,6 +59,28 @@ class MarketLiquidityService:
                 "turnover_m1b_ratio_pct": ratio,
                 "ratio_pct": ratio,
             })
+            source_resource_versions.extend([
+                {
+                    "section": "liquidity",
+                    "resource_type": "market_turnover_revision",
+                    "resource_id": turnover["id"],
+                    "logical_resource_id": turnover["trade_date"],
+                    "revision_number": turnover["revision"],
+                    "available_at": turnover["available_at"],
+                    "ingested_at": turnover["ingested_at"],
+                    "approval_ids": [],
+                },
+                {
+                    "section": "liquidity",
+                    "resource_type": "m1b_revision",
+                    "resource_id": m1b["id"],
+                    "logical_resource_id": m1b["period"],
+                    "revision_number": m1b["revision"],
+                    "available_at": m1b["available_at"],
+                    "ingested_at": m1b["ingested_at"],
+                    "approval_ids": [],
+                },
+            ])
         latest_turnover = turnover_rows[-1] if turnover_rows else None
         latest_observation = observations[-1] if observations else None
         latest_is_analyzable = (
@@ -128,4 +151,5 @@ class MarketLiquidityService:
             "complete_market_scope": result["turnover_twd"]["total"] is not None,
             "no_fixed_fallback": True,
         }
+        result["source_resource_versions"] = source_resource_versions
         return result

@@ -195,3 +195,31 @@ GET  /api/v2/anchors/{symbol}
 沒有 anchor 或只有 draft 時回 `needs_human_input`；technical section 失敗不使 valuation 或 liquidity 回傳 HTTP 500。`wave_scenarios`、費氏時間窗與自動波浪仍未實作。所有 scenario 都明示僅為參考、不是預測、保證目標或交易指令。
 
 Top-level `data_quality.needs_human_input` 對應如下：`manual_anchor_required` → `manual_anchor`；`approved_manual_anchor_required` 或 `anchor_approval_revoked` → `approved_manual_anchor`。有有效 scenario 時不得保留這兩個缺口。
+
+---
+
+## Phase 7 synthesis and snapshot API
+
+```text
+POST /api/v2/synthesis-profiles
+POST /api/v2/synthesis-profiles/{profile_revision_id}/approval
+GET  /api/v2/synthesis-profiles/{logical_profile_id}
+POST /api/v2/analysis/{symbol}/refresh
+GET  /api/v2/analysis/snapshots/{snapshot_id}
+```
+
+GET analysis stays side-effect free. POST refresh is a protected explicit persistence operation.
+GET snapshot returns stored output and provenance without recomputation. Public DTOs do not expose
+idempotency keys or internal payload fingerprints.
+
+`target_confluence` reports every qualifying overlap cluster, per-cluster `candidate_count`,
+distinct target-family `support_count`, dependency-component `independent_method_count`,
+profile-controlled evidence strength, cross-role FB-04 alignment, exact profile revision and
+approval, Rule Trace, and `summary_policy=maximum_cluster_strength`. No primary or recommended
+target field is emitted.
+
+The two synthesis selectors are mutually exclusive. GET analysis and POST refresh return HTTP 422
+with `synthesis_profile_selectors_are_mutually_exclusive` when both are supplied; refresh creates
+no snapshot or idempotency binding. An exact revision hidden by either `available_at` or
+`ingested_at` returns section-local `synthesis_profile_revision_not_visible_at_cutoff` without
+future identity metadata.

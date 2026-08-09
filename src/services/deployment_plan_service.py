@@ -53,6 +53,7 @@ class DeploymentPlanService:
             "revision_number": state["revision_number"],
             "symbol": state["symbol"],
             "available_at": state["available_at"],
+            "ingested_at": state["ingested_at"],
         })
         if state["status"] == "revoked" or (
             state["approval"] and state["approval"]["decision"] == "revoked"
