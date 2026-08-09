@@ -187,11 +187,33 @@ class TechnicalAnchorRepository:
             result["created"] = True
             return result
 
-    def states_as_of(self, symbol: str, knowledge_cutoff_at: str) -> list[dict]:
-        cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
+    def _states_as_of(
+        self,
+        symbol: str,
+        effective_cutoff_at: str,
+        ingested_cutoff_at: str,
+        *,
+        logical_anchor_set_id: str | None = None,
+    ) -> list[dict]:
+        effective_cutoff = normalize_utc_timestamp(
+            effective_cutoff_at, "effective_cutoff_at"
+        )
+        ingested_cutoff = normalize_utc_timestamp(
+            ingested_cutoff_at, "ingested_cutoff_at"
+        )
         with self._connect() as conn:
+            logical_filter = (
+                " AND logical_anchor_set_id = ?" if logical_anchor_set_id else ""
+            )
+            params = [
+                symbol.strip().upper(),
+                effective_cutoff,
+                ingested_cutoff,
+            ]
+            if logical_anchor_set_id:
+                params.append(logical_anchor_set_id)
             rows = conn.execute(
-                """
+                f"""
                 WITH ranked AS (
                     SELECT *, ROW_NUMBER() OVER (
                         PARTITION BY logical_anchor_set_id
@@ -199,10 +221,11 @@ class TechnicalAnchorRepository:
                     ) AS rank_no
                     FROM technical_anchor_revisions
                     WHERE symbol = ? AND available_at <= ? AND ingested_at <= ?
+                    {logical_filter}
                 )
                 SELECT * FROM ranked WHERE rank_no = 1 ORDER BY logical_anchor_set_id
                 """,
-                (symbol.strip().upper(), cutoff, cutoff),
+                params,
             ).fetchall()
             results = []
             for row in rows:
@@ -216,8 +239,31 @@ class TechnicalAnchorRepository:
                     ORDER BY approved_at DESC, ingested_at DESC, approval_event_id DESC
                     LIMIT 1
                     """,
-                    (item["id"], item["evidence_basis_rule_id"], cutoff, cutoff),
+                    (
+                        item["id"], item["evidence_basis_rule_id"],
+                        effective_cutoff, ingested_cutoff,
+                    ),
                 ).fetchone()
                 item["approval"] = dict(decision) if decision else None
                 results.append(item)
         return results
+
+    def states_as_of(self, symbol: str, knowledge_cutoff_at: str) -> list[dict]:
+        cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
+        return self._states_as_of(symbol, cutoff, cutoff)
+
+    def effective_anchor_state_as_of(
+        self,
+        symbol: str,
+        logical_anchor_set_id: str,
+        effective_cutoff_at: str,
+        ingested_cutoff_at: str,
+    ) -> dict | None:
+        """Return the one effective latest revision without falling back by status."""
+        states = self._states_as_of(
+            symbol,
+            effective_cutoff_at,
+            ingested_cutoff_at,
+            logical_anchor_set_id=logical_anchor_set_id,
+        )
+        return states[0] if states else None

@@ -10,6 +10,7 @@ from typing import Any
 from src.domain.deployment import DeploymentPlanApproval, DeploymentPlanRevision
 from src.domain.valuation import normalize_utc_timestamp, utc_now_timestamp
 from src.repositories.migration_runner import apply_valuation_migration
+from src.repositories.technical_anchor_repository import TechnicalAnchorRepository
 
 
 def _fingerprint(payload: dict[str, Any]) -> str:
@@ -21,6 +22,7 @@ class DeploymentPlanRepository:
     def __init__(self, db_path: str = "data/cache.db"):
         self.db_path = db_path
         apply_valuation_migration(db_path)
+        self.technical_anchor_repository = TechnicalAnchorRepository(db_path)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -159,26 +161,37 @@ class DeploymentPlanRepository:
                     "SELECT * FROM technical_anchor_revisions WHERE id = ?",
                     (trigger["anchor_revision_id"],),
                 ).fetchone()
+                if anchor is None:
+                    raise ValueError("FB-04 trigger references an unavailable anchor revision")
+                if anchor["symbol"] != plan["symbol"]:
+                    raise ValueError(
+                        "FB-04 trigger anchor symbol must match deployment plan symbol"
+                    )
+                effective_anchor = (
+                    self.technical_anchor_repository.effective_anchor_state_as_of(
+                        plan["symbol"],
+                        anchor["logical_anchor_set_id"],
+                        payload["approved_at"],
+                        ingested,
+                    )
+                )
                 if (
-                    anchor is None
-                    or anchor["evidence_basis_rule_id"] != "FB-04"
-                    or anchor["status"] != "available"
+                    effective_anchor is None
+                    or effective_anchor["id"] != trigger["anchor_revision_id"]
+                ):
+                    raise ValueError(
+                        "FB-04 trigger must reference the effective latest anchor revision"
+                    )
+                if (
+                    effective_anchor["evidence_basis_rule_id"] != "FB-04"
+                    or effective_anchor["status"] != "available"
                 ):
                     raise ValueError("FB-04 trigger references an unavailable anchor revision")
-                latest = conn.execute(
-                    """
-                    SELECT * FROM technical_anchor_approvals
-                    WHERE anchor_revision_id = ? AND rule_id = 'FB-04'
-                      AND approved_at <= ? AND ingested_at <= ?
-                    ORDER BY approved_at DESC, ingested_at DESC, approval_event_id DESC
-                    LIMIT 1
-                    """,
-                    (trigger["anchor_revision_id"], payload["approved_at"], ingested),
-                ).fetchone()
+                latest_approval = effective_anchor["approval"]
                 if (
-                    latest is None
-                    or latest["decision"] != "approved"
-                    or latest["approval_id"] != trigger["approval_id"]
+                    latest_approval is None
+                    or latest_approval["decision"] != "approved"
+                    or latest_approval["approval_id"] != trigger["approval_id"]
                 ):
                     raise ValueError("FB-04 trigger requires the effective approved anchor approval ID")
             if payload["approved_at"] < plan["available_at"]:
