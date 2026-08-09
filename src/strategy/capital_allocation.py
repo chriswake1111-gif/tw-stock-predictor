@@ -6,6 +6,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class CapitalAllocator:
+    """V1 legacy 20/50/100 cumulative lot-size allocator; not ENT-02."""
     """
     台股張數與 20/30/50 進場週期基準 (Campaign-Base) 資金算術管理器：
     1. 以進場時點之帳戶總資產 (Campaign Base Value) 為唯一計算基準。
