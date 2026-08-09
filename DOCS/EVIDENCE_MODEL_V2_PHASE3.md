@@ -19,6 +19,8 @@ LIQ-01 是 C 級 `project_operationalization`；LIQ-02 是 A 級公開案例參�
 
 `available_at` 是資料當時可供系統使用的時間，`data_date` 只是資料所屬日期。查詢要求 `available_at <= knowledge_cutoff_at` 與 `ingested_at <= knowledge_cutoff_at`。revision 以不可變新增保存；歷史 cutoff 只能看見當時已公布且已匯入版本，revoked 最新版本不會退回舊值。
 
+市場成交額的 `available`、`partial`、`revoked` 是明確且經驗證的 revision 狀態。查詢先選出每個 trade date 在 cutoff 當時的最新 revision，再解讀狀態；最新 revision 若 revoked，該日期不會回退到舊 available revision。cutoff 前最新 trade date 若為 partial，整個 liquidity section 維持 partial，舊完整資料只能以 `latest_complete_observation` 作歷史參考。遠端 TWSE／TPEx 任一來源失敗時保存另一側 partial，只有兩側皆失敗才回傳 `insufficient_data`。
+
 CBC API 提供目前資料與 `last_updated`，但不提供每個歷史月份的精確公布 timestamp。歷史匯入必須由官方發布日曆／新聞稿建立明確 mapping；沒有 mapping 時回傳 `needs_human_input`，不以抓取時間或推定日期回填歷史。
 
 ## Rolling mean、percentile 與 alert

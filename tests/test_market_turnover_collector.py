@@ -1,6 +1,7 @@
 import os
 import json
 import pytest
+import requests
 from unittest.mock import patch, MagicMock
 from src.collectors.market_turnover_collector import MarketTurnoverCollector
 
@@ -77,3 +78,49 @@ def test_v2_official_openapi_parsing_and_partial_persistence(temp_db):
     )
     assert partial["status"] == "partial"
     assert partial["total_turnover_twd"] is None
+
+
+@pytest.mark.parametrize("failed_source", ["twse", "tpex"])
+def test_remote_collector_preserves_successful_market_as_partial(temp_db, failed_source):
+    collector = MarketTurnoverCollector(db_path=temp_db)
+    with open("tests/fixtures/twse_fmtqik_openapi.json", encoding="utf-8") as source:
+        twse = json.load(source)
+    with open("tests/fixtures/tpex_daily_trading_index_openapi.json", encoding="utf-8") as source:
+        tpex = json.load(source)
+    responses = []
+    for name, payload in (("twse", twse), ("tpex", tpex)):
+        response = MagicMock()
+        if name == failed_source:
+            response.raise_for_status.side_effect = requests.HTTPError(f"{name} failed")
+        else:
+            response.json.return_value = payload
+        responses.append(response)
+
+    with patch("requests.get", side_effect=responses):
+        result = collector.fetch_official_turnover(
+            "2026-07-30", "2026-07-30T09:01:00+08:00"
+        )
+
+    assert result["status"] == "partial"
+    assert result["total_turnover_twd"] is None
+    assert failed_source in result["source_errors"]
+    successful_field = "tpex_turnover_twd" if failed_source == "twse" else "twse_turnover_twd"
+    assert result[successful_field] is not None
+
+
+def test_remote_collector_returns_insufficient_when_both_sources_fail(temp_db):
+    collector = MarketTurnoverCollector(db_path=temp_db)
+    failures = []
+    for name in ("twse", "tpex"):
+        response = MagicMock()
+        response.raise_for_status.side_effect = requests.HTTPError(f"{name} failed")
+        failures.append(response)
+
+    with patch("requests.get", side_effect=failures):
+        result = collector.fetch_official_turnover(
+            "2026-07-30", "2026-07-30T09:01:00+08:00"
+        )
+
+    assert result["status"] == "insufficient_data"
+    assert result["reason"] == "both_official_market_turnover_sources_unavailable"
+    assert set(result["source_errors"]) == {"twse", "tpex"}

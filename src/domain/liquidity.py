@@ -83,6 +83,7 @@ class MarketTurnoverObservation:
     available_at: str
     fetched_at: str
     revision: int = 1
+    status: str | None = None
     twse_payload_hash: str | None = None
     tpex_payload_hash: str | None = None
     quality_note: str | None = None
@@ -91,15 +92,25 @@ class MarketTurnoverObservation:
         date.fromisoformat(self.trade_date)
         if self.revision < 1:
             raise ValueError("revision must be at least 1")
+        if self.status not in {None, "available", "partial", "revoked"}:
+            raise ValueError("unsupported market turnover status")
         twse = self._optional_money(self.twse_turnover_twd, "twse_turnover_twd")
         tpex = self._optional_money(self.tpex_turnover_twd, "tpex_turnover_twd")
-        if twse is None and tpex is None:
+        if self.status != "revoked" and twse is None and tpex is None:
             raise ValueError("at least one official market turnover is required")
         if twse is not None and (not self.twse_source or not self.twse_dataset):
             raise ValueError("TWSE source and dataset are required")
         if tpex is not None and (not self.tpex_source or not self.tpex_dataset):
             raise ValueError("TPEx source and dataset are required")
         complete = twse is not None and tpex is not None
+        derived_status = "available" if complete else "partial"
+        status = self.status or derived_status
+        if status == "available" and not complete:
+            raise ValueError("available turnover requires both TWSE and TPEx")
+        if status == "partial" and (complete or (twse is None and tpex is None)):
+            raise ValueError("partial turnover requires exactly one market")
+        if status == "revoked":
+            complete = False
         return {
             "trade_date": self.trade_date,
             "twse_turnover_twd": twse,
@@ -114,7 +125,7 @@ class MarketTurnoverObservation:
             "available_at": normalize_utc_timestamp(self.available_at, "available_at"),
             "fetched_at": normalize_utc_timestamp(self.fetched_at, "fetched_at"),
             "revision": self.revision,
-            "status": "available" if complete else "partial",
+            "status": status,
             "quality_note": self.quality_note,
         }
 

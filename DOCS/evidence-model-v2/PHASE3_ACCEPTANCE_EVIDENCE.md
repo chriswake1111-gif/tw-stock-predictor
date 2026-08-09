@@ -6,6 +6,9 @@
 - As-of-safe repository, deterministic ratio／rolling mean／historical percentile engine and independent v2 liquidity section.
 - LIQ-01 and LIQ-02 traces only; LIQ-03 and LIQ-04 remain unsupported.
 - Legacy v1 paths remain separate.
+- Latest partial turnover cannot be masked by an older complete observation.
+- TWSE and TPEx remote failures are isolated; one successful source persists as partial.
+- Turnover revocation is ranked before status interpretation and cannot restore an older revision.
 
 ## Data-source evidence
 
@@ -17,8 +20,8 @@ CBC does not expose historical per-period publication timestamps in this dataset
 
 ## Validation record
 
-- Phase 3 focused suite: 14 passed.
-- Full regression: 135 passed.
+- Phase 3 review-fix focused suite: 19 passed.
+- Full regression: 140 passed after review fixes.
 - v1 golden snapshot: 2 passed.
 - Warning: the pre-existing FastAPI TestClient `httpx`／`httpx2` deprecation warning remains; no new warning category was observed.
 - Collector tests use fixed local fixtures and do not require live network access.

@@ -114,7 +114,7 @@ class LiquidityRepository:
                         ORDER BY revision DESC, available_at DESC, ingested_at DESC, id DESC
                     ) AS rank_no
                     FROM market_turnover_daily
-                    WHERE available_at <= ? AND ingested_at <= ? AND status != 'revoked'
+                    WHERE available_at <= ? AND ingested_at <= ?
                 )
                 SELECT * FROM ranked WHERE rank_no = 1 ORDER BY trade_date
                 """, (cutoff, cutoff),

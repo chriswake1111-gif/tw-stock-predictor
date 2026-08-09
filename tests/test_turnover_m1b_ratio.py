@@ -63,6 +63,37 @@ def test_complete_partial_and_no_future_data(tmp_path):
     assert not {"sell_signal", "market_top", "automatic_order"} & set(result)
 
 
+def test_latest_partial_is_not_hidden_by_older_complete_observation(tmp_path):
+    db = str(tmp_path / "liquidity.db")
+    repo = LiquidityRepository(db)
+    repo.add_m1b(M1BMonthlyObservation(
+        period="2026-05", value_raw=30_000, raw_unit="TWD_million",
+        data_date="2026-05-31", available_at="2026-06-25T08:00:00Z",
+        fetched_at="2026-06-25T09:00:00Z", source="CBC",
+        source_dataset="CBC EF15M01",
+    ), ingested_at="2026-06-25T09:01:00Z")
+    repo.add_turnover(MarketTurnoverObservation(
+        trade_date="2026-06-26", twse_turnover_twd=800_000_000,
+        tpex_turnover_twd=100_000_000, twse_source="TWSE", tpex_source="TPEx",
+        twse_dataset="exchangeReport/FMTQIK", tpex_dataset="tpex_daily_trading_index",
+        available_at="2026-06-26T09:00:00Z", fetched_at="2026-06-26T09:01:00Z",
+    ), ingested_at="2026-06-26T09:02:00Z")
+    repo.add_turnover(MarketTurnoverObservation(
+        trade_date="2026-06-27", twse_turnover_twd=900_000_000,
+        tpex_turnover_twd=None, twse_source="TWSE", tpex_source=None,
+        twse_dataset="exchangeReport/FMTQIK", tpex_dataset=None,
+        available_at="2026-06-27T09:00:00Z", fetched_at="2026-06-27T09:01:00Z",
+    ), ingested_at="2026-06-27T09:02:00Z")
+
+    result = MarketLiquidityService(db).analyze("2026-06-27T10:00:00Z")
+
+    assert result["status"] == "partial"
+    assert result["trade_date"] == "2026-06-27"
+    assert result["turnover_m1b_ratio_pct"] is None
+    assert result["latest_complete_observation"]["trade_date"] == "2026-06-26"
+    assert result["latest_complete_observation"]["turnover_m1b_ratio_pct"] == 3.0
+
+
 def test_only_one_market_is_partial(tmp_path):
     repo = LiquidityRepository(str(tmp_path / "liquidity.db"))
     repo.add_turnover(MarketTurnoverObservation(
@@ -93,3 +124,33 @@ def test_missing_twse_is_also_partial(tmp_path):
     assert result["status"] == "partial"
     assert result["turnover_twd"]["twse"] is None
     assert result["turnover_m1b_ratio_pct"] is None
+
+
+def test_revoked_turnover_revision_does_not_restore_old_revision(tmp_path):
+    db = str(tmp_path / "liquidity.db")
+    repo = LiquidityRepository(db)
+    common = {
+        "trade_date": "2026-07-01",
+        "available_at": "2026-07-01T09:00:00Z",
+        "fetched_at": "2026-07-01T09:01:00Z",
+    }
+    repo.add_turnover(MarketTurnoverObservation(
+        **common, twse_turnover_twd=800_000_000, tpex_turnover_twd=100_000_000,
+        twse_source="TWSE", tpex_source="TPEx",
+        twse_dataset="exchangeReport/FMTQIK", tpex_dataset="tpex_daily_trading_index",
+    ), ingested_at="2026-07-01T09:02:00Z")
+    repo.add_turnover(MarketTurnoverObservation(
+        **{**common, "available_at": "2026-07-02T09:00:00Z"},
+        twse_turnover_twd=None, tpex_turnover_twd=None,
+        twse_source=None, tpex_source=None, twse_dataset=None, tpex_dataset=None,
+        revision=2, status="revoked",
+    ), ingested_at="2026-07-02T09:02:00Z")
+
+    rows = repo.turnover_as_of("2026-07-03T00:00:00Z")
+    result = MarketLiquidityService(db).analyze("2026-07-03T00:00:00Z")
+
+    assert len(rows) == 1
+    assert rows[0]["revision"] == 2
+    assert rows[0]["status"] == "revoked"
+    assert result["status"] == "insufficient_data"
+    assert result["reason"] == "latest_market_turnover_revoked"

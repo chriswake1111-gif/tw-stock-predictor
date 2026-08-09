@@ -93,18 +93,42 @@ class MarketTurnoverCollector:
         )
 
     def fetch_official_turnover(self, trade_date: str, fetched_at: str) -> dict[str, Any]:
-        twse_response = requests.get(self.TWSE_OPENAPI_URL, timeout=15)
-        tpex_response = requests.get(self.TPEX_OPENAPI_URL, timeout=15)
-        twse_response.raise_for_status()
-        tpex_response.raise_for_status()
+        payloads: dict[str, list[dict]] = {"twse": [], "tpex": []}
+        errors: dict[str, str] = {}
+        sources = (
+            ("twse", self.TWSE_OPENAPI_URL, self.parse_twse_openapi),
+            ("tpex", self.TPEX_OPENAPI_URL, self.parse_tpex_openapi),
+        )
+        for name, url, parser in sources:
+            try:
+                response = requests.get(url, timeout=15)
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, list):
+                    raise ValueError("official response must be a list")
+                if parser(payload, trade_date) is None:
+                    raise ValueError(f"{trade_date} is absent from official response")
+                payloads[name] = payload
+            except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
+                errors[name] = str(exc)
+                logger.warning("%s turnover unavailable for %s: %s", name, trade_date, exc)
+        if not payloads["twse"] and not payloads["tpex"]:
+            return {
+                "status": "insufficient_data",
+                "reason": "both_official_market_turnover_sources_unavailable",
+                "trade_date": trade_date,
+                "source_errors": errors,
+            }
         # Current OpenAPI retrieval proves availability no earlier than fetch time.
-        return self.import_official_turnover(
+        result = self.import_official_turnover(
             trade_date,
-            twse_response.json(),
-            tpex_response.json(),
+            payloads["twse"],
+            payloads["tpex"],
             available_at=fetched_at,
             fetched_at=fetched_at,
         )
+        result["source_errors"] = errors
+        return result
 
     def _init_db(self):
         """初始化市場總成交金額表"""

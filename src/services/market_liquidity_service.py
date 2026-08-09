@@ -38,10 +38,8 @@ class MarketLiquidityService:
         ).date().isoformat()
         turnover_rows = self.repository.turnover_as_of(knowledge_cutoff_at)
         observations = []
-        latest_partial = None
         for turnover in turnover_rows:
             if turnover["status"] != "available" or turnover["total_turnover_twd"] is None:
-                latest_partial = turnover
                 continue
             m1b = self.repository.m1b_for_turnover(turnover, knowledge_cutoff_at)
             if m1b is None:
@@ -60,24 +58,49 @@ class MarketLiquidityService:
                 "turnover_m1b_ratio_pct": ratio,
                 "ratio_pct": ratio,
             })
-        if observations:
+        latest_turnover = turnover_rows[-1] if turnover_rows else None
+        latest_observation = observations[-1] if observations else None
+        latest_is_analyzable = (
+            latest_turnover is not None
+            and latest_turnover["status"] == "available"
+            and latest_observation is not None
+            and latest_observation["trade_date"] == latest_turnover["trade_date"]
+        )
+        if latest_is_analyzable:
             result = self.engine.evaluate(
                 observations, as_of_date, self.min_5y, self.min_10y
             )
-        elif latest_partial:
+        elif latest_turnover and latest_turnover["status"] == "partial":
             result = self.engine.insufficient(
                 as_of_date,
                 "both_twse_and_tpex_turnover_are_required",
                 status="partial",
-                trade_date=latest_partial["trade_date"],
-                twse_turnover_twd=latest_partial["twse_turnover_twd"],
-                tpex_turnover_twd=latest_partial["tpex_turnover_twd"],
+                trade_date=latest_turnover["trade_date"],
+                twse_turnover_twd=latest_turnover["twse_turnover_twd"],
+                tpex_turnover_twd=latest_turnover["tpex_turnover_twd"],
                 total_turnover_twd=None,
+            )
+        elif latest_turnover and latest_turnover["status"] == "revoked":
+            result = self.engine.insufficient(
+                as_of_date,
+                "latest_market_turnover_revoked",
+                trade_date=latest_turnover["trade_date"],
+            )
+        elif latest_turnover:
+            result = self.engine.insufficient(
+                as_of_date,
+                "m1b_unavailable_for_latest_turnover",
+                trade_date=latest_turnover["trade_date"],
             )
         else:
             m1b = self.repository.latest_m1b_as_of(knowledge_cutoff_at)
             reason = "market_turnover_missing" if m1b else "market_turnover_and_m1b_missing"
             result = self.engine.insufficient(as_of_date, reason)
+        if not latest_is_analyzable and latest_observation:
+            result["latest_complete_observation"] = {
+                key: value for key, value in latest_observation.items()
+                if key != "ratio_pct"
+            }
         result.pop("ratio_pct", None)
         result["turnover_twd"] = {
             "twse": result.pop("twse_turnover_twd", None),
