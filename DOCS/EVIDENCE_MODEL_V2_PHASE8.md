@@ -21,7 +21,7 @@ approval、Rule Registry 或 target synthesis。GET API 只取回已保存結果
 
 - Universe：Phase 2 固定 14 檔研究 cohort；不是全台股驗證。
 - Outcome：`phase2-gap-adjusted-v1-20260801-ec781a02134f`，應用層核准 dataset hash
-  `0c2754abae952b145e22bb2b36f80fec8aa00122cc1d9e9acb93092dc4cb4745`。
+  `39b4998e0d120fcb5aa6d87a4d6645b490f58975789b36bf2f12e515fcb7ab15`。
 - Benchmark：同一 manifest 的 TAIEX price return；不是 total return。
 - Horizons：20、60 個 frozen calendar sessions，start session 為 index 0，end 為 index H。
 - Timing：knowledge cutoff 所在的 Asia/Taipei 日期之後，第一個有可用 adjusted bar 的 session。
@@ -31,6 +31,25 @@ approval、Rule Registry 或 target synthesis。GET API 只取回已保存結果
 
 006208.TW 與 2308.TW 保留在 coverage，但 `quality_warning` 不進 target rate 分母。
 `pending`、`insufficient_future_data` 與 `already_in_range` 也不視為 miss。
+
+## First-review data-state remediation
+
+- The outcome calendar is the tracked, independent TWSE FMTQIK session resource
+  `config/outcome_calendars/phase2_twse_trading_calendar_20140102_20260731.csv`.
+  It contains 3,068 ordered sessions and is not derived from the union of available OHLC rows.
+- Calendar resource ID, repository path, policy, source fingerprint and SHA-256
+  `110dd61a903797bfa6c5e345bf6b1245ad509def7a52aac67a8d595c6b0ab259`
+  are part of the manifest. Missing or tampered calendar resources fail closed.
+- Raw resource files remain hash-verified. Two TAIEX rows outside the official calendar
+  (2014-07-23 and 2016-07-08) are deterministically excluded from the usable outcome view and the
+  exclusion count/policy is included in the aggregate hash; they cannot create sessions.
+- Every requested snapshot is persisted in immutable run membership, including snapshots with zero
+  eligible subjects. Coverage reports cohort symbols, requested snapshots, eligible subjects and
+  evaluation records as separate units.
+- `pending` is allowed only when the horizon expiry is later than the immutable
+  `outcome_observed_through_session`. When expiry is within that boundary but a required bar is
+  missing, the result is `insufficient_future_data`. The current closed Phase 2 resource therefore
+  does not use `pending` to hide truncated OHLC history.
 
 ## API
 

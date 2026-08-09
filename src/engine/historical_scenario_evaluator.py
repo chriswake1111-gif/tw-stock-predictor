@@ -166,10 +166,18 @@ class HistoricalScenarioEvaluator:
         end_index = start_index + horizon
         if end_index >= len(dataset.calendar):
             return ScenarioEvaluation(
-                **common, terminal_outcome="pending", evaluation_start_session=start_date,
+                **common, terminal_outcome="insufficient_future_data",
+                evaluation_start_session=start_date,
                 start_price=_quantized(symbol_by_date[start_date].open, quantum),
             )
         end_date = dataset.calendar[end_index]
+        if end_date > dataset.manifest.outcome_observed_through_session:
+            return ScenarioEvaluation(
+                **common, terminal_outcome="pending",
+                evaluation_start_session=start_date,
+                evaluation_end_session=end_date,
+                start_price=_quantized(symbol_by_date[start_date].open, quantum),
+            )
         expected_dates = dataset.calendar[start_index:end_index + 1]
         if any(date not in symbol_by_date for date in expected_dates):
             return ScenarioEvaluation(

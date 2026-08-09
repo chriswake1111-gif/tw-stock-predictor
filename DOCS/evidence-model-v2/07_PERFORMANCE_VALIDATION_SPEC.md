@@ -4,7 +4,8 @@
 
 1. Exact immutable Phase 7 `analysis_snapshot` including its output SHA-256.
 2. Explicit, revisioned and approved Phase 8 `EvaluationProfile`.
-3. Immutable `OutcomeResourceManifest` for the fixed Phase 2 dataset.
+3. Immutable `OutcomeResourceManifest` for the fixed Phase 2 dataset, including an independently
+   tracked official-session calendar and `outcome_observed_through_session` boundary.
 
 The semantic run identity includes snapshot-set hash, profile revision, outcome manifest ID/hash,
 evaluator version and origin policy. Scenario identity additionally includes snapshot ID, origin,
@@ -28,8 +29,10 @@ independent methods.
 - Pick the first later frozen session where the symbol has a usable adjusted bar.
 - Record skipped frozen sessions. Never use weekday fallback or nearest-date fallback.
 - Start at adjusted open. End at adjusted close of calendar index `start_index + H`.
-- Require every frozen session position in the symbol window; otherwise
-  `insufficient_future_data`. If the fixed dataset has not reached expiry, return `pending`.
+- Require every frozen session position in the symbol window. If expiry is later than the immutable
+  `outcome_observed_through_session`, return `pending`. If expiry is within that boundary but any
+  required symbol bar is absent, return `insufficient_future_data`. A shortened closed dataset is
+  therefore insufficient, not pending.
 - A target touches when `low <= target_high AND high >= target_low`.
 - Returns and excursions use Decimal with `ROUND_HALF_UP` and the approved calculation quantum.
 - Benchmark uses exact same start/end session. A missing endpoint makes only the benchmark
@@ -42,3 +45,16 @@ contains only available target subjects ending `target_reached` or `expired`. Qu
 pending, insufficient future data, support context and already-in-range records are excluded.
 Grouping always includes `evaluation_origin`, horizon, method family, evidence strength and subject
 type.
+
+## Run membership and coverage units
+
+Every requested snapshot is persisted in immutable `evaluation_run_snapshots`, even when it yields
+zero eligible subjects. A finalized membership is `evaluated` or `no_eligible_subjects`; the latter
+has an explicit reason. Summary coverage keeps these units separate:
+
+- `cohort_symbol_count` and `cohort_symbols_represented`;
+- `requested_snapshot_count`, `snapshots_with_eligible_subjects`, and
+  `snapshots_without_eligible_subjects`;
+- `eligible_subject_count` and `evaluated_subject_count`;
+- `evaluation_record_count`, target candidate/cluster counts, and support candidate count;
+- quality-warning snapshot count and quality-warning evaluation-record count.

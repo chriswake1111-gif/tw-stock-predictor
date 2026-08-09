@@ -7,9 +7,11 @@ from src.domain.analysis_snapshot import AnalysisSnapshot, CaptureMode
 from src.domain.performance_validation import (
     EVALUATOR_VERSION,
     EvaluationOrigin,
+    EvaluationMembershipStatus,
     EvaluationProfileApproval,
     EvaluationProfileRevision,
     EvaluationRun,
+    EvaluationRunSnapshot,
     EvaluationSubjectType,
     OutcomeResourceManifest,
     ScenarioEvaluation,
@@ -58,6 +60,7 @@ def manifest():
         universe_definition="phase2_fixed_14_symbol_research_cohort",
         calendar_resource={"path": "calendar.csv"},
         calendar_hash=HASH_B,
+        outcome_observed_through_session="2026-07-31",
         benchmark_resource={"symbol": "^TWII", "path": "index-TWII.csv"},
         benchmark_hash=HASH_B,
         ohlc_adjustment_contract="provider_compatible_adjusted_v1",
@@ -119,6 +122,20 @@ def evaluation(snapshot_id):
     )
 
 
+def membership(snapshot, *, evaluated=True):
+    return EvaluationRunSnapshot(
+        snapshot_id=snapshot["snapshot_id"],
+        symbol=snapshot["symbol"],
+        membership_status=(
+            EvaluationMembershipStatus.EVALUATED
+            if evaluated
+            else EvaluationMembershipStatus.NO_ELIGIBLE_SUBJECTS
+        ),
+        reason=None if evaluated else "stored_snapshot_has_no_phase8_eligible_subjects",
+        created_at="2026-08-10T00:00:00Z",
+    )
+
+
 def test_profile_approval_is_cutoff_safe_and_latest_revoke_does_not_fall_back(tmp_path):
     repo = PerformanceValidationRepository(str(tmp_path / "profile.db"))
     stored = repo.add_profile_revision(
@@ -158,16 +175,17 @@ def test_manifest_and_run_are_permanently_idempotent(tmp_path):
         universe_definition="phase2_fixed_14_symbol_research_cohort",
         created_at="2026-08-10T00:00:00Z",
     )
-    first = repo.add_run(run, [evaluation(snapshot["snapshot_id"])], "run-a")
-    second = repo.add_run(run, [evaluation(snapshot["snapshot_id"])], "run-b")
+    members = [membership(snapshot)]
+    first = repo.add_run(run, members, [evaluation(snapshot["snapshot_id"])], "run-a")
+    second = repo.add_run(run, members, [evaluation(snapshot["snapshot_id"])], "run-b")
     assert first["created"] is True
     assert second["created"] is False
     assert second["evaluation_run_id"] == first["evaluation_run_id"]
     assert repo.get_run(first["evaluation_run_id"])["results"][0]["target_reached"] is False
     changed = EvaluationRun(**{**run.__dict__, "evaluator_version": "phase8_historical_scenario_v2"})
     with pytest.raises(ValueError, match="different payload"):
-        repo.add_run(changed, [evaluation(snapshot["snapshot_id"])], "run-b")
-    newer = repo.add_run(changed, [evaluation(snapshot["snapshot_id"])], "run-c")
+        repo.add_run(changed, members, [evaluation(snapshot["snapshot_id"])], "run-b")
+    newer = repo.add_run(changed, members, [evaluation(snapshot["snapshot_id"])], "run-c")
     assert newer["evaluation_run_id"] != first["evaluation_run_id"]
 
 
@@ -185,14 +203,48 @@ def test_phase8_persisted_resources_are_database_immutable(tmp_path):
         universe_definition="phase2_fixed_14_symbol_research_cohort",
         created_at="2026-08-10T00:00:00Z",
     )
-    created = repo.add_run(run, [evaluation(snapshot["snapshot_id"])], "run-key")
+    created = repo.add_run(
+        run, [membership(snapshot)], [evaluation(snapshot["snapshot_id"])], "run-key"
+    )
     evaluation_id = created["results"][0]["evaluation_id"]
+    membership_snapshot_id = created["snapshot_memberships"][0]["snapshot_id"]
     with sqlite3.connect(db_path) as conn:
         for sql, value in (
             ("UPDATE evaluation_runs SET status='tampered' WHERE evaluation_run_id=?", created["evaluation_run_id"]),
             ("DELETE FROM evaluation_runs WHERE evaluation_run_id=?", created["evaluation_run_id"]),
             ("UPDATE scenario_evaluations SET quality_status='tampered' WHERE evaluation_id=?", evaluation_id),
             ("DELETE FROM scenario_evaluations WHERE evaluation_id=?", evaluation_id),
+            ("UPDATE evaluation_run_snapshots SET membership_status='requested' WHERE snapshot_id=?", membership_snapshot_id),
+            ("DELETE FROM evaluation_run_snapshots WHERE snapshot_id=?", membership_snapshot_id),
         ):
             with pytest.raises(sqlite3.IntegrityError, match="immutable"):
                 conn.execute(sql, (value,))
+
+
+def test_run_membership_preserves_requested_snapshot_with_zero_eligible_subjects(tmp_path):
+    db_path = tmp_path / "zero-subject.db"
+    repo = PerformanceValidationRepository(str(db_path))
+    stored_profile = repo.add_profile_revision(profile(), "profile-key")
+    stored_manifest = repo.add_manifest(manifest(), "manifest-key")
+    snapshot = add_snapshot(db_path)
+    run = EvaluationRun(
+        evaluation_profile_revision_id=stored_profile["id"],
+        evaluator_version=EVALUATOR_VERSION,
+        evaluation_origin_policy="separate_by_evaluation_origin",
+        snapshot_set_hash=HASH_B,
+        outcome_resource_manifest_id=stored_manifest["manifest_id"],
+        outcome_manifest_hash=stored_manifest["dataset_hash"],
+        universe_definition="phase2_fixed_14_symbol_research_cohort",
+        created_at="2026-08-10T00:00:00Z",
+    )
+    created = repo.add_run(run, [membership(snapshot, evaluated=False)], [], "empty-run")
+    assert created["results"] == []
+    assert created["snapshot_memberships"] == [{
+        "evaluation_run_id": created["evaluation_run_id"],
+        "snapshot_id": snapshot["snapshot_id"],
+        "symbol": "2330.TW",
+        "membership_status": "no_eligible_subjects",
+        "reason": "stored_snapshot_has_no_phase8_eligible_subjects",
+        "created_at": "2026-08-10T00:00:00.000000Z",
+    }]
+    assert repo.get_run(created["evaluation_run_id"])["snapshot_memberships"] == created["snapshot_memberships"]

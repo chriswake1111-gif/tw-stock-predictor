@@ -19,23 +19,32 @@ def sessions(count=80):
     return values
 
 
-def dataset(*, symbol="2330.TW", warning=False, missing=None, benchmark_missing=None, count=80):
+def dataset(
+    *, symbol="2330.TW", warning=False, missing=None, benchmark_missing=None,
+    count=80, bar_count=None, observed_through_index=None,
+):
     dates = sessions(count)
+    bar_dates = dates[:bar_count] if bar_count is not None else dates
     missing = set(missing or [])
     benchmark_missing = set(benchmark_missing or [])
     bars = tuple(
         OutcomeBar(day, 100, 121 if index == 5 else 102, 80 if index == 7 else 99, 101)
-        for index, day in enumerate(dates) if day not in missing
+        for index, day in enumerate(bar_dates) if day not in missing
     )
     benchmark = tuple(
         OutcomeBar(day, 1000, 1010, 990, 1005)
-        for day in dates if day not in benchmark_missing
+        for day in bar_dates if day not in benchmark_missing
     )
     manifest = OutcomeResourceManifest(
         manifest_id="fixed-manifest", manifest_version=1, dataset_name="fixed",
         provider="test", dataset_hash=HASH, date_start=dates[0], date_end=dates[-1],
         universe_definition="phase2_fixed_14_symbol_research_cohort",
         calendar_resource={"policy": "fixed"}, calendar_hash=HASH,
+        outcome_observed_through_session=dates[
+            observed_through_index
+            if observed_through_index is not None
+            else len(bar_dates) - 1
+        ],
         benchmark_resource={"symbol": "^TWII"}, benchmark_hash=HASH,
         ohlc_adjustment_contract="provider_compatible_adjusted_v1",
         corporate_action_contract="frozen", symbol_resources=({
@@ -122,12 +131,21 @@ def test_fb04_remains_support_context_and_never_becomes_target_hit():
     assert support.subject_metadata["support_breached"] is True
 
 
-def test_missing_symbol_bar_is_insufficient_and_short_dataset_is_pending():
+def test_missing_symbol_bar_and_closed_dataset_truncation_are_insufficient():
     dates = sessions()
     missing = find(evaluate(dataset(missing={dates[10]})), "val")
     assert missing.terminal_outcome == "insufficient_future_data"
-    pending = find(evaluate(dataset(count=15)), "val")
+    truncated = find(evaluate(dataset(count=15)), "val")
+    assert truncated.terminal_outcome == "insufficient_future_data"
+    assert truncated.target_reached is None
+
+
+def test_pending_requires_explicit_observation_boundary_before_expiry():
+    pending = find(
+        evaluate(dataset(count=80, bar_count=15, observed_through_index=14)), "val"
+    )
     assert pending.terminal_outcome == "pending"
+    assert pending.evaluation_end_session == sessions()[21]
     assert pending.target_reached is None
 
 

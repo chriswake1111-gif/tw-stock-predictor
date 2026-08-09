@@ -12,7 +12,9 @@ from src.domain.performance_validation import (
     EVALUATOR_VERSION,
     EvaluationProfileApproval,
     EvaluationProfileRevision,
+    EvaluationMembershipStatus,
     EvaluationRun,
+    EvaluationRunSnapshot,
 )
 from src.domain.valuation import ApprovalStatus, utc_now_timestamp
 from src.engine.historical_scenario_evaluator import HistoricalScenarioEvaluator
@@ -97,13 +99,29 @@ class PerformanceValidationService:
             for item in snapshots
         ])
         created_at = utc_now_timestamp()
-        evaluations = [
-            result
-            for snapshot in snapshots
-            for result in self.evaluator.evaluate(
+        evaluations = []
+        memberships = []
+        for snapshot in snapshots:
+            snapshot_results = self.evaluator.evaluate(
                 snapshot=snapshot, profile=profile, dataset=dataset, created_at=created_at
             )
-        ]
+            evaluations.extend(snapshot_results)
+            has_eligible_subjects = bool(snapshot_results)
+            memberships.append(EvaluationRunSnapshot(
+                snapshot_id=snapshot["snapshot_id"],
+                symbol=snapshot["symbol"],
+                membership_status=(
+                    EvaluationMembershipStatus.EVALUATED
+                    if has_eligible_subjects
+                    else EvaluationMembershipStatus.NO_ELIGIBLE_SUBJECTS
+                ),
+                reason=(
+                    None
+                    if has_eligible_subjects
+                    else "stored_snapshot_has_no_phase8_eligible_subjects"
+                ),
+                created_at=created_at,
+            ))
         run = self.repository.add_run(
             EvaluationRun(
                 evaluation_profile_revision_id=profile["id"],
@@ -115,6 +133,7 @@ class PerformanceValidationService:
                 universe_definition="phase2_fixed_14_symbol_research_cohort",
                 created_at=created_at,
             ),
+            memberships,
             evaluations,
             idempotency_key,
         )
@@ -152,12 +171,21 @@ class PerformanceValidationService:
         rows = self.repository.results_for_run(run_id)
         if rows is None:
             return None
-        unique_snapshots = {row["snapshot_id"] for row in rows}
+        memberships = self.repository.memberships_for_run(run_id)
+        assert memberships is not None
         unique_subjects = {
             (row["snapshot_id"], row["subject_type"], row["subject_id"])
             for row in rows
         }
         status_counts = Counter(row["terminal_outcome"] for row in rows)
+        represented_symbols = sorted({item["symbol"] for item in memberships})
+        snapshots_with_subjects = sum(
+            item["membership_status"] == "evaluated" for item in memberships
+        )
+        warning_snapshot_ids = {
+            row["snapshot_id"] for row in rows
+            if row["quality_status"] == "quality_warning"
+        }
         groups: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
         for row in rows:
             groups[(
@@ -193,14 +221,25 @@ class PerformanceValidationService:
         return {
             "evaluation_run_id": run_id,
             "coverage": {
-                "eligible_snapshots": len(PHASE2_UNIVERSE),
-                "analyzable_snapshots": len(unique_snapshots),
-                "eligible_subjects": len(unique_subjects),
-                "evaluated_subjects": len(unique_subjects),
+                "cohort_symbol_count": len(PHASE2_UNIVERSE),
+                "cohort_symbols_represented": len(represented_symbols),
+                "represented_symbols": represented_symbols,
+                "requested_snapshot_count": len(memberships),
+                "snapshots_with_eligible_subjects": snapshots_with_subjects,
+                "snapshots_without_eligible_subjects": (
+                    len(memberships) - snapshots_with_subjects
+                ),
+                "eligible_subject_count": len(unique_subjects),
+                "evaluated_subject_count": len(unique_subjects),
+                "evaluation_record_count": len(rows),
                 "target_candidates": len({x for x in unique_subjects if x[1] == "target_candidate"}),
                 "target_clusters": len({x for x in unique_subjects if x[1] == "target_cluster"}),
                 "support_candidates": len({x for x in unique_subjects if x[1] == "support_candidate"}),
-                **dict(sorted(status_counts.items())),
+                "quality_warning_snapshot_count": len(warning_snapshot_ids),
+                "quality_warning_evaluation_record_count": sum(
+                    row["quality_status"] == "quality_warning" for row in rows
+                ),
+                "evaluation_record_status_counts": dict(sorted(status_counts.items())),
             },
             "groups": summaries,
             "disclosures": [

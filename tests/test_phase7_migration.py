@@ -14,7 +14,8 @@ def test_phase7_migration_is_additive_rerunnable_and_fresh_parent_safe(tmp_path)
     first = apply_valuation_migration(str(db_path))
     second = apply_valuation_migration(str(db_path))
     assert "20260809_08_evidence_model_v2_synthesis_snapshot" in MIGRATION_IDS
-    assert MIGRATION_ID == "20260810_09_evidence_model_v2_performance_validation"
+    assert "20260810_09_evidence_model_v2_performance_validation" in MIGRATION_IDS
+    assert MIGRATION_ID == "20260810_10_phase8_review_remediation"
     assert first["applied"] is True
     assert second["applied"] is False
     with sqlite3.connect(db_path) as conn:

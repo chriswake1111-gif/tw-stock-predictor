@@ -32,6 +32,7 @@ def install_fixed_outcome_fixture(monkeypatch):
         dataset_hash=HASH, date_start=dates[0], date_end=dates[-1],
         universe_definition="phase2_fixed_14_symbol_research_cohort",
         calendar_resource={"policy": "fixed_test_calendar"}, calendar_hash=HASH,
+        outcome_observed_through_session=dates[-1],
         benchmark_resource={"symbol": "^TWII"}, benchmark_hash=HASH,
         ohlc_adjustment_contract="provider_compatible_adjusted_v1",
         corporate_action_contract="fixed_test_adjusted_history",
@@ -52,8 +53,22 @@ def install_fixed_outcome_fixture(monkeypatch):
 
 
 def add_snapshot(
-    db_path, *, mode=CaptureMode.HISTORICAL_RECONSTRUCTION, suffix="one", symbol="2317.TW"
+    db_path, *, mode=CaptureMode.HISTORICAL_RECONSTRUCTION, suffix="one",
+    symbol="2317.TW", with_eligible_subject=True,
 ):
+    supporting_methods = []
+    if with_eligible_subject:
+        supporting_methods = [{
+            "candidate_id": f"valuation:{suffix}",
+            "method_family": "VAL-01",
+            "rule_id": "VAL-01",
+            "rule_version": "2.0.0",
+            "semantic_role": "target",
+            "price_low": "150",
+            "price_high": "170",
+            "source_resource_ids": [f"eps:{suffix}"],
+            "approval_ids": ["approval-val"],
+        }]
     return AnalysisSnapshotRepository(str(db_path)).add(
         AnalysisSnapshot(
             symbol=symbol,
@@ -66,17 +81,7 @@ def add_snapshot(
             output={
                 "status": "partial",
                 "target_confluence": {
-                    "supporting_methods": [{
-                        "candidate_id": f"valuation:{suffix}",
-                        "method_family": "VAL-01",
-                        "rule_id": "VAL-01",
-                        "rule_version": "2.0.0",
-                        "semantic_role": "target",
-                        "price_low": "150",
-                        "price_high": "170",
-                        "source_resource_ids": [f"eps:{suffix}"],
-                        "approval_ids": ["approval-val"],
-                    }],
+                    "supporting_methods": supporting_methods,
                     "overlap_ranges": [],
                 },
             },
@@ -203,9 +208,18 @@ def test_quality_warning_stays_in_coverage_but_not_target_rate_denominator(monke
     summary = client.get(
         "/api/v2/performance/summary", params={"evaluation_run_id": run_id}
     ).json()["performance_summary"]
-    assert summary["coverage"]["eligible_snapshots"] == 14
-    assert summary["coverage"]["analyzable_snapshots"] == 1
-    assert summary["coverage"]["quality_warning"] == 2
+    coverage = summary["coverage"]
+    assert coverage["cohort_symbol_count"] == 14
+    assert coverage["cohort_symbols_represented"] == 1
+    assert coverage["requested_snapshot_count"] == 1
+    assert coverage["snapshots_with_eligible_subjects"] == 1
+    assert coverage["snapshots_without_eligible_subjects"] == 0
+    assert coverage["eligible_subject_count"] == 1
+    assert coverage["evaluated_subject_count"] == 1
+    assert coverage["evaluation_record_count"] == 2
+    assert coverage["quality_warning_snapshot_count"] == 1
+    assert coverage["quality_warning_evaluation_record_count"] == 2
+    assert coverage["evaluation_record_status_counts"] == {"quality_warning": 2}
     assert all(group["denominator"] == 0 for group in summary["groups"])
     assert all(group["historical_target_reach_rate"] is None for group in summary["groups"])
     def keys(value):
@@ -216,3 +230,60 @@ def test_quality_warning_stays_in_coverage_but_not_target_rate_denominator(monke
         return set()
 
     assert not {"prediction_probability", "success_probability", "model_ranking"}.intersection(keys(summary))
+
+
+def test_run_preserves_snapshot_without_eligible_subjects(monkeypatch, tmp_path):
+    install_fixed_outcome_fixture(monkeypatch)
+    db_path = tmp_path / "empty-membership.db"
+    key = "phase8-secret"
+    monkeypatch.setenv("DATABASE_PATH", str(db_path))
+    monkeypatch.setenv("EVIDENCE_V2_WRITES_ENABLED", "true")
+    monkeypatch.setenv("EVIDENCE_V2_ADMIN_API_KEY", key)
+    monkeypatch.setenv("EVIDENCE_V2_ADMIN_ACTOR", "phase8-reviewer")
+    snapshot = add_snapshot(
+        db_path, suffix="empty", with_eligible_subject=False
+    )
+    response = client.post(
+        "/api/v2/evaluations/runs", headers=headers(key, "empty-run"),
+        json=request([snapshot["snapshot_id"]]),
+    )
+    response.raise_for_status()
+    run = response.json()["evaluation_run"]
+    assert run["results"] == []
+    assert run["snapshot_memberships"][0]["membership_status"] == "no_eligible_subjects"
+    summary = client.get(
+        "/api/v2/performance/summary",
+        params={"evaluation_run_id": run["evaluation_run_id"]},
+    ).json()["performance_summary"]
+    assert summary["coverage"]["requested_snapshot_count"] == 1
+    assert summary["coverage"]["snapshots_with_eligible_subjects"] == 0
+    assert summary["coverage"]["snapshots_without_eligible_subjects"] == 1
+    assert summary["coverage"]["evaluation_record_count"] == 0
+
+
+def test_coverage_counts_twenty_requested_snapshots_without_unit_mixing(
+    monkeypatch, tmp_path
+):
+    install_fixed_outcome_fixture(monkeypatch)
+    db_path = tmp_path / "twenty.db"
+    key = "phase8-secret"
+    monkeypatch.setenv("DATABASE_PATH", str(db_path))
+    monkeypatch.setenv("EVIDENCE_V2_WRITES_ENABLED", "true")
+    monkeypatch.setenv("EVIDENCE_V2_ADMIN_API_KEY", key)
+    monkeypatch.setenv("EVIDENCE_V2_ADMIN_ACTOR", "phase8-reviewer")
+    snapshots = [add_snapshot(db_path, suffix=f"coverage-{index}") for index in range(20)]
+    response = client.post(
+        "/api/v2/evaluations/runs", headers=headers(key, "twenty-run"),
+        json=request([item["snapshot_id"] for item in snapshots]),
+    )
+    response.raise_for_status()
+    run_id = response.json()["evaluation_run"]["evaluation_run_id"]
+    coverage = client.get(
+        "/api/v2/performance/summary", params={"evaluation_run_id": run_id}
+    ).json()["performance_summary"]["coverage"]
+    assert coverage["cohort_symbol_count"] == 14
+    assert coverage["cohort_symbols_represented"] == 1
+    assert coverage["requested_snapshot_count"] == 20
+    assert coverage["snapshots_with_eligible_subjects"] == 20
+    assert coverage["eligible_subject_count"] == 20
+    assert coverage["evaluation_record_count"] == 40

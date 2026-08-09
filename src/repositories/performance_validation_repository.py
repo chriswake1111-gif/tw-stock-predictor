@@ -12,6 +12,7 @@ from src.domain.performance_validation import (
     EvaluationProfileApproval,
     EvaluationProfileRevision,
     EvaluationRun,
+    EvaluationRunSnapshot,
     OutcomeResourceManifest,
     ScenarioEvaluation,
 )
@@ -89,6 +90,17 @@ class PerformanceValidationRepository:
         if item["target_reached"] is not None:
             item["target_reached"] = bool(item["target_reached"])
         return item
+
+    @staticmethod
+    def _memberships(
+        conn: sqlite3.Connection, run_id: str
+    ) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            "SELECT * FROM evaluation_run_snapshots WHERE evaluation_run_id = ? "
+            "ORDER BY snapshot_id",
+            (run_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def add_profile_revision(
         self,
@@ -276,9 +288,14 @@ class PerformanceValidationRepository:
                 return {**self._manifest(duplicate), "created": False}
             conn.execute(
                 """
-                INSERT INTO outcome_resource_manifests VALUES (
-                    ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
-                )
+                INSERT INTO outcome_resource_manifests (
+                    manifest_id,payload_fingerprint,manifest_version,dataset_name,
+                    provider,dataset_hash,date_start,date_end,universe_definition,
+                    calendar_resource_json,calendar_hash,benchmark_resource_json,
+                    benchmark_hash,ohlc_adjustment_contract,corporate_action_contract,
+                    symbol_resources_json,ingested_at,created_at,
+                    outcome_observed_through_session
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     payload["manifest_id"], fingerprint, payload["manifest_version"],
@@ -288,7 +305,7 @@ class PerformanceValidationRepository:
                     canonical_json(payload["benchmark_resource"]), payload["benchmark_hash"],
                     payload["ohlc_adjustment_contract"], payload["corporate_action_contract"],
                     canonical_json(payload["symbol_resources"]), payload["ingested_at"],
-                    payload["created_at"],
+                    payload["created_at"], payload["outcome_observed_through_session"],
                 ),
             )
             self._bind(conn, key, fingerprint, "outcome_manifest", payload["manifest_id"])
@@ -309,6 +326,7 @@ class PerformanceValidationRepository:
     def add_run(
         self,
         run: EvaluationRun,
+        memberships: list[EvaluationRunSnapshot],
         evaluations: list[ScenarioEvaluation],
         idempotency_key: str,
     ) -> dict[str, Any]:
@@ -326,13 +344,23 @@ class PerformanceValidationRepository:
                 ).fetchone()
                 if row is None:
                     raise RuntimeError("idempotency ledger references a missing evaluation run")
-                return {**dict(row), "created": False, "results": self._results(conn, row["evaluation_run_id"])}
+                return {
+                    **dict(row), "created": False,
+                    "snapshot_memberships": self._memberships(conn, row["evaluation_run_id"]),
+                    "results": self._results(conn, row["evaluation_run_id"]),
+                }
             duplicate = conn.execute(
                 "SELECT * FROM evaluation_runs WHERE run_fingerprint = ?", (fingerprint,)
             ).fetchone()
             if duplicate:
                 self._bind(conn, key, fingerprint, "evaluation_run", duplicate["evaluation_run_id"])
-                return {**dict(duplicate), "created": False, "results": self._results(conn, duplicate["evaluation_run_id"])}
+                return {
+                    **dict(duplicate), "created": False,
+                    "snapshot_memberships": self._memberships(
+                        conn, duplicate["evaluation_run_id"]
+                    ),
+                    "results": self._results(conn, duplicate["evaluation_run_id"]),
+                }
             profile = conn.execute(
                 "SELECT id FROM evaluation_profile_revisions WHERE id = ?",
                 (semantic["evaluation_profile_revision_id"],),
@@ -356,6 +384,38 @@ class PerformanceValidationRepository:
                     semantic["status"],
                 ),
             )
+            membership_payloads = [item.canonical_payload() for item in memberships]
+            membership_by_snapshot = {
+                item["snapshot_id"]: item for item in membership_payloads
+            }
+            if not membership_payloads or len(membership_by_snapshot) != len(membership_payloads):
+                raise ValueError("evaluation run memberships must be non-empty and unique")
+            evaluation_snapshot_ids = {
+                item.snapshot_id for item in evaluations
+            }
+            if not evaluation_snapshot_ids.issubset(membership_by_snapshot):
+                raise ValueError("scenario evaluation snapshot is missing run membership")
+            for snapshot_id, membership in membership_by_snapshot.items():
+                snapshot_row = conn.execute(
+                    "SELECT symbol FROM analysis_snapshots WHERE snapshot_id = ?",
+                    (snapshot_id,),
+                ).fetchone()
+                if snapshot_row is None or snapshot_row["symbol"] != membership["symbol"]:
+                    raise ValueError("run membership must reference the exact snapshot symbol")
+                has_evaluations = snapshot_id in evaluation_snapshot_ids
+                expected_status = "evaluated" if has_evaluations else "no_eligible_subjects"
+                if membership["membership_status"] != expected_status:
+                    raise ValueError(
+                        "completed run membership status must match eligible evaluations"
+                    )
+                conn.execute(
+                    "INSERT INTO evaluation_run_snapshots VALUES (?,?,?,?,?,?)",
+                    (
+                        run_id, snapshot_id, membership["symbol"],
+                        membership["membership_status"], membership["reason"],
+                        membership["created_at"],
+                    ),
+                )
             for evaluation in evaluations:
                 payload = evaluation.canonical_payload()
                 if payload["outcome_resource_manifest_id"] != semantic["outcome_resource_manifest_id"]:
@@ -396,7 +456,11 @@ class PerformanceValidationRepository:
             row = conn.execute(
                 "SELECT * FROM evaluation_runs WHERE evaluation_run_id = ?", (run_id,)
             ).fetchone()
-            return {**dict(row), "created": True, "results": self._results(conn, run_id)}
+            return {
+                **dict(row), "created": True,
+                "snapshot_memberships": self._memberships(conn, run_id),
+                "results": self._results(conn, run_id),
+            }
 
     def _results(self, conn: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:
         rows = conn.execute(
@@ -410,7 +474,18 @@ class PerformanceValidationRepository:
             row = conn.execute(
                 "SELECT * FROM evaluation_runs WHERE evaluation_run_id = ?", (run_id,)
             ).fetchone()
-            return {**dict(row), "results": self._results(conn, run_id)} if row else None
+            return {
+                **dict(row),
+                "snapshot_memberships": self._memberships(conn, run_id),
+                "results": self._results(conn, run_id),
+            } if row else None
+
+    def memberships_for_run(self, run_id: str) -> list[dict[str, Any]] | None:
+        with self._connect() as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM evaluation_runs WHERE evaluation_run_id = ?", (run_id,)
+            ).fetchone()
+            return self._memberships(conn, run_id) if exists else None
 
     def results_for_run(self, run_id: str) -> list[dict[str, Any]] | None:
         with self._connect() as conn:

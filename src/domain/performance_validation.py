@@ -31,6 +31,12 @@ class EvaluationSubjectType(str, Enum):
     TARGET_CLUSTER = "target_cluster"
 
 
+class EvaluationMembershipStatus(str, Enum):
+    REQUESTED = "requested"
+    EVALUATED = "evaluated"
+    NO_ELIGIBLE_SUBJECTS = "no_eligible_subjects"
+
+
 def decimal_text(value: Any, field_name: str, *, positive: bool = False) -> str:
     try:
         number = Decimal(str(value))
@@ -152,6 +158,7 @@ class OutcomeResourceManifest:
     universe_definition: str
     calendar_resource: dict[str, Any]
     calendar_hash: str
+    outcome_observed_through_session: str
     benchmark_resource: dict[str, Any]
     benchmark_hash: str
     ohlc_adjustment_contract: str
@@ -176,6 +183,14 @@ class OutcomeResourceManifest:
         resources = sorted((dict(item) for item in self.symbol_resources), key=canonical_json)
         if not resources:
             raise ValueError("symbol_resources cannot be empty")
+        observed_through = _date(
+            self.outcome_observed_through_session,
+            "outcome_observed_through_session",
+        )
+        if not start <= observed_through <= end:
+            raise ValueError(
+                "outcome_observed_through_session must be within manifest date range"
+            )
         return {
             "manifest_id": self.manifest_id.strip(),
             "manifest_version": self.manifest_version,
@@ -187,6 +202,7 @@ class OutcomeResourceManifest:
             "universe_definition": self.universe_definition.strip(),
             "calendar_resource": dict(self.calendar_resource),
             "calendar_hash": _sha256(self.calendar_hash, "calendar_hash"),
+            "outcome_observed_through_session": observed_through,
             "benchmark_resource": dict(self.benchmark_resource),
             "benchmark_hash": _sha256(self.benchmark_hash, "benchmark_hash"),
             "ohlc_adjustment_contract": self.ohlc_adjustment_contract.strip(),
@@ -198,6 +214,34 @@ class OutcomeResourceManifest:
 
     def fingerprint(self) -> str:
         return sha256_json(self.canonical_payload())
+
+
+@dataclass(frozen=True)
+class EvaluationRunSnapshot:
+    snapshot_id: str
+    symbol: str
+    membership_status: EvaluationMembershipStatus
+    created_at: str
+    reason: str | None = None
+
+    def canonical_payload(self) -> dict[str, Any]:
+        snapshot_id = self.snapshot_id.strip()
+        symbol = self.symbol.strip().upper()
+        if not snapshot_id or not symbol:
+            raise ValueError("run membership snapshot_id and symbol are required")
+        reason = self.reason.strip() if self.reason else None
+        if self.membership_status is EvaluationMembershipStatus.NO_ELIGIBLE_SUBJECTS:
+            if not reason:
+                raise ValueError("no_eligible_subjects membership requires a reason")
+        elif reason is not None:
+            raise ValueError("membership reason is only valid for no_eligible_subjects")
+        return {
+            "snapshot_id": snapshot_id,
+            "symbol": symbol,
+            "membership_status": self.membership_status.value,
+            "reason": reason,
+            "created_at": normalize_utc_timestamp(self.created_at, "created_at"),
+        }
 
 
 @dataclass(frozen=True)
