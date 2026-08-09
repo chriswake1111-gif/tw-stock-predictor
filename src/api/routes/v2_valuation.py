@@ -37,10 +37,18 @@ from src.domain.deployment import (
     DeploymentTrigger,
     TriggerType,
 )
+from src.domain.screening import (
+    ScreeningProfileRevision,
+    ScreeningProfileScope,
+    ScreeningRecordStatus,
+    SecurityValuationObservation,
+    ValuationBasis,
+)
 from src.services.deployment_plan_service import DeploymentPlanService
 from src.services.forward_eps_service import ForwardEPSService
 from src.services.market_liquidity_service import MarketLiquidityService
 from src.services.rule_registry import RuleRegistry
+from src.services.security_screening_service import SecurityScreeningService
 from src.services.technical_scenario_service import TechnicalScenarioService
 
 
@@ -148,6 +156,49 @@ class DeploymentApprovalRequest(StrictRequest):
     approved_at: str
 
 
+class SecurityValuationRequest(StrictRequest):
+    logical_observation_id: str
+    revision_number: int
+    revision_of: str | None = None
+    symbol: str
+    metric_date: str
+    pe: float | None = None
+    pb: float | None = None
+    dividend_yield_ratio: float | None = None
+    source_name: str
+    source_dataset: str
+    available_at: str
+    status: ScreeningRecordStatus = ScreeningRecordStatus.AVAILABLE
+
+
+class ScreeningProfileRequest(StrictRequest):
+    logical_profile_id: str
+    revision_number: int
+    revision_of: str | None = None
+    scope: ScreeningProfileScope
+    scope_value: str | None = None
+    valuation_basis: ValuationBasis
+    valuation_source_name: str
+    valuation_source_dataset: str
+    pe_percentile_max: float
+    pb_percentile_max: float
+    dividend_yield_percentile_min: float
+    history_years: int
+    minimum_observations: int
+    forward_eps_source_name: str
+    forward_eps_source_type: ForwardEPSSourceType
+    technical_component: str
+    available_at: str
+    rationale: str
+    status: ScreeningRecordStatus = ScreeningRecordStatus.AVAILABLE
+
+
+class ScreeningProfileApprovalRequest(StrictRequest):
+    decision: ApprovalStatus
+    rationale: str
+    approved_at: str
+
+
 def _service() -> ForwardEPSService:
     return ForwardEPSService(os.getenv("DATABASE_PATH", "data/cache.db"))
 
@@ -170,6 +221,10 @@ def _technical_service() -> TechnicalScenarioService:
 
 def _deployment_service() -> DeploymentPlanService:
     return DeploymentPlanService(os.getenv("DATABASE_PATH", "data/cache.db"))
+
+
+def _screening_service() -> SecurityScreeningService:
+    return SecurityScreeningService(os.getenv("DATABASE_PATH", "data/cache.db"))
 
 
 def _require_write_access(api_key: str | None) -> str:
@@ -498,6 +553,121 @@ def approve_deployment_plan(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.post("/security-valuations")
+def create_security_valuation(
+    payload: SecurityValuationRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    admin_api_key: str | None = Header(default=None, alias="X-Admin-API-Key"),
+):
+    try:
+        _require_write_access(admin_api_key)
+        observation = SecurityValuationObservation(
+            logical_observation_id=payload.logical_observation_id,
+            revision_number=payload.revision_number,
+            revision_of=payload.revision_of,
+            symbol=normalize_symbol(payload.symbol),
+            metric_date=payload.metric_date,
+            pe=payload.pe,
+            pb=payload.pb,
+            dividend_yield_ratio=payload.dividend_yield_ratio,
+            source_name=payload.source_name,
+            source_dataset=payload.source_dataset,
+            available_at=payload.available_at,
+            status=payload.status,
+        )
+        result = _screening_service().ingest_valuation(
+            observation, idempotency_key
+        )
+        return {"status": "available", "valuation_observation": _public_dto(result)}
+    except (ValueError, RuntimeError, sqlite3.IntegrityError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/screening-profiles")
+def create_screening_profile(
+    payload: ScreeningProfileRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    admin_api_key: str | None = Header(default=None, alias="X-Admin-API-Key"),
+):
+    try:
+        actor = _require_write_access(admin_api_key)
+        revision = ScreeningProfileRevision(
+            logical_profile_id=payload.logical_profile_id,
+            revision_number=payload.revision_number,
+            revision_of=payload.revision_of,
+            scope=payload.scope,
+            scope_value=payload.scope_value,
+            valuation_basis=payload.valuation_basis,
+            valuation_source_name=payload.valuation_source_name,
+            valuation_source_dataset=payload.valuation_source_dataset,
+            pe_percentile_max=payload.pe_percentile_max,
+            pb_percentile_max=payload.pb_percentile_max,
+            dividend_yield_percentile_min=payload.dividend_yield_percentile_min,
+            history_years=payload.history_years,
+            minimum_observations=payload.minimum_observations,
+            forward_eps_source_name=payload.forward_eps_source_name,
+            forward_eps_source_type=payload.forward_eps_source_type,
+            technical_component=payload.technical_component,
+            available_at=payload.available_at,
+            created_by=actor,
+            rationale=payload.rationale,
+            status=payload.status,
+        )
+        result = _screening_service().ingest_profile(revision, idempotency_key)
+        return {
+            "status": "available",
+            "approval_status": "draft",
+            "screening_profile": _public_dto(result),
+        }
+    except (ValueError, RuntimeError, sqlite3.IntegrityError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/screening-profiles/{profile_revision_id}/approval")
+def approve_screening_profile(
+    profile_revision_id: str,
+    payload: ScreeningProfileApprovalRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    admin_api_key: str | None = Header(default=None, alias="X-Admin-API-Key"),
+):
+    try:
+        actor = _require_write_access(admin_api_key)
+        result = _screening_service().record_profile_approval(
+            profile_revision_id=profile_revision_id,
+            decision=payload.decision,
+            rationale=payload.rationale,
+            approved_at=payload.approved_at,
+            approved_by=actor,
+            idempotency_key=idempotency_key,
+        )
+        return {"status": "available", "approval": _public_dto(result)}
+    except (ValueError, RuntimeError, sqlite3.IntegrityError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/screening/{symbol}")
+def get_security_screening(
+    symbol: str,
+    knowledge_cutoff_at: str | None = Query(default=None),
+    as_of_date: str | None = Query(default=None),
+    logical_profile_id: str | None = Query(default=None),
+    profile_revision_id: str | None = Query(default=None),
+):
+    try:
+        cutoff, cutoff_policy = resolve_knowledge_cutoff(
+            knowledge_cutoff_at, as_of_date
+        )
+        result = _screening_service().analyze(
+            normalize_symbol(symbol),
+            cutoff,
+            logical_profile_id=logical_profile_id,
+            profile_revision_id=profile_revision_id,
+        )
+        return {**_public_dto(result), "cutoff_policy": cutoff_policy}
+    except (ValueError, RuntimeError, sqlite3.Error) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/deployment-plan/{symbol}")
 def get_deployment_plans(
     symbol: str,
@@ -560,9 +730,22 @@ def get_v2_analysis(
             "rules_used": [],
         }
 
+    try:
+        screening = _screening_service().analyze(normalized_symbol, cutoff)
+    except (ValueError, RuntimeError, sqlite3.Error) as exc:
+        screening = {
+            "status": "insufficient_data",
+            "reason": f"screening_data_unavailable: {exc}",
+            "research_result": None,
+            "components": {},
+            "rules_used": [],
+            "automatic_order": False,
+        }
+
     valuation_available = valuation["status"] in {"available", "not_applicable"}
     liquidity_available = liquidity["status"] == "available"
     technical_available = technical_support["status"] == "available"
+    screening_available = screening["status"] == "available"
     available_sections = []
     missing = []
     if valuation_available:
@@ -577,6 +760,10 @@ def get_v2_analysis(
         available_sections.append("technical_support")
     else:
         missing.append("technical_support")
+    if screening_available:
+        available_sections.append("screening")
+    else:
+        missing.append("screening")
     needs_human = []
     if valuation["status"] == "needs_human_input":
         if valuation["reason"] == "approved_forward_eps_required":
@@ -591,6 +778,15 @@ def get_v2_analysis(
         }.get(technical_support.get("reason"))
         if technical_requirement:
             needs_human.append(technical_requirement)
+    if screening["status"] == "needs_human_input":
+        screening_requirement = {
+            "approved_screening_profile_required": "approved_screening_profile",
+            "screening_profile_selection_required": "screening_profile_selection",
+            "screening_profile_approval_revoked": "approved_screening_profile",
+            "screening_profile_revoked": "approved_screening_profile",
+        }.get(screening.get("reason"))
+        if screening_requirement:
+            needs_human.append(screening_requirement)
     return {
         "status": "partial",
         "symbol": normalized_symbol,
@@ -615,8 +811,9 @@ def get_v2_analysis(
         "fibonacci_scenarios": {"status": "unsupported", "reason": "use_technical_support_phase_4"},
         "target_confluence": {"status": "unsupported", "reason": "phase_7_not_implemented"},
         "deployment_plan": deployment_plan,
+        "screening": screening,
         "invalidation": valuation["invalidation_conditions"],
-        "rules_used": valuation["rules_used"] + liquidity.get("rules_used", []) + technical_support.get("rules_used", []) + deployment_plan.get("rules_used", []),
+        "rules_used": valuation["rules_used"] + liquidity.get("rules_used", []) + technical_support.get("rules_used", []) + deployment_plan.get("rules_used", []) + screening.get("rules_used", []),
         "unsupported": ["eva_formula", "margin_return_8_percent_formula"],
         "snapshot_id": None,
     }
