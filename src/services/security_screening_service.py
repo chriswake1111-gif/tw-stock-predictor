@@ -287,4 +287,42 @@ class SecurityScreeningService:
             "no_automatic_order",
             "percentile_thresholds_are_project_operationalization",
         ]
+        result["source_resource_versions"] = [
+            {
+                "section": "screening",
+                "resource_type": "screening_profile_revision",
+                "resource_id": profile["id"],
+                "logical_resource_id": profile["logical_profile_id"],
+                "revision_number": profile["revision_number"],
+                "available_at": profile["available_at"],
+                "ingested_at": profile["ingested_at"],
+                "approval_ids": [profile["verified_approval_id"]],
+            },
+            *[
+                {
+                    "section": "screening",
+                    "resource_type": "security_valuation_revision",
+                    "resource_id": row["id"],
+                    "logical_resource_id": row["logical_observation_id"],
+                    "revision_number": row["revision_number"],
+                    "available_at": row["available_at"],
+                    "ingested_at": row["ingested_at"],
+                    "approval_ids": [],
+                }
+                for row in valuations
+            ],
+            *[
+                {
+                    "section": "screening",
+                    "resource_type": "forward_eps_revision",
+                    "resource_id": row["id"],
+                    "logical_resource_id": row["logical_series_id"],
+                    "revision_number": row["revision_number"],
+                    "available_at": row["available_at"],
+                    "ingested_at": row["ingested_at"],
+                    "approval_ids": [row["verified_approval_id"]],
+                }
+                for row in forward_eps
+            ],
+        ]
         return result

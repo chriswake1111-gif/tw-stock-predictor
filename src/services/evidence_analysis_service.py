@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
+from src.domain.analysis_snapshot import (
+    AnalysisSnapshot,
+    CaptureMode,
+    SynthesisProfileApproval,
+    SynthesisProfileRevision,
+)
+from src.domain.valuation import ApprovalStatus, utc_now_timestamp
 from src.domain.valuation import normalize_utc_timestamp
 from src.engine.target_confluence import TargetConfluenceEngine
+from src.repositories.analysis_snapshot_repository import AnalysisSnapshotRepository
 from src.repositories.synthesis_profile_repository import SynthesisProfileRepository
 from src.services.rule_registry import RuleRegistry
 
@@ -13,8 +22,44 @@ from src.services.rule_registry import RuleRegistry
 class EvidenceAnalysisService:
     def __init__(self, db_path: str = "data/cache.db"):
         self.profile_repository = SynthesisProfileRepository(db_path)
+        self.snapshot_repository = AnalysisSnapshotRepository(db_path)
         self.registry = RuleRegistry()
         self.engine = TargetConfluenceEngine()
+
+    def ingest_profile(
+        self, revision: SynthesisProfileRevision, idempotency_key: str
+    ) -> dict[str, Any]:
+        return self.profile_repository.add_revision(revision, idempotency_key)
+
+    def record_profile_approval(
+        self,
+        *,
+        profile_revision_id: str,
+        decision: ApprovalStatus,
+        rationale: str,
+        approved_at: str,
+        approved_by: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        rule = self.registry.describe("TGT-01")
+        identity = "|".join([profile_revision_id, "TGT-01", idempotency_key])
+        approval = SynthesisProfileApproval(
+            approval_id=(
+                "synthesis_approval_"
+                f"{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:24]}"
+            ),
+            profile_revision_id=profile_revision_id,
+            decision=decision,
+            rule_id="TGT-01",
+            rule_version=rule["version"],
+            evidence_level=rule["evidence_level"],
+            implementation_mode=rule["implementation_mode"],
+            project_operationalization=rule["project_operationalization"],
+            approved_by=approved_by,
+            rationale=rationale,
+            approved_at=approved_at,
+        )
+        return self.profile_repository.add_approval(approval, idempotency_key)
 
     @staticmethod
     def _approved(profile: dict[str, Any]) -> bool:
@@ -229,6 +274,112 @@ class EvidenceAnalysisService:
         result.update({
             "symbol": symbol,
             "knowledge_cutoff_at": cutoff,
+            "synthesis_profile_logical_id": profile["logical_profile_id"],
+            "synthesis_profile_revision_number": profile["revision_number"],
+            "synthesis_profile_available_at": profile["available_at"],
+            "synthesis_profile_ingested_at": profile["ingested_at"],
             "automatic_order": False,
         })
         return result
+
+    @staticmethod
+    def _snapshot_provenance(analysis: dict[str, Any]) -> list[dict[str, Any]]:
+        resources: list[dict[str, Any]] = []
+        valuation = analysis.get("valuation", {})
+        for resource_type, rows in (
+            ("forward_eps_revision", valuation.get("forward_eps", [])),
+            ("pe_scenario_revision", valuation.get("pe_scenarios", [])),
+        ):
+            for row in rows:
+                if not row.get("id"):
+                    continue
+                approval_id = row.get("verified_approval_id")
+                resources.append({
+                    "section": "valuation",
+                    "resource_type": resource_type,
+                    "resource_id": row["id"],
+                    "logical_resource_id": row.get("logical_series_id"),
+                    "revision_number": row.get("revision_number"),
+                    "available_at": row.get("available_at"),
+                    "ingested_at": row.get("ingested_at"),
+                    "approval_ids": [approval_id] if approval_id else [],
+                })
+        for scenario in analysis.get("technical_support", {}).get("scenarios", []):
+            trace = scenario.get("rule_trace", {})
+            resources.append({
+                "section": "technical_support",
+                "resource_type": "anchor_revision",
+                "resource_id": scenario["anchor_set_revision_id"],
+                "logical_resource_id": None,
+                "revision_number": scenario.get("anchor_revision_number"),
+                "available_at": scenario.get("anchor_available_at"),
+                "ingested_at": scenario.get("anchor_ingested_at"),
+                "approval_ids": [trace["approval_id"]] if trace.get("approval_id") else [],
+            })
+        resources.extend(analysis.get("liquidity", {}).get("source_resource_versions", []))
+        resources.extend(analysis.get("screening", {}).get("source_resource_versions", []))
+        for plan in analysis.get("deployment_plan", {}).get("plans", []):
+            trace = plan.get("rule_trace") or {}
+            resources.append({
+                "section": "deployment_plan",
+                "resource_type": "deployment_plan_revision",
+                "resource_id": plan["plan_revision_id"],
+                "logical_resource_id": plan.get("logical_campaign_id"),
+                "revision_number": plan.get("revision_number"),
+                "available_at": plan.get("available_at"),
+                "ingested_at": plan.get("ingested_at"),
+                "approval_ids": [trace["approval_id"]] if trace.get("approval_id") else [],
+            })
+        confluence = analysis.get("target_confluence", {})
+        if confluence.get("synthesis_profile_revision_id"):
+            resources.append({
+                "section": "target_confluence",
+                "resource_type": "synthesis_profile_revision",
+                "resource_id": confluence["synthesis_profile_revision_id"],
+                "logical_resource_id": confluence.get("synthesis_profile_logical_id"),
+                "revision_number": confluence.get("synthesis_profile_revision_number"),
+                "available_at": confluence.get("synthesis_profile_available_at"),
+                "ingested_at": confluence.get("synthesis_profile_ingested_at"),
+                "approval_ids": [confluence["synthesis_profile_approval_id"]],
+            })
+        unique = {
+            (item["section"], item["resource_type"], item["resource_id"]): item
+            for item in resources
+        }
+        return [unique[key] for key in sorted(unique)]
+
+    def create_snapshot(
+        self,
+        *,
+        analysis: dict[str, Any],
+        capture_mode: CaptureMode,
+        idempotency_key: str,
+        supersedes_snapshot_id: str | None = None,
+    ) -> dict[str, Any]:
+        resources = self._snapshot_provenance(analysis)
+        approvals = sorted({
+            approval_id
+            for item in resources
+            for approval_id in item.get("approval_ids", [])
+        })
+        used_rule_versions = {
+            trace["rule_id"]: trace.get("rule_version") or trace.get("version")
+            for trace in analysis.get("rules_used", [])
+            if trace.get("rule_id") and (trace.get("rule_version") or trace.get("version"))
+        }
+        confluence = analysis.get("target_confluence", {})
+        snapshot = AnalysisSnapshot(
+            symbol=analysis["symbol"],
+            knowledge_cutoff_at=analysis["knowledge_cutoff_at"],
+            capture_mode=capture_mode,
+            model_version=analysis["model"]["version"],
+            synthesis_profile_revision_id=confluence.get("synthesis_profile_revision_id"),
+            synthesis_profile_approval_id=confluence.get("synthesis_profile_approval_id"),
+            used_rule_versions=used_rule_versions,
+            source_resource_versions=resources,
+            manual_approval_ids=approvals,
+            output=analysis,
+            created_at=utc_now_timestamp(),
+            supersedes_snapshot_id=supersedes_snapshot_id,
+        )
+        return self.snapshot_repository.add(snapshot, idempotency_key)

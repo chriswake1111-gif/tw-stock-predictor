@@ -44,12 +44,19 @@ from src.domain.screening import (
     SecurityValuationObservation,
     ValuationBasis,
 )
+from src.domain.analysis_snapshot import (
+    CaptureMode,
+    SynthesisProfileRevision,
+    SynthesisProfileScope,
+    SynthesisRecordStatus,
+)
 from src.services.deployment_plan_service import DeploymentPlanService
 from src.services.forward_eps_service import ForwardEPSService
 from src.services.market_liquidity_service import MarketLiquidityService
 from src.services.rule_registry import RuleRegistry
 from src.services.security_screening_service import SecurityScreeningService
 from src.services.technical_scenario_service import TechnicalScenarioService
+from src.services.evidence_analysis_service import EvidenceAnalysisService
 
 
 router = APIRouter(prefix="/api/v2", tags=["evidence-model-v2"])
@@ -199,6 +206,39 @@ class ScreeningProfileApprovalRequest(StrictRequest):
     approved_at: str
 
 
+class EvidenceStrengthThresholdRequest(StrictRequest):
+    minimum_independent_target_components: int
+    label: str
+
+
+class SynthesisProfileRequest(StrictRequest):
+    logical_profile_id: str
+    revision_number: int
+    revision_of: str | None = None
+    scope: SynthesisProfileScope
+    scope_value: str | None = None
+    allowed_method_families: list[str]
+    overlap_tolerance: str
+    evidence_strength_policy: list[EvidenceStrengthThresholdRequest]
+    calculation_quantum: str
+    display_quantum: str
+    available_at: str
+    rationale: str
+    status: SynthesisRecordStatus = SynthesisRecordStatus.AVAILABLE
+
+
+class SynthesisProfileApprovalRequest(StrictRequest):
+    decision: ApprovalStatus
+    rationale: str
+    approved_at: str
+
+
+class AnalysisRefreshRequest(StrictRequest):
+    logical_synthesis_profile_id: str | None = None
+    synthesis_profile_revision_id: str | None = None
+    supersedes_snapshot_id: str | None = None
+
+
 def _service() -> ForwardEPSService:
     return ForwardEPSService(os.getenv("DATABASE_PATH", "data/cache.db"))
 
@@ -225,6 +265,10 @@ def _deployment_service() -> DeploymentPlanService:
 
 def _screening_service() -> SecurityScreeningService:
     return SecurityScreeningService(os.getenv("DATABASE_PATH", "data/cache.db"))
+
+
+def _evidence_analysis_service() -> EvidenceAnalysisService:
+    return EvidenceAnalysisService(os.getenv("DATABASE_PATH", "data/cache.db"))
 
 
 def _require_write_access(api_key: str | None) -> str:
@@ -645,6 +689,91 @@ def approve_screening_profile(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.post("/synthesis-profiles")
+def create_synthesis_profile(
+    payload: SynthesisProfileRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    admin_api_key: str | None = Header(default=None, alias="X-Admin-API-Key"),
+):
+    try:
+        actor = _require_write_access(admin_api_key)
+        revision = SynthesisProfileRevision(
+            logical_profile_id=payload.logical_profile_id,
+            revision_number=payload.revision_number,
+            revision_of=payload.revision_of,
+            scope=payload.scope,
+            scope_value=payload.scope_value,
+            allowed_method_families=tuple(payload.allowed_method_families),
+            overlap_tolerance=payload.overlap_tolerance,
+            evidence_strength_policy=tuple(
+                threshold.model_dump() for threshold in payload.evidence_strength_policy
+            ),
+            calculation_quantum=payload.calculation_quantum,
+            display_quantum=payload.display_quantum,
+            available_at=payload.available_at,
+            created_by=actor,
+            rationale=payload.rationale,
+            status=payload.status,
+        )
+        result = _evidence_analysis_service().ingest_profile(
+            revision, idempotency_key
+        )
+        return {
+            "status": "available",
+            "approval_status": "draft",
+            "synthesis_profile": _public_dto(result),
+        }
+    except (ValueError, RuntimeError, sqlite3.IntegrityError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/synthesis-profiles/{profile_revision_id}/approval")
+def approve_synthesis_profile(
+    profile_revision_id: str,
+    payload: SynthesisProfileApprovalRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    admin_api_key: str | None = Header(default=None, alias="X-Admin-API-Key"),
+):
+    try:
+        actor = _require_write_access(admin_api_key)
+        result = _evidence_analysis_service().record_profile_approval(
+            profile_revision_id=profile_revision_id,
+            decision=payload.decision,
+            rationale=payload.rationale,
+            approved_at=payload.approved_at,
+            approved_by=actor,
+            idempotency_key=idempotency_key,
+        )
+        return {"status": "available", "approval": _public_dto(result)}
+    except (ValueError, RuntimeError, sqlite3.IntegrityError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/synthesis-profiles/{logical_profile_id}")
+def get_synthesis_profiles(
+    logical_profile_id: str,
+    knowledge_cutoff_at: str | None = Query(default=None),
+    as_of_date: str | None = Query(default=None),
+):
+    try:
+        cutoff, cutoff_policy = resolve_knowledge_cutoff(
+            knowledge_cutoff_at, as_of_date
+        )
+        profiles = [
+            profile
+            for profile in _evidence_analysis_service().profile_repository.effective_states_as_of(cutoff)
+            if profile["logical_profile_id"] == logical_profile_id
+        ]
+        return {
+            "status": "available" if profiles else "insufficient_data",
+            "knowledge_cutoff_at": cutoff,
+            "cutoff_policy": cutoff_policy,
+            "profiles": _public_dto(profiles),
+        }
+    except (ValueError, RuntimeError, sqlite3.Error) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/screening/{symbol}")
 def get_security_screening(
     symbol: str,
@@ -689,6 +818,8 @@ def get_v2_analysis(
     as_of_date: str | None = Query(default=None),
     industry: str | None = Query(default=None),
     market: str | None = Query(default=None),
+    logical_synthesis_profile_id: str | None = Query(default=None),
+    synthesis_profile_revision_id: str | None = Query(default=None),
 ):
     try:
         cutoff, cutoff_policy = resolve_knowledge_cutoff(
@@ -742,10 +873,33 @@ def get_v2_analysis(
             "automatic_order": False,
         }
 
+    try:
+        target_confluence = _evidence_analysis_service().synthesize(
+            symbol=normalized_symbol,
+            knowledge_cutoff_at=cutoff,
+            valuation=valuation,
+            technical_support=technical_support,
+            logical_profile_id=logical_synthesis_profile_id,
+            profile_revision_id=synthesis_profile_revision_id,
+        )
+    except (ValueError, RuntimeError, sqlite3.Error) as exc:
+        target_confluence = {
+            "status": "insufficient_data",
+            "reason": f"target_confluence_unavailable: {exc}",
+            "overlap_ranges": [],
+            "candidate_count": 0,
+            "support_count": 0,
+            "independent_method_count": 0,
+            "evidence_strength": None,
+            "rules_used": [],
+            "automatic_order": False,
+        }
+
     valuation_available = valuation["status"] in {"available", "not_applicable"}
     liquidity_available = liquidity["status"] == "available"
     technical_available = technical_support["status"] == "available"
     screening_available = screening["status"] == "available"
+    confluence_available = target_confluence["status"] == "available"
     available_sections = []
     missing = []
     if valuation_available:
@@ -764,6 +918,10 @@ def get_v2_analysis(
         available_sections.append("screening")
     else:
         missing.append("screening")
+    if confluence_available:
+        available_sections.append("target_confluence")
+    else:
+        missing.append("target_confluence")
     needs_human = []
     if valuation["status"] == "needs_human_input":
         if valuation["reason"] == "approved_forward_eps_required":
@@ -787,6 +945,16 @@ def get_v2_analysis(
         }.get(screening.get("reason"))
         if screening_requirement:
             needs_human.append(screening_requirement)
+    if target_confluence["status"] == "needs_human_input":
+        synthesis_requirement = {
+            "approved_synthesis_profile_required": "approved_synthesis_profile",
+            "synthesis_profile_selection_required": "synthesis_profile_selection",
+            "synthesis_profile_revision_superseded": "approved_synthesis_profile",
+            "synthesis_profile_approval_revoked": "approved_synthesis_profile",
+            "synthesis_profile_revoked": "approved_synthesis_profile",
+        }.get(target_confluence.get("reason"))
+        if synthesis_requirement:
+            needs_human.append(synthesis_requirement)
     return {
         "status": "partial",
         "symbol": normalized_symbol,
@@ -809,14 +977,72 @@ def get_v2_analysis(
         "technical_support": technical_support,
         "wave_scenarios": {"status": "needs_human_input", "reason": "phase_4_not_implemented"},
         "fibonacci_scenarios": {"status": "unsupported", "reason": "use_technical_support_phase_4"},
-        "target_confluence": {"status": "unsupported", "reason": "phase_7_not_implemented"},
+        "target_confluence": target_confluence,
         "deployment_plan": deployment_plan,
         "screening": screening,
         "invalidation": valuation["invalidation_conditions"],
-        "rules_used": valuation["rules_used"] + liquidity.get("rules_used", []) + technical_support.get("rules_used", []) + deployment_plan.get("rules_used", []) + screening.get("rules_used", []),
+        "rules_used": valuation["rules_used"] + liquidity.get("rules_used", []) + technical_support.get("rules_used", []) + deployment_plan.get("rules_used", []) + screening.get("rules_used", []) + target_confluence.get("rules_used", []),
         "unsupported": ["eva_formula", "margin_return_8_percent_formula"],
         "snapshot_id": None,
     }
+
+
+@router.post("/analysis/{symbol}/refresh")
+def refresh_v2_analysis(
+    symbol: str,
+    payload: AnalysisRefreshRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    admin_api_key: str | None = Header(default=None, alias="X-Admin-API-Key"),
+    knowledge_cutoff_at: str | None = Query(default=None),
+    as_of_date: str | None = Query(default=None),
+    industry: str | None = Query(default=None),
+    market: str | None = Query(default=None),
+):
+    try:
+        _require_write_access(admin_api_key)
+        caller_supplied_cutoff = bool(knowledge_cutoff_at or as_of_date)
+        cutoff, cutoff_policy = resolve_knowledge_cutoff(
+            knowledge_cutoff_at, as_of_date
+        )
+        analysis = get_v2_analysis(
+            symbol=symbol,
+            knowledge_cutoff_at=cutoff,
+            as_of_date=None,
+            industry=industry,
+            market=market,
+            logical_synthesis_profile_id=payload.logical_synthesis_profile_id,
+            synthesis_profile_revision_id=payload.synthesis_profile_revision_id,
+        )
+        analysis["cutoff_policy"] = cutoff_policy
+        capture_mode = (
+            CaptureMode.HISTORICAL_RECONSTRUCTION
+            if caller_supplied_cutoff
+            else CaptureMode.LIVE_REFRESH
+        )
+        result = _evidence_analysis_service().create_snapshot(
+            analysis=analysis,
+            capture_mode=capture_mode,
+            idempotency_key=idempotency_key,
+            supersedes_snapshot_id=payload.supersedes_snapshot_id,
+        )
+        return {"status": "available", "snapshot": _public_dto(result)}
+    except HTTPException:
+        raise
+    except (ValueError, RuntimeError, sqlite3.IntegrityError) as exc:
+        detail = str(exc)
+        status_code = 409 if "idempotency key" in detail else 422
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.get("/analysis/snapshots/{snapshot_id}")
+def get_v2_analysis_snapshot(snapshot_id: str):
+    try:
+        result = _evidence_analysis_service().snapshot_repository.get(snapshot_id)
+    except (ValueError, RuntimeError, sqlite3.Error) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="analysis_snapshot_not_found")
+    return {"status": "available", "snapshot": _public_dto(result)}
 
 
 @router.get("/model-rules")

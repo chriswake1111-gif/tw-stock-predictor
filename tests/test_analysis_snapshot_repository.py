@@ -35,7 +35,11 @@ def test_snapshot_insert_retrieval_and_permanent_idempotency(tmp_path):
     assert same["created"] is False
     assert same["snapshot_id"] == first["snapshot_id"]
     loaded = repo.get(first["snapshot_id"])
-    assert loaded["output"] == {"status": "partial", "symbol": "2330.TW"}
+    assert loaded["output"] == {
+        "status": "partial",
+        "symbol": "2330.TW",
+        "snapshot_id": first["snapshot_id"],
+    }
     assert loaded["source_resource_versions"][0]["resource_id"] == "eps-1"
     with pytest.raises(ValueError, match="different payload"):
         repo.add(snapshot(output={"status": "available"}), "key-b")

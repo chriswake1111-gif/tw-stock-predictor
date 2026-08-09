@@ -39,8 +39,14 @@ class AnalysisSnapshotRepository:
         payload = snapshot.canonical_payload()
         semantic_payload = dict(payload)
         semantic_payload.pop("created_at")
+        semantic_output = dict(semantic_payload["output"])
+        semantic_output["snapshot_id"] = None
+        semantic_payload["output"] = semantic_output
         fingerprint = sha256_json(semantic_payload)
         snapshot_id = f"analysis_snapshot_{fingerprint[:24]}"
+        stored_output = dict(payload["output"])
+        stored_output["snapshot_id"] = snapshot_id
+        payload["output"] = stored_output
         output_sha256 = sha256_json(payload["output"])
         with self._connect() as conn:
             binding = conn.execute(

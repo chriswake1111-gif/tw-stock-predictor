@@ -94,6 +94,8 @@ class TechnicalScenarioService:
                 "symbol": symbol,
                 "anchor_set_revision_id": state["id"],
                 "anchor_revision_number": state["revision_number"],
+                "anchor_available_at": state["available_at"],
+                "anchor_ingested_at": state["ingested_at"],
                 "anchors": by_role,
                 "anchor_ids": anchor_ids,
                 "interpretation": "scenario_reference_only_not_guaranteed_not_trade_instruction",
