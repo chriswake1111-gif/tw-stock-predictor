@@ -1,6 +1,6 @@
 import sqlite3
 
-from src.repositories.migration_runner import apply_valuation_migration
+from src.repositories.migration_runner import MIGRATION_ID, apply_valuation_migration
 
 
 def test_phase5_migration_is_additive_rerunnable_and_fresh_parent_safe(tmp_path):
@@ -10,7 +10,7 @@ def test_phase5_migration_is_additive_rerunnable_and_fresh_parent_safe(tmp_path)
     with sqlite3.connect(db_path) as conn:
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         versions = {row[0] for row in conn.execute("SELECT version_id FROM schema_migrations")}
-    assert first["migration_id"] == "20260809_08_evidence_model_v2_synthesis_snapshot"
+    assert first["migration_id"] == MIGRATION_ID
     assert second["applied"] is False
     assert {"deployment_plan_revisions", "deployment_plan_approvals",
             "deployment_plan_idempotency_keys"} <= tables

@@ -57,6 +57,7 @@ from src.services.rule_registry import RuleRegistry
 from src.services.security_screening_service import SecurityScreeningService
 from src.services.technical_scenario_service import TechnicalScenarioService
 from src.services.evidence_analysis_service import EvidenceAnalysisService
+from src.services.performance_validation_service import PerformanceValidationService
 
 
 router = APIRouter(prefix="/api/v2", tags=["evidence-model-v2"])
@@ -239,6 +240,11 @@ class AnalysisRefreshRequest(StrictRequest):
     supersedes_snapshot_id: str | None = None
 
 
+class EvaluationRunRequest(StrictRequest):
+    snapshot_ids: list[str] = Field(min_length=1)
+    evaluation_profile_acknowledgement: str
+
+
 def _service() -> ForwardEPSService:
     return ForwardEPSService(os.getenv("DATABASE_PATH", "data/cache.db"))
 
@@ -269,6 +275,10 @@ def _screening_service() -> SecurityScreeningService:
 
 def _evidence_analysis_service() -> EvidenceAnalysisService:
     return EvidenceAnalysisService(os.getenv("DATABASE_PATH", "data/cache.db"))
+
+
+def _performance_validation_service() -> PerformanceValidationService:
+    return PerformanceValidationService(os.getenv("DATABASE_PATH", "data/cache.db"))
 
 
 def _require_write_access(api_key: str | None) -> str:
@@ -1046,6 +1056,63 @@ def get_v2_analysis_snapshot(snapshot_id: str):
     if result is None:
         raise HTTPException(status_code=404, detail="analysis_snapshot_not_found")
     return {"status": "available", "snapshot": _public_dto(result)}
+
+
+@router.post("/evaluations/runs")
+def create_evaluation_run(
+    payload: EvaluationRunRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    admin_api_key: str | None = Header(default=None, alias="X-Admin-API-Key"),
+):
+    try:
+        actor = _require_write_access(admin_api_key)
+        result = _performance_validation_service().create_run(
+            snapshot_ids=payload.snapshot_ids,
+            profile_acknowledgement=payload.evaluation_profile_acknowledgement,
+            actor=actor,
+            idempotency_key=idempotency_key,
+        )
+        return {"status": "available", "evaluation_run": _public_dto(result)}
+    except HTTPException:
+        raise
+    except (ValueError, RuntimeError, sqlite3.Error) as exc:
+        detail = str(exc)
+        status_code = 409 if "idempotency key" in detail else 422
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.get("/evaluations/runs/{run_id}/results")
+def get_evaluation_run_results(run_id: str):
+    results = _performance_validation_service().results_for_run(run_id)
+    if results is None:
+        raise HTTPException(status_code=404, detail="evaluation_run_not_found")
+    return {"status": "available", "results": _public_dto(results)}
+
+
+@router.get("/evaluations/runs/{run_id}")
+def get_evaluation_run(run_id: str):
+    result = _performance_validation_service().get_run(run_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="evaluation_run_not_found")
+    return {"status": "available", "evaluation_run": _public_dto(result)}
+
+
+@router.get("/analysis/snapshots/{snapshot_id}/evaluations")
+def get_snapshot_evaluations(snapshot_id: str):
+    return {
+        "status": "available",
+        "results": _public_dto(
+            _performance_validation_service().results_for_snapshot(snapshot_id)
+        ),
+    }
+
+
+@router.get("/performance/summary")
+def get_performance_summary(evaluation_run_id: str = Query(...)):
+    result = _performance_validation_service().summary(evaluation_run_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="evaluation_run_not_found")
+    return {"status": "available", "performance_summary": _public_dto(result)}
 
 
 @router.get("/model-rules")
