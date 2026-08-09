@@ -31,6 +31,8 @@ amplitude = B - A
 calculated_level = C + amplitude
 ```
 
+輸出使用穩定識別碼 `formula=equal_move`，數學表示式另存於 `formula_expression=C + (B - A)`。
+
 保留 amplitude 正負方向，不使用 `abs`。
 
 FB-04 正式規格只允許完整上升波 `B>A`：
@@ -38,6 +40,8 @@ FB-04 正式規格只允許完整上升波 `B>A`：
 ```text
 calculated_level = B - 0.382 * (B - A)
 ```
+
+輸出使用穩定識別碼 `formula=retracement_0382`，數學表示式另存於 `formula_expression=B - 0.382 * (B - A)`。
 
 向下 A/B 關係不使用通用 TA 推導，直接 fail closed。
 
@@ -48,6 +52,7 @@ calculated_level = B - 0.382 * (B - A)
 `GET /api/v2/analysis/{symbol}` 的 `technical_support` 獨立輸出 scenario 與 Rule Trace。Rule Trace 包含 Rule ID/version、證據等級、implementation mode、cutoff、approval ID 與 anchor revision ID。
 
 - 無 anchor 或缺核准：`needs_human_input`。
+- Top-level `data_quality.needs_human_input` 分別使用 `manual_anchor` 或 `approved_manual_anchor`；approval revoked 亦要求新的 `approved_manual_anchor`。
 - revoked：fail closed，不產生 scenario。
 - 不支援 ratio/rule：validation error 或 `unsupported`，不計算 verified scenario。
 - technical failure 不影響 valuation／liquidity section。

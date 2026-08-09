@@ -64,6 +64,8 @@ Acceptance includes unit conversion, explicit CBC release timestamp, M1B revisio
 10. FB-04 只接受規格明定的 `B>A` 上升波；向下關係 fail closed。
 11. 0.618、1.618 或 FB-05 不得進入 Phase 4 verified scenario。
 12. 2330 的 anchor 不得被 2317 使用。
+13. FB-03 輸出 `formula=equal_move`，FB-04 輸出 `formula=retracement_0382`；數學式另存 `formula_expression`。
+14. 無 anchor、未核准與 revoked approval 必須映射到 top-level human-input requirement；有效 scenario 時不得殘留。
 
 ## G. 時間窗
 

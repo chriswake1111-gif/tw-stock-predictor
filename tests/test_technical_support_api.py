@@ -44,13 +44,17 @@ def test_missing_and_draft_anchor_need_human_input_without_breaking_other_sectio
     admin = admin_env(monkeypatch, tmp_path)
     empty = client.get("/api/v2/analysis/2330?knowledge_cutoff_at=2026-02-16T00:00:00Z")
     assert empty.status_code == 200
-    assert empty.json()["technical_support"]["reason"] == "manual_anchor_required"
+    empty_data = empty.json()
+    assert empty_data["technical_support"]["reason"] == "manual_anchor_required"
+    assert "technical_support" in empty_data["data_quality"]["missing_sections"]
+    assert "manual_anchor" in empty_data["data_quality"]["needs_human_input"]
 
     created = client.post("/api/v2/anchors", json=anchor_payload(), headers=headers(admin, "anchor"))
     assert created.status_code == 200
     draft = client.get("/api/v2/analysis/2330?knowledge_cutoff_at=2026-02-16T00:00:00Z").json()
     assert draft["technical_support"]["status"] == "needs_human_input"
     assert draft["technical_support"]["reason"] == "approved_manual_anchor_required"
+    assert "approved_manual_anchor" in draft["data_quality"]["needs_human_input"]
 
 
 def test_approved_anchor_generates_traceable_scenario_and_is_symbol_isolated(monkeypatch, tmp_path):
@@ -72,9 +76,40 @@ def test_approved_anchor_generates_traceable_scenario_and_is_symbol_isolated(mon
     assert scenario["rule_trace"]["rule_id"] == "FB-03"
     assert scenario["rule_trace"]["approval_id"] == approval_id
     assert {trace["rule_id"] for trace in data["rules_used"]} >= {"FB-03"}
+    assert "manual_anchor" not in data["data_quality"]["needs_human_input"]
+    assert "approved_manual_anchor" not in data["data_quality"]["needs_human_input"]
 
     other = client.get("/api/v2/analysis/2317?knowledge_cutoff_at=2026-02-16T00:00:00Z").json()
     assert other["technical_support"]["status"] == "needs_human_input"
+
+
+def test_revoked_anchor_approval_requires_new_human_approval(monkeypatch, tmp_path):
+    admin = admin_env(monkeypatch, tmp_path)
+    created = client.post(
+        "/api/v2/anchors", json=anchor_payload(), headers=headers(admin, "anchor")
+    ).json()
+    anchor_id = created["anchor_set"]["id"]
+    client.post(
+        f"/api/v2/anchors/{anchor_id}/approval",
+        json={"decision": "approved", "rule_id": "FB-03", "rationale": "reviewed",
+              "approved_at": "2026-02-15T00:00:30Z"},
+        headers=headers(admin, "approve"),
+    )
+    revoked = client.post(
+        f"/api/v2/anchors/{anchor_id}/approval",
+        json={"decision": "revoked", "rule_id": "FB-03", "rationale": "approval withdrawn",
+              "approved_at": "2026-02-15T00:00:45Z"},
+        headers=headers(admin, "revoke"),
+    )
+    assert revoked.status_code == 200
+
+    data = client.get(
+        "/api/v2/analysis/2330?knowledge_cutoff_at=2026-02-16T00:00:00Z"
+    ).json()
+    assert data["technical_support"]["status"] == "needs_human_input"
+    assert data["technical_support"]["reason"] == "anchor_approval_revoked"
+    assert data["technical_support"]["scenarios"] == []
+    assert "approved_manual_anchor" in data["data_quality"]["needs_human_input"]
 
 
 def test_unsupported_ratio_and_wrong_rule_cannot_enter_phase4(monkeypatch, tmp_path):

@@ -14,7 +14,8 @@ def test_equal_amplitude_preserves_upward_and_downward_direction():
     assert upward["direction"] == "upward"
     assert downward["calculated_level"] == 70.0
     assert downward["direction"] == "downward"
-    assert upward["formula"] == downward["formula"] == "C + (B - A)"
+    assert upward["formula"] == downward["formula"] == "equal_move"
+    assert upward["formula_expression"] == downward["formula_expression"] == "C + (B - A)"
 
 
 def test_0382_uses_specified_upward_retracement_and_deterministic_rounding():
@@ -22,7 +23,8 @@ def test_0382_uses_specified_upward_retracement_and_deterministic_rounding():
 
     assert result["calculated_level"] == 130.9
     assert result["price_unit"] == "TWD_per_share"
-    assert result["formula"] == "B - 0.382 * (B - A)"
+    assert result["formula"] == "retracement_0382"
+    assert result["formula_expression"] == "B - 0.382 * (B - A)"
     assert calculate_retracement_0382(100.001, 150.009)["calculated_level"] == 130.9059
 
 

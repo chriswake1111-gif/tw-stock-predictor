@@ -14,13 +14,15 @@
 - Revision and approval revocation rank before status interpretation.
 - New anchor revisions do not inherit approval.
 - Rule Trace includes exact approval ID and anchor revision ID.
+- Formula identifiers are stable (`equal_move`, `retracement_0382`) and mathematical expressions are exposed separately as `formula_expression`.
+- Top-level data quality maps missing anchors to `manual_anchor`, and draft／revoked approvals to `approved_manual_anchor`.
 - 0.618, 1.618 and FB-05 are absent from verified Phase 4 calculation.
 - Calculation is Decimal-based and rounds half-up to four decimals only at output.
 
 ## Validation record
 
-- Phase 4 focused suite: 17 passed.
-- Full repository regression with repository-local `--basetemp`: 157 passed.
+- Phase 4 focused suite after first review fixes: 18 passed.
+- Full repository regression with repository-local `--basetemp`: 158 passed.
 - v1 API golden snapshot: 2 passed.
 - `git diff --check`: passed.
 - Existing Starlette TestClient `httpx`／`httpx2` deprecation warning remains; no new warning category was observed.

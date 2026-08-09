@@ -463,6 +463,14 @@ def get_v2_analysis(
             needs_human.append("approved_forward_eps")
         elif valuation["reason"] == "approved_symbol_pe_missing_at_knowledge_cutoff":
             needs_human.append("approved_symbol_pe")
+    if technical_support["status"] == "needs_human_input":
+        technical_requirement = {
+            "manual_anchor_required": "manual_anchor",
+            "approved_manual_anchor_required": "approved_manual_anchor",
+            "anchor_approval_revoked": "approved_manual_anchor",
+        }.get(technical_support.get("reason"))
+        if technical_requirement:
+            needs_human.append(technical_requirement)
     return {
         "status": "partial",
         "symbol": normalized_symbol,

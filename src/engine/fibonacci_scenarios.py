@@ -32,7 +32,8 @@ def calculate_equal_amplitude(origin: float, swing_end: float, projection_origin
         raise ValueError("equal-amplitude calculated level is not a valid positive price")
     return {
         "scenario_type": "equal_amplitude",
-        "formula": "C + (B - A)",
+        "formula": "equal_move",
+        "formula_expression": "C + (B - A)",
         "direction": "upward" if amplitude > 0 else "downward" if amplitude < 0 else "flat",
         "swing_amplitude": _output(amplitude),
         "calculated_level": _output(level),
@@ -50,7 +51,8 @@ def calculate_retracement_0382(origin: float, swing_end: float) -> dict:
     level = b - Decimal("0.382") * amplitude
     return {
         "scenario_type": "retracement_0382",
-        "formula": "B - 0.382 * (B - A)",
+        "formula": "retracement_0382",
+        "formula_expression": "B - 0.382 * (B - A)",
         "direction": "upward_swing_retracement",
         "swing_amplitude": _output(amplitude),
         "calculated_level": _output(level),
