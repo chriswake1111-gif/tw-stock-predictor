@@ -412,6 +412,13 @@ class PerformanceValidationRepository:
             ).fetchone()
             return {**dict(row), "results": self._results(conn, run_id)} if row else None
 
+    def results_for_run(self, run_id: str) -> list[dict[str, Any]] | None:
+        with self._connect() as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM evaluation_runs WHERE evaluation_run_id = ?", (run_id,)
+            ).fetchone()
+            return self._results(conn, run_id) if exists else None
+
     def results_for_snapshot(self, snapshot_id: str) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
