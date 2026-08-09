@@ -17,6 +17,7 @@ MIGRATION_IDS = (
     "20260801_04_evidence_model_v2_liquidity",
     "20260809_05_evidence_model_v2_fibonacci",
     "20260809_06_evidence_model_v2_deployment",
+    "20260809_07_evidence_model_v2_screening",
 )
 MIGRATION_ID = MIGRATION_IDS[-1]
 MIGRATION_FILES = tuple(

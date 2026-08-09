@@ -102,7 +102,12 @@
 - [x] Signal-driven backtester consumes external events only and uses next-bar simulation.
 - [x] Legacy 20/30/50, 7%-11%, MA resonance, SMA55, and breakout logic remain v1-only.
 - [x] Deployment API is protected, planning-only, and optional to general analysis data quality.
-- [ ] Phase 6 has not started; await a separate approved specification.
+- [x] Phase 6 implemented on its dedicated branch: normalized point-in-time valuation revisions,
+  percentile-based SEL-01 screening, immutable profile approval, exact approved Forward EPS growth,
+  replaceable technical confirmation, and additive v2 API integration.
+- [ ] Phase 6 has no production historical valuation importer, point-in-time industry peer contract,
+  or concrete WV-03 provider; these paths return explicit `insufficient_data`.
+- [ ] Phase 7 has not started and requires a separate explicit authorization.
 
 ## Evidence Model V2 Phase 3 status (2026-08-01)
 
