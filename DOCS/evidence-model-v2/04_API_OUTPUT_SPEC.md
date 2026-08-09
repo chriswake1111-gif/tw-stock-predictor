@@ -151,6 +151,23 @@ POST /api/v2/deployment-plan
 
 ---
 
+## Phase 5 deployment API
+
+`POST /api/v2/deployment-plan` creates an immutable draft revision. Writes are disabled by default
+and require the admin API key. Callers cannot provide approval or evidence metadata. Missing
+triggers return `deployment_triggers_required`; complete unapproved triggers return
+`approved_deployment_plan_required`.
+
+`POST /api/v2/deployment-plan/{plan_revision_id}/approval` records a protected ENT-02 decision.
+`GET /api/v2/deployment-plan/{symbol}` reconstructs state at the knowledge cutoff. Available output
+contains three budgets, external trigger metadata, `automatic_order=false`, and exact approval trace.
+
+General analysis returns `deployment_plan_request_required` when there is no active request. Because
+deployment is optional and user-initiated, this does not add a missing section or human-input item to
+analysis-level `data_quality`.
+
+---
+
 ## Phase 4 technical support section
 
 受保護的寫入端點：

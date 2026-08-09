@@ -95,6 +95,15 @@
 - [x] **GitHub 遠端公開倉庫**
   - GitHub Repository URL: [https://github.com/chriswake1111-gif/tw-stock-predictor](https://github.com/chriswake1111-gif/tw-stock-predictor)
 
+## Evidence Model V2 Phase 5 status (2026-08-09)
+
+- [x] ENT-02 three-tranche planner conserves the exact Decimal budget and allows at most three entries.
+- [x] Trigger revisions and append-only approval events are knowledge-cutoff safe.
+- [x] Signal-driven backtester consumes external events only and uses next-bar simulation.
+- [x] Legacy 20/30/50, 7%-11%, MA resonance, SMA55, and breakout logic remain v1-only.
+- [x] Deployment API is protected, planning-only, and optional to general analysis data quality.
+- [ ] Phase 6 has not started; await a separate approved specification.
+
 ## Evidence Model V2 Phase 3 status (2026-08-01)
 
 M1B／市場成交額 additive contracts、as-of repository、流動性 engine／service 與 v2 API section 已進入本階段驗收。CBC 歷史月份若沒有經官方發布日曆或新聞稿核對的 `available_at` mapping，必須保持 `needs_human_input`；不得用抓取時間回填。Phase 4 尚未開始。

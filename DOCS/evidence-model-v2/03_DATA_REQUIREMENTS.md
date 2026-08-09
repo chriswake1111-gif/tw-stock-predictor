@@ -179,6 +179,20 @@ Collector 不負責：
 
 ---
 
+## Phase 5 additive deployment contract
+
+`deployment_plan_revisions` stores immutable campaign revisions with symbol, explicit planned
+TWD capital, ordered external triggers, `available_at`, and `ingested_at`. Triggers are never
+inferred from market data. An incomplete revision can be reviewed but cannot be approved.
+
+`deployment_plan_approvals` is an append-only ENT-02 event ledger. Approval binds one exact
+revision and freezes server-side rule metadata. A changed trigger set or capital amount receives no
+inherited approval, and the latest revoke wins. `deployment_plan_idempotency_keys` permanently
+binds each key to a fingerprint and resource. All as-of reads require effective and ingestion times
+to be within the knowledge cutoff.
+
+---
+
 ## Phase 4 additive manual-anchor contract
 
 `technical_anchor_revisions` 保存人工輸入的 anchor set revision。每組只屬於一個 symbol 與一個 evidence basis Rule ID；角色明確映射為 `origin (A)`、`swing_end (B)`，FB-03 另需 `projection_origin (C)`。價格單位固定為 `TWD_per_share`，anchor type 只允許不暗示市場結構的 `manual_price_anchor`。

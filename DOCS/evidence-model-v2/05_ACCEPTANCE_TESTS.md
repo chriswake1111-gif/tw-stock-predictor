@@ -102,6 +102,19 @@ Acceptance includes unit conversion, explicit CBC release timestamp, M1B revisio
 5. 不能只因日後某天碰到目標就算成功。
 6. 樣本外與 walk-forward 使用 `available_at` 防止資料洩漏。
 
+## Phase 5 acceptance tests
+
+1. Divisible and non-divisible capital produce three budgets with exact weight and budget sums.
+2. Zero, negative, NaN, infinity, stage skips, and stage 4 fail closed.
+3. Trigger source classifications and Phase 4 FB-04 reference IDs remain traceable.
+4. Draft, post-cutoff, revoked, and superseded plan approvals cannot appear available.
+5. Valid approval produces an exact A-level ENT-02 Rule Trace for that revision only.
+6. OHLCV patterns without external events produce zero v2 entries.
+7. External stages 1-3 execute on the next bar; a fourth entry never executes.
+8. Invalidation terminates one campaign and rejects later entries for it.
+9. Simulation is offline, deterministic, and reports `automatic_order=false`.
+10. Phase 2-4 regressions and the unchanged v1 golden snapshot remain green.
+
 ## K. Repository Hygiene
 
 1. `data/cache.db` 不得提交版本控制。
