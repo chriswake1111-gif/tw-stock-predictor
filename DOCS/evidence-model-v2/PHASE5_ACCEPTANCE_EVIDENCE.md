@@ -20,12 +20,24 @@
 | Next-bar timing, future guard, campaign isolation | `tests/test_signal_driven_backtester.py` |
 | Protected and scrubbed API | `tests/test_deployment_plan_api.py` |
 | Additive, rerunnable migration | `tests/test_phase5_migration.py` |
+| FB-04 symbol/latest-revision enforcement | `tests/test_deployment_plan_asof.py` |
+| Approved-trigger execution provenance | `tests/test_signal_driven_backtester.py` |
+| Same-time deterministic fail-closed policy | `tests/test_signal_driven_backtester.py` |
 
 ## Local validation
 
-Final local validation passed 34 Phase 5 focused tests, 191 full-regression tests, and 2 unchanged
-v1 golden tests. The only warning category was the existing Starlette TestClient deprecation.
+First-review local validation passed 43 focused tests, 18 Phase 4 regression tests,
+202 full-regression tests, and 2 unchanged v1 golden tests. The only warning category was the
+existing Starlette TestClient deprecation.
 Commit and CI identifiers belong in the Draft PR after they are actually observed.
+
+## First review hardening
+
+- Phase 4 and Phase 5 share one effective-anchor state lookup invariant.
+- Deployment approval rejects cross-symbol, superseded, revoked, or mismatched FB-04 provenance.
+- Approved stage triggers, rather than signal-event strings, populate execution provenance.
+- Same-campaign events at the same normalized time are rejected regardless of input order.
+- These changes require no schema migration and do not alter the planner formula.
 
 ## Product boundary
 

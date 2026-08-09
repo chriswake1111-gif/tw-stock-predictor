@@ -166,6 +166,16 @@ General analysis returns `deployment_plan_request_required` when there is no act
 deployment is optional and user-initiated, this does not add a missing section or human-input item to
 analysis-level `data_quality`.
 
+An FB-04 deployment trigger is valid only when its symbol and effective latest anchor revision match
+the deployment plan at approval time. Superseded or revoked revisions and a revoked latest approval
+fail closed without fallback. `reference_id` is a provenance label because Phase 4 has no persisted
+scenario resource; FB-04, symbol, anchor revision ID, and approval ID are authoritative.
+
+Historical simulator output uses `approved_trigger` copied from the approved plan. Caller event text
+is disclosed separately as `signal_event_source` and cannot change evidence provenance.
+Same-campaign events with the same normalized signal time return `ambiguous_same_time_events`;
+this ordering policy is a project operationalization.
+
 ---
 
 ## Phase 4 technical support section

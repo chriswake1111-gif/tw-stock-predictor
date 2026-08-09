@@ -114,6 +114,13 @@ Acceptance includes unit conversion, explicit CBC release timestamp, M1B revisio
 8. Invalidation terminates one campaign and rejects later entries for it.
 9. Simulation is offline, deterministic, and reports `automatic_order=false`.
 10. Phase 2-4 regressions and the unchanged v1 golden snapshot remain green.
+11. Cross-symbol, superseded, or revoked-latest FB-04 anchor references fail closed.
+12. Only the effective latest FB-04 anchor revision with the exact latest approval can be used.
+13. ATR and FB-04 signal references must match the approved plan trigger.
+14. Execution provenance comes from the approved plan, never client event evidence claims.
+15. Same-campaign same-time entry/entry or entry/invalidation events are rejected deterministically.
+16. Same-time events for different campaigns remain independent.
+17. Plan dictionary keys must equal the plan's immutable logical campaign ID.
 
 ## K. Repository Hygiene
 
