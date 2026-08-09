@@ -21,6 +21,7 @@
 | Protected and scrubbed API | `tests/test_deployment_plan_api.py` |
 | Additive, rerunnable migration | `tests/test_phase5_migration.py` |
 | FB-04 symbol/latest-revision enforcement | `tests/test_deployment_plan_asof.py` |
+| Deployment revoke remains possible after FB-04 supersession or revoke | `tests/test_deployment_plan_asof.py` |
 | Approved-trigger execution provenance | `tests/test_signal_driven_backtester.py` |
 | Same-time deterministic fail-closed policy | `tests/test_signal_driven_backtester.py` |
 
@@ -35,9 +36,20 @@ Commit and CI identifiers belong in the Draft PR after they are actually observe
 
 - Phase 4 and Phase 5 share one effective-anchor state lookup invariant.
 - Deployment approval rejects cross-symbol, superseded, revoked, or mismatched FB-04 provenance.
+- Deployment revocation remains appendable after its FB-04 anchor is superseded or revoked; only
+  positive approval creation revalidates current FB-04 eligibility.
 - Approved stage triggers, rather than signal-event strings, populate execution provenance.
 - Same-campaign events at the same normalized time are rejected regardless of input order.
 - These changes require no schema migration and do not alter the planner formula.
+
+## Second review revocation hardening
+
+- Positive FB-04 eligibility is enforced only when an `APPROVED` deployment event is created.
+- A `REVOKED` deployment event remains appendable after its anchor revision is superseded or its
+  upstream FB-04 approval is revoked; event timestamps and no-backdating remain enforced.
+- Local validation passed 14 deployment as-of tests, 64 Phase 4/5 regression tests, 204 full
+  regression tests, and 2 unchanged v1 golden tests. The only warning category was the existing
+  Starlette TestClient deprecation.
 
 ## Product boundary
 

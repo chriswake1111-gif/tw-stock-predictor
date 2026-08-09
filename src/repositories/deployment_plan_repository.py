@@ -8,7 +8,7 @@ import sqlite3
 from typing import Any
 
 from src.domain.deployment import DeploymentPlanApproval, DeploymentPlanRevision
-from src.domain.valuation import normalize_utc_timestamp, utc_now_timestamp
+from src.domain.valuation import ApprovalStatus, normalize_utc_timestamp, utc_now_timestamp
 from src.repositories.migration_runner import apply_valuation_migration
 from src.repositories.technical_anchor_repository import TechnicalAnchorRepository
 
@@ -151,49 +151,52 @@ class DeploymentPlanRepository:
             ).fetchone()
             if plan is None:
                 raise ValueError("deployment plan revision does not exist")
-            triggers = json.loads(plan["triggers_json"])
-            if len(triggers) != 3:
-                raise ValueError("an incomplete deployment trigger set cannot be approved")
-            for trigger in triggers:
-                if trigger["trigger_type"] != "approved_fb04_scenario":
-                    continue
-                anchor = conn.execute(
-                    "SELECT * FROM technical_anchor_revisions WHERE id = ?",
-                    (trigger["anchor_revision_id"],),
-                ).fetchone()
-                if anchor is None:
-                    raise ValueError("FB-04 trigger references an unavailable anchor revision")
-                if anchor["symbol"] != plan["symbol"]:
-                    raise ValueError(
-                        "FB-04 trigger anchor symbol must match deployment plan symbol"
+            if payload["decision"] == ApprovalStatus.APPROVED.value:
+                triggers = json.loads(plan["triggers_json"])
+                if len(triggers) != 3:
+                    raise ValueError("an incomplete deployment trigger set cannot be approved")
+                for trigger in triggers:
+                    if trigger["trigger_type"] != "approved_fb04_scenario":
+                        continue
+                    anchor = conn.execute(
+                        "SELECT * FROM technical_anchor_revisions WHERE id = ?",
+                        (trigger["anchor_revision_id"],),
+                    ).fetchone()
+                    if anchor is None:
+                        raise ValueError("FB-04 trigger references an unavailable anchor revision")
+                    if anchor["symbol"] != plan["symbol"]:
+                        raise ValueError(
+                            "FB-04 trigger anchor symbol must match deployment plan symbol"
+                        )
+                    effective_anchor = (
+                        self.technical_anchor_repository.effective_anchor_state_as_of(
+                            plan["symbol"],
+                            anchor["logical_anchor_set_id"],
+                            payload["approved_at"],
+                            ingested,
+                        )
                     )
-                effective_anchor = (
-                    self.technical_anchor_repository.effective_anchor_state_as_of(
-                        plan["symbol"],
-                        anchor["logical_anchor_set_id"],
-                        payload["approved_at"],
-                        ingested,
-                    )
-                )
-                if (
-                    effective_anchor is None
-                    or effective_anchor["id"] != trigger["anchor_revision_id"]
-                ):
-                    raise ValueError(
-                        "FB-04 trigger must reference the effective latest anchor revision"
-                    )
-                if (
-                    effective_anchor["evidence_basis_rule_id"] != "FB-04"
-                    or effective_anchor["status"] != "available"
-                ):
-                    raise ValueError("FB-04 trigger references an unavailable anchor revision")
-                latest_approval = effective_anchor["approval"]
-                if (
-                    latest_approval is None
-                    or latest_approval["decision"] != "approved"
-                    or latest_approval["approval_id"] != trigger["approval_id"]
-                ):
-                    raise ValueError("FB-04 trigger requires the effective approved anchor approval ID")
+                    if (
+                        effective_anchor is None
+                        or effective_anchor["id"] != trigger["anchor_revision_id"]
+                    ):
+                        raise ValueError(
+                            "FB-04 trigger must reference the effective latest anchor revision"
+                        )
+                    if (
+                        effective_anchor["evidence_basis_rule_id"] != "FB-04"
+                        or effective_anchor["status"] != "available"
+                    ):
+                        raise ValueError("FB-04 trigger references an unavailable anchor revision")
+                    latest_approval = effective_anchor["approval"]
+                    if (
+                        latest_approval is None
+                        or latest_approval["decision"] != "approved"
+                        or latest_approval["approval_id"] != trigger["approval_id"]
+                    ):
+                        raise ValueError(
+                            "FB-04 trigger requires the effective approved anchor approval ID"
+                        )
             if payload["approved_at"] < plan["available_at"]:
                 raise ValueError("approval approved_at cannot precede plan available_at")
             previous = conn.execute(

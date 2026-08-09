@@ -44,6 +44,11 @@ latest revoke wins and an older approval is not reused. Historical lookup requir
 `available_at` and `ingested_at`, plus approval `approved_at` and `ingested_at`, to be within the
 knowledge cutoff.
 
+A new `APPROVED` event must revalidate the current positive eligibility of every FB-04 trigger.
+A `REVOKED` event is a safety downgrade and therefore does not require the referenced FB-04 anchor
+or approval to remain current, available, or approved. Revocation still requires the exact plan
+revision, ENT-02 metadata, valid event timestamps, and append-only no-backdating order.
+
 Rule Trace contains `ENT-02`, rule version, evidence level A, `verified_core`, approval ID,
 deployment revision ID, and source-data cutoff.
 

@@ -325,3 +325,116 @@ def test_fb04_trigger_accepts_effective_latest_approved_revision(tmp_path, monke
         approved_by="reviewer", idempotency_key="plan-approval",
     )
     assert result["decision"] == "approved"
+
+
+def test_deployment_approval_can_be_revoked_after_fb04_anchor_is_superseded(
+    tmp_path, monkeypatch
+):
+    now = ["2026-03-01T01:30:00.000000Z"]
+    monkeypatch.setattr(
+        "src.repositories.deployment_plan_repository.utc_now_timestamp", lambda: now[0]
+    )
+    monkeypatch.setattr(
+        "src.repositories.technical_anchor_repository.utc_now_timestamp", lambda: now[0]
+    )
+    db = str(tmp_path / "db.sqlite")
+    technical = TechnicalScenarioService(db)
+    first = technical.ingest(fb04_revision(), "anchor-1")
+    now[0] = "2026-03-01T02:30:00.000000Z"
+    first_approval = technical.record_approval(
+        anchor_revision_id=first["id"], decision=ApprovalStatus.APPROVED,
+        rule_id="FB-04", rationale="reviewed initial anchor",
+        approved_at="2026-03-01T02:00:00Z", approved_by="reviewer",
+        idempotency_key="anchor-approval-1",
+    )
+
+    deployment = DeploymentPlanService(db)
+    now[0] = "2026-03-02T01:30:00.000000Z"
+    plan = deployment.ingest(deployment_for_fb04(
+        "2330", "superseded-after-approval-campaign",
+        fb04_triggers(first["id"], first_approval["approval_id"]),
+        available_at="2026-03-02T01:00:00Z",
+    ), "plan")
+    now[0] = "2026-03-02T02:30:00.000000Z"
+    deployment.record_approval(
+        plan_revision_id=plan["id"], decision=ApprovalStatus.APPROVED,
+        rationale="reviewed deployment plan",
+        approved_at="2026-03-02T02:00:00Z", approved_by="reviewer",
+        idempotency_key="plan-approval",
+    )
+    assert deployment.analyze("2330", "2026-03-02T03:00:00Z")["status"] == "available"
+
+    now[0] = "2026-03-03T01:30:00.000000Z"
+    technical.ingest(fb04_revision(2, first["id"]), "anchor-2")
+    now[0] = "2026-03-03T02:30:00.000000Z"
+    revoked = deployment.record_approval(
+        plan_revision_id=plan["id"], decision=ApprovalStatus.REVOKED,
+        rationale="withdraw stale deployment plan",
+        approved_at="2026-03-03T02:00:00Z", approved_by="reviewer",
+        idempotency_key="plan-revoke",
+    )
+
+    assert revoked["decision"] == "revoked"
+    after = deployment.analyze("2330", "2026-03-03T03:00:00Z")
+    assert after["status"] == "needs_human_input"
+    assert after["reason"] == "deployment_plan_approval_revoked"
+    assert deployment.analyze(
+        "2330", "2026-03-04T03:00:00Z"
+    )["reason"] == "deployment_plan_approval_revoked"
+
+
+def test_deployment_approval_can_be_revoked_after_fb04_approval_is_revoked(
+    tmp_path, monkeypatch
+):
+    now = ["2026-03-01T01:30:00.000000Z"]
+    monkeypatch.setattr(
+        "src.repositories.deployment_plan_repository.utc_now_timestamp", lambda: now[0]
+    )
+    monkeypatch.setattr(
+        "src.repositories.technical_anchor_repository.utc_now_timestamp", lambda: now[0]
+    )
+    db = str(tmp_path / "db.sqlite")
+    technical = TechnicalScenarioService(db)
+    anchor = technical.ingest(fb04_revision(), "anchor")
+    now[0] = "2026-03-01T02:30:00.000000Z"
+    anchor_approval = technical.record_approval(
+        anchor_revision_id=anchor["id"], decision=ApprovalStatus.APPROVED,
+        rule_id="FB-04", rationale="reviewed anchor",
+        approved_at="2026-03-01T02:00:00Z", approved_by="reviewer",
+        idempotency_key="anchor-approval",
+    )
+
+    deployment = DeploymentPlanService(db)
+    now[0] = "2026-03-02T01:30:00.000000Z"
+    plan = deployment.ingest(deployment_for_fb04(
+        "2330", "upstream-revoked-campaign",
+        fb04_triggers(anchor["id"], anchor_approval["approval_id"]),
+        available_at="2026-03-02T01:00:00Z",
+    ), "plan")
+    now[0] = "2026-03-02T02:30:00.000000Z"
+    deployment.record_approval(
+        plan_revision_id=plan["id"], decision=ApprovalStatus.APPROVED,
+        rationale="reviewed deployment plan",
+        approved_at="2026-03-02T02:00:00Z", approved_by="reviewer",
+        idempotency_key="plan-approval",
+    )
+
+    now[0] = "2026-03-03T02:30:00.000000Z"
+    technical.record_approval(
+        anchor_revision_id=anchor["id"], decision=ApprovalStatus.REVOKED,
+        rule_id="FB-04", rationale="withdraw anchor approval",
+        approved_at="2026-03-03T02:00:00Z", approved_by="reviewer",
+        idempotency_key="anchor-revoke",
+    )
+    now[0] = "2026-03-03T03:30:00.000000Z"
+    revoked = deployment.record_approval(
+        plan_revision_id=plan["id"], decision=ApprovalStatus.REVOKED,
+        rationale="withdraw dependent deployment plan",
+        approved_at="2026-03-03T03:00:00Z", approved_by="reviewer",
+        idempotency_key="plan-revoke",
+    )
+
+    assert revoked["decision"] == "revoked"
+    result = deployment.analyze("2330", "2026-03-03T04:00:00Z")
+    assert result["status"] == "needs_human_input"
+    assert result["reason"] == "deployment_plan_approval_revoked"
