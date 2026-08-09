@@ -16,7 +16,8 @@ CREATE TABLE security_valuation_observations (
     ingested_at TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('available','revoked')),
     dividend_yield_unit TEXT NOT NULL CHECK (dividend_yield_unit = 'ratio'),
-    UNIQUE(logical_observation_id, revision_number)
+    UNIQUE(logical_observation_id, revision_number),
+    UNIQUE(symbol, metric_date, source_name, source_dataset, revision_number)
 );
 
 CREATE INDEX idx_security_valuation_asof

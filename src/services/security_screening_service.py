@@ -41,7 +41,7 @@ class SecurityScreeningService:
         self.screening_repository = ScreeningRepository(db_path)
         self.forward_eps_repository = ForwardEPSRepository(db_path)
         self.rule_registry = RuleRegistry()
-        self.engine = ValueScreeningEngine()
+        self.engine = ValueScreeningEngine(self.rule_registry)
         self.technical_component = technical_component or UnavailableTechnicalTurnComponent()
 
     def ingest_valuation(
@@ -252,16 +252,20 @@ class SecurityScreeningService:
             "source_data_as_of": cutoff,
         }
         technical_trace = None
-        if technical_result.get("status") == "available" and technical_result.get("rule_id"):
+        canonical_technical = result.get("components", {}).get("technical_turn", {})
+        if (
+            canonical_technical.get("status") == "available"
+            and canonical_technical.get("rule_id")
+        ):
             technical_trace = {
-                "rule_id": technical_result["rule_id"],
-                "version": technical_result.get("rule_version"),
-                "evidence_level": technical_result.get("evidence_level"),
-                "implementation_mode": technical_result.get("implementation_mode"),
-                "project_operationalization": technical_result.get(
+                "rule_id": canonical_technical["rule_id"],
+                "version": canonical_technical["rule_version"],
+                "evidence_level": canonical_technical["evidence_level"],
+                "implementation_mode": canonical_technical["implementation_mode"],
+                "project_operationalization": canonical_technical.get(
                     "project_operationalization", False
                 ),
-                "source_data_as_of": technical_result.get("data_as_of", cutoff),
+                "source_data_as_of": canonical_technical.get("data_as_of", cutoff),
             }
         result["profile"] = {
             "logical_profile_id": profile["logical_profile_id"],

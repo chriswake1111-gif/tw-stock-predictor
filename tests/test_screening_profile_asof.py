@@ -176,6 +176,51 @@ def test_valuation_revision_cannot_change_logical_identity(tmp_path, field, valu
         )
 
 
+def test_duplicate_economic_identity_cannot_start_second_logical_chain(tmp_path):
+    repo = SecurityValuationRepository(str(tmp_path / "db.sqlite"))
+    repo.add_observation(
+        valuation_revision(), "valuation-1", ingested_at="2026-01-01T11:00:00Z"
+    )
+    duplicate = replace(
+        valuation_revision(), logical_observation_id="different-logical-id"
+    )
+    with pytest.raises(ValueError, match="identity already belongs"):
+        repo.add_observation(
+            duplicate, "valuation-duplicate", ingested_at="2026-01-01T11:00:00Z"
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "logical_id", "idempotency_key"),
+    [
+        ("metric_date", "2026-01-03", "different-date", "different-date"),
+        ("source_name", "other-source", "different-source", "different-source"),
+        (
+            "source_dataset",
+            "other-dataset",
+            "different-dataset",
+            "different-dataset",
+        ),
+    ],
+)
+def test_distinct_valuation_economic_identity_can_start_own_chain(
+    tmp_path, field, value, logical_id, idempotency_key
+):
+    repo = SecurityValuationRepository(str(tmp_path / "db.sqlite"))
+    repo.add_observation(
+        valuation_revision(), "valuation-1", ingested_at="2026-01-01T11:00:00Z"
+    )
+    distinct = replace(
+        valuation_revision(),
+        logical_observation_id=logical_id,
+        **{field: value},
+    )
+    created = repo.add_observation(
+        distinct, idempotency_key, ingested_at="2026-01-01T11:00:00Z"
+    )
+    assert created["logical_observation_id"] == logical_id
+
+
 def test_profile_revision_requires_new_approval_and_revoke_has_no_fallback(tmp_path):
     repo = ScreeningRepository(str(tmp_path / "db.sqlite"))
     first = repo.add_revision(

@@ -32,6 +32,19 @@ by one and reference the prior latest stored revision. As-of lookup first select
 revision visible under both timestamps, then checks status. A revoked latest revision never falls
 back to an older value.
 
+The economic identity of one normalized valuation observation is:
+
+```text
+symbol + metric_date + source_name + source_dataset
+```
+
+One economic identity can have only one logical revision chain. A correction must increment the
+existing chain; a different `logical_observation_id` cannot create a competing chain for the same
+identity. Repository validation returns a domain error before insert, and the Phase 6 schema also
+enforces uniqueness for each economic identity and revision number. As a second-line guard, more
+than one current observation on the latest metric date returns
+`ambiguous_current_valuation_observation`; logical ID naming never provides financial precedence.
+
 No collector or historical backfill is added in this phase. If trustworthy point-in-time history
 has not been imported into the normalized table, screening returns `insufficient_data`.
 
@@ -100,6 +113,20 @@ return `industry_peer_data_required` and never fall back to self-history.
 component is unavailable and returns `technical_confirmation_required`; it never defaults to true.
 Phase 6 does not implement WV-03. A separately evidenced component can be injected and retains its
 own Rule Trace. MA resonance and MA-03 are explicitly rejected as Phase 6 confirmation sources.
+
+### Technical evidence governance
+
+The provider supplies an observation: component name, Rule ID, observation time, direction, and
+details. `RuleRegistry` is the authoritative source for rule version, evidence level,
+implementation mode, project-operationalization flag, allowed output, and forbidden usage.
+
+An available provider result must reference a known rule whose registry entry allows
+`trend_confirmation`. U-level, legacy, unsupported, unrelated, or unavailable rules fail closed.
+If a provider also supplies governance metadata, every supplied field must match the registry;
+otherwise the component returns `technical_rule_metadata_mismatch`. Canonical component output and
+Rule Trace always use registry metadata. A provider therefore cannot upgrade WV-03 from evidence B
+or `parameterized_support`, use ENT-02 as a technical confirmation, or route MA-03, SEL-02, or
+SEL-03 into the screening result.
 
 ## API
 

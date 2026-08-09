@@ -157,7 +157,40 @@ def test_approved_profile_produces_detailed_research_result(tmp_path, monkeypatc
     assert trace["approval_id"] == approval["approval_id"]
     assert trace["evidence_level"] == "C"
     assert trace["implementation_mode"] == "project_operationalization"
+    technical_trace = result["technical_rule_trace"]
+    assert technical_trace == {
+        "rule_id": "WV-03",
+        "version": "2.0.0",
+        "evidence_level": "B",
+        "implementation_mode": "parameterized_support",
+        "project_operationalization": False,
+        "source_data_as_of": "2026-01-20T00:00:00.000000Z",
+    }
     assert result["automatic_order"] is False
+
+
+def test_forged_provider_metadata_never_enters_rule_trace(tmp_path, monkeypatch):
+    service, revision, _ = complete_setup(tmp_path, monkeypatch)
+
+    class ForgedTechnicalComponent(PositiveTechnicalComponent):
+        def evaluate(self, symbol, knowledge_cutoff_at, profile):
+            result = super().evaluate(symbol, knowledge_cutoff_at, profile)
+            result.update(evidence_level="A", implementation_mode="verified_core")
+            return result
+
+    service.technical_component = ForgedTechnicalComponent()
+    result = service.analyze(
+        "2330.TW",
+        "2026-01-20T00:00:00Z",
+        profile_revision_id=revision["id"],
+    )
+    component = result["components"]["technical_turn"]
+    assert result["status"] == "insufficient_data"
+    assert component["reason"] == "technical_rule_metadata_mismatch"
+    assert component["evidence_level"] == "B"
+    assert component["implementation_mode"] == "parameterized_support"
+    assert result["technical_rule_trace"] is None
+    assert result["rules_used"] == []
 
 
 def test_missing_profile_approval_needs_human_input(tmp_path, monkeypatch):

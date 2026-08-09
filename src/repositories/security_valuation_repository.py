@@ -92,6 +92,30 @@ class SecurityValuationRepository:
             existing = self._existing(conn, idempotency_key, fingerprint)
             if existing:
                 return existing
+            identity_owner = conn.execute(
+                """
+                SELECT logical_observation_id
+                FROM security_valuation_observations
+                WHERE symbol = ? AND metric_date = ?
+                  AND source_name = ? AND source_dataset = ?
+                LIMIT 1
+                """,
+                (
+                    payload["symbol"],
+                    payload["metric_date"],
+                    payload["source_name"],
+                    payload["source_dataset"],
+                ),
+            ).fetchone()
+            if (
+                identity_owner is not None
+                and identity_owner["logical_observation_id"]
+                != payload["logical_observation_id"]
+            ):
+                raise ValueError(
+                    "valuation observation identity already belongs to another "
+                    "logical observation"
+                )
             previous = conn.execute(
                 """
                 SELECT * FROM security_valuation_observations

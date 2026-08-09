@@ -5,6 +5,9 @@ from __future__ import annotations
 import math
 from typing import Any, Protocol
 
+from src.domain.evidence import EvidenceLevel, ImplementationMode
+from src.services.rule_registry import RuleRegistry
+
 
 class TechnicalTurnComponent(Protocol):
     """Replaceable technical confirmation boundary; never a trade signal."""
@@ -34,13 +37,8 @@ class UnavailableTechnicalTurnComponent:
 
 
 class ValueScreeningEngine:
-    FORBIDDEN_TECHNICAL_RULE_IDS = {
-        "MA-01",
-        "MA-02",
-        "MA-03",
-        "SEL-02",
-        "SEL-03",
-    }
+    def __init__(self, rule_registry: RuleRegistry | None = None):
+        self.rule_registry = rule_registry or RuleRegistry()
 
     @staticmethod
     def percentile(current: float, history: list[float]) -> float:
@@ -199,19 +197,79 @@ class ValueScreeningEngine:
                 "reason": "technical_component_mismatch",
                 "passed": False,
             }
-        if (
-            result.get("rule_id") in self.FORBIDDEN_TECHNICAL_RULE_IDS
-            or result.get("evidence_level") == "U"
-        ):
+        rule_id = result.get("rule_id")
+        try:
+            rule = self.rule_registry.get(rule_id)
+        except (KeyError, TypeError):
             return {
                 **result,
+                "status": "unsupported",
+                "reason": "unknown_technical_rule",
+                "passed": False,
+            }
+        canonical = {
+            **result,
+            "rule_id": rule.rule_id,
+            "rule_version": rule.version,
+            "evidence_level": rule.evidence_level.value,
+            "implementation_mode": rule.implementation_mode.value,
+            "project_operationalization": rule.project_operationalization,
+        }
+        if (
+            rule.evidence_level is EvidenceLevel.U
+            or rule.implementation_mode
+            in {ImplementationMode.LEGACY_EXPERIMENTAL, ImplementationMode.UNSUPPORTED}
+        ):
+            return {
+                **canonical,
                 "status": "unsupported",
                 "reason": "legacy_or_unsupported_technical_component",
                 "passed": False,
             }
-        result["passed"] = result.get("turned_positive") is True
-        result.setdefault("reason", None)
-        return result
+        if "trend_confirmation" not in rule.allowed_outputs:
+            return {
+                **canonical,
+                "status": "unsupported",
+                "reason": "rule_not_allowed_for_technical_confirmation",
+                "passed": False,
+            }
+        use = self.rule_registry.evaluate_use(rule.rule_id, "trend_confirmation")
+        if use["status"] != "available":
+            return {
+                **canonical,
+                "status": use["status"],
+                "reason": "technical_rule_not_available_for_confirmation",
+                "passed": False,
+            }
+        provider_metadata = {
+            "rule_version": result.get("rule_version"),
+            "evidence_level": result.get("evidence_level"),
+            "implementation_mode": result.get("implementation_mode"),
+            "project_operationalization": result.get("project_operationalization"),
+        }
+        expected_metadata = {
+            "rule_version": rule.version,
+            "evidence_level": rule.evidence_level.value,
+            "implementation_mode": rule.implementation_mode.value,
+            "project_operationalization": rule.project_operationalization,
+        }
+        mismatch = any(
+            provider_metadata[field] is not None
+            and provider_metadata[field] != expected_metadata[field]
+            for field in expected_metadata
+        )
+        if mismatch:
+            return {
+                **canonical,
+                "status": "insufficient_data",
+                "reason": "technical_rule_metadata_mismatch",
+                "passed": False,
+            }
+        return {
+            **canonical,
+            "passed": result.get("turned_positive") is True,
+            "reason": None,
+        }
 
     def evaluate(
         self,
@@ -225,10 +283,23 @@ class ValueScreeningEngine:
         window_start: str,
         window_end: str,
     ) -> dict[str, Any]:
-        ordered = sorted(
-            valuation_observations,
-            key=lambda row: (row["metric_date"], row["logical_observation_id"]),
-        )
+        ordered = sorted(valuation_observations, key=lambda row: row["metric_date"])
+        if ordered:
+            latest_metric_date = ordered[-1]["metric_date"]
+            current_rows = [
+                row for row in ordered if row["metric_date"] == latest_metric_date
+            ]
+            if len(current_rows) != 1:
+                return {
+                    "status": "insufficient_data",
+                    "reason": "ambiguous_current_valuation_observation",
+                    "research_result": None,
+                    "symbol": symbol,
+                    "knowledge_cutoff_at": knowledge_cutoff_at,
+                    "components": {},
+                    "missing_components": ["valuation_observation"],
+                    "automatic_order": False,
+                }
         minimum = int(profile["minimum_observations"])
         basis = profile["valuation_basis"]
         components = {

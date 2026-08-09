@@ -55,20 +55,22 @@ def forward_eps(earlier=10.0, later=12.0, years=(2027, 2028)):
     ]
 
 
-def technical(turned_positive=True, rule_id="WV-03", evidence_level="B"):
-    return {
+def technical(turned_positive=True, rule_id="WV-03", **changes):
+    result = {
         "status": "available",
         "reason": None,
         "turned_positive": turned_positive,
         "component_name": "wv03_confirmation",
         "rule_id": rule_id,
         "rule_version": "2.0.0",
-        "evidence_level": evidence_level,
+        "evidence_level": "B",
         "implementation_mode": "parameterized_support",
         "project_operationalization": False,
         "data_as_of": "2026-01-01T00:00:00Z",
         "details": {},
     }
+    result.update(changes)
+    return result
 
 
 def evaluate(**changes):
@@ -209,11 +211,82 @@ def test_nonpositive_earlier_forward_eps_is_not_low_pe_pass():
 
 def test_technical_turn_is_replaceable_and_legacy_ma_cannot_pass():
     negative = evaluate(technical_result=technical(False))
-    legacy = evaluate(technical_result=technical(True, rule_id="MA-03", evidence_level="U"))
+    legacy = evaluate(
+        technical_result=technical(True, rule_id="MA-03", evidence_level="U")
+    )
     assert negative["research_result"] == "does_not_meet_approved_profile"
     assert legacy["components"]["technical_turn"]["status"] == "unsupported"
     assert legacy["status"] == "insufficient_data"
     assert legacy["research_result"] is None
+
+
+def test_wv03_governance_is_canonicalized_from_registry():
+    provider_observation = technical()
+    for field in (
+        "rule_version",
+        "evidence_level",
+        "implementation_mode",
+        "project_operationalization",
+    ):
+        provider_observation.pop(field)
+    component = evaluate(technical_result=provider_observation)["components"][
+        "technical_turn"
+    ]
+    assert component["status"] == "available"
+    assert component["rule_version"] == "2.0.0"
+    assert component["evidence_level"] == "B"
+    assert component["implementation_mode"] == "parameterized_support"
+    assert component["project_operationalization"] is False
+    assert component["passed"] is True
+
+
+@pytest.mark.parametrize(
+    ("changes", "reason"),
+    [
+        ({"evidence_level": "A"}, "technical_rule_metadata_mismatch"),
+        ({"implementation_mode": "verified_core"}, "technical_rule_metadata_mismatch"),
+    ],
+)
+def test_wv03_provider_cannot_forge_registry_metadata(changes, reason):
+    component = evaluate(technical_result=technical(**changes))["components"][
+        "technical_turn"
+    ]
+    assert component["status"] == "insufficient_data"
+    assert component["reason"] == reason
+    assert component["evidence_level"] == "B"
+    assert component["implementation_mode"] == "parameterized_support"
+    assert component["passed"] is False
+
+
+@pytest.mark.parametrize(
+    ("rule_id", "reason"),
+    [
+        ("ENT-02", "rule_not_allowed_for_technical_confirmation"),
+        ("FAKE-99", "unknown_technical_rule"),
+        ("MA-03", "legacy_or_unsupported_technical_component"),
+        ("SEL-02", "rule_not_allowed_for_technical_confirmation"),
+        ("SEL-03", "rule_not_allowed_for_technical_confirmation"),
+    ],
+)
+def test_unrelated_or_unsupported_rule_cannot_confirm_technical_turn(
+    rule_id, reason
+):
+    component = evaluate(technical_result=technical(rule_id=rule_id))["components"][
+        "technical_turn"
+    ]
+    assert component["status"] == "unsupported"
+    assert component["reason"] == reason
+    assert component["passed"] is False
+
+
+def test_ambiguous_latest_valuation_date_fails_before_logical_id_precedence():
+    rows = valuation_rows()
+    rows.append({**rows[-1], "id": "duplicate", "logical_observation_id": "zzz"})
+    result = evaluate(valuation_observations=rows)
+    assert result["status"] == "insufficient_data"
+    assert result["reason"] == "ambiguous_current_valuation_observation"
+    assert result["research_result"] is None
+    assert result["components"] == {}
 
 
 def test_dividend_yield_contract_rejects_percent_unit():
