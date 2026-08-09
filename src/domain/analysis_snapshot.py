@@ -102,6 +102,8 @@ class SynthesisProfileRevision:
             raise ValueError("overlap_tolerance must be at least zero and less than one")
         thresholds: list[dict[str, Any]] = []
         previous = 1
+        previous_label_rank = -1
+        label_ranks = {"low": 0, "moderate": 1, "high": 2}
         labels: set[str] = set()
         for item in self.evidence_strength_policy:
             count = int(item.get("minimum_independent_target_components", 0))
@@ -112,11 +114,14 @@ class SynthesisProfileRevision:
                 raise ValueError("evidence strength thresholds must be strictly increasing")
             if label not in {"low", "moderate", "high"} or label in labels:
                 raise ValueError("evidence strength labels must be unique low/moderate/high values")
+            if label_ranks[label] <= previous_label_rank:
+                raise ValueError("evidence strength labels must increase with their thresholds")
             thresholds.append({
                 "minimum_independent_target_components": count,
                 "label": label,
             })
             previous = count
+            previous_label_rank = label_ranks[label]
             labels.add(label)
         if not thresholds:
             raise ValueError("evidence_strength_policy is required")

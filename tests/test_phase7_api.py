@@ -202,3 +202,20 @@ def test_refresh_idempotency_key_is_permanently_bound(monkeypatch, tmp_path):
         json={},
     )
     assert conflict.status_code == 409
+
+
+def test_server_controls_live_capture_mode_and_rejects_caller_override(monkeypatch, tmp_path):
+    key = configure(monkeypatch, tmp_path)
+    live = client.post(
+        "/api/v2/analysis/2330.TW/refresh",
+        headers=headers(key, "live-refresh"),
+        json={},
+    )
+    live.raise_for_status()
+    assert live.json()["snapshot"]["capture_mode"] == "live_refresh"
+    forged = client.post(
+        "/api/v2/analysis/2330.TW/refresh",
+        headers=headers(key, "forged-mode"),
+        json={"capture_mode": "live_refresh"},
+    )
+    assert forged.status_code == 422

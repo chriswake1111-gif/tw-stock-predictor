@@ -51,8 +51,8 @@ def test_phase6_migration_is_additive_rerunnable_and_fresh_parent_safe(tmp_path)
     ) in valuation_unique_indexes
 
 
-def test_phase6_migration_applies_to_existing_phase5_database(tmp_path):
-    db = tmp_path / "phase5.db"
+def test_latest_migration_applies_to_existing_phase6_database(tmp_path):
+    db = tmp_path / "phase6.db"
     with sqlite3.connect(db) as conn:
         conn.execute(
             """
@@ -81,7 +81,7 @@ def test_phase6_migration_applies_to_existing_phase5_database(tmp_path):
 
     result = apply_valuation_migration(str(db))
     assert result["applied_migration_ids"] == [
-        "20260809_07_evidence_model_v2_screening"
+        "20260809_08_evidence_model_v2_synthesis_snapshot"
     ]
     with sqlite3.connect(db) as conn:
         assert conn.execute(

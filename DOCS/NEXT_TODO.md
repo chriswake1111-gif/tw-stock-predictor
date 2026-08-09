@@ -61,7 +61,7 @@
 - [ ] `006208.TW` 有 32 筆官方成交股數／金額存在但 OHLC 為空，另有 1 筆錨點不足；`2308.TW` 有 1 筆因子共識平手。這 34 筆維持 `insufficient_data`，不得用成交均價或內插補值。
 - [ ] 測試仍有 FastAPI TestClient 對 `httpx` 的第三方棄用警告，暫不影響功能。
 - [ ] Evidence Model v2 尚無外部 Forward EPS Collector；目前只允許人工或已授權來源匯入。
-- [ ] Evidence Model v2 尚未進入 Phase 5 三等份 planner 與 Phase 7 immutable analysis snapshot；Phase 4 不含自動錨點、自動數浪或費氏時間窗。
+- [x] Evidence Model v2 Phase 5 三等份 planner 已完成；Phase 7 scenario synthesis 與 immutable analysis snapshot 已在專用分支實作並等待 Code Review。Phase 4 仍不含自動錨點、自動數浪或費氏時間窗。
 
 ### 建議下一步
 
@@ -107,7 +107,10 @@
   replaceable technical confirmation, and additive v2 API integration.
 - [ ] Phase 6 has no production historical valuation importer, point-in-time industry peer contract,
   or concrete WV-03 provider; these paths return explicit `insufficient_data`.
-- [ ] Phase 7 has not started and requires a separate explicit authorization.
+- [x] Phase 7 implemented on its authorized branch: TGT-01 approved synthesis profiles,
+      deterministic family/dependency overlap, protected refresh, and DB-enforced immutable
+      snapshots. It remains unmerged pending Draft PR Code Review.
+- [ ] Phase 8 has not started and requires separate explicit authorization after Phase 7 review.
 
 ## Evidence Model V2 Phase 3 status (2026-08-01)
 

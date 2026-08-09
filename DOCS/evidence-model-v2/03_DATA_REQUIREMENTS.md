@@ -200,3 +200,18 @@ to be within the knowledge cutoff.
 Revision 採 append-only，`logical_anchor_set_id`、symbol、Rule ID 與單位不可跨 revision 改變。查詢同時要求 `available_at <= knowledge_cutoff_at` 與 `ingested_at <= knowledge_cutoff_at`，先選 cutoff 可見的最高 revision，再解讀 `available`／`revoked`；revoked 不得回退舊版。
 
 `technical_anchor_approvals` 是 rule-specific immutable event。事件綁定特定 anchor revision；新 revision 不繼承舊 approval。查詢同時要求 `approved_at` 與 `ingested_at` 不晚於 cutoff。核准及撤銷事件不可回溯排序。
+
+---
+
+## Phase 7 additive synthesis and snapshot contract
+
+`analysis_snapshots` stores exact output plus `knowledge_cutoff_at`, server-assigned
+`capture_mode`, model and used-rule versions, exact contributing resource revisions and approvals,
+synthesis profile revision/approval, output SHA-256, semantic fingerprint, creation time, and an
+optional explicit same-symbol supersedes link. SQLite rejects UPDATE and DELETE on this table.
+
+Related append-only tables are `synthesis_profile_revisions`,
+`synthesis_profile_approvals`, `synthesis_idempotency_keys`, and
+`analysis_snapshot_idempotency_keys`. Latest cutoff-visible revision and latest approval decision
+win without fallback. Idempotency keys remain permanently bound to a semantic payload and
+resource ID.

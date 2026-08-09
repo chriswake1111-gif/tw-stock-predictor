@@ -129,3 +129,21 @@ Acceptance includes unit conversion, explicit CBC release timestamp, M1B revisio
 3. CI 必須驗證上述規則。
 4. 測試不得依賴即時網路。
 5. 官方 API response 使用固定 fixtures。
+
+## L. Phase 7 synthesis and snapshot
+
+1. Same-family matrix cells cannot create multi-method confluence.
+2. Fewer than two independent target components has null strength and no TGT-01 Rule Trace.
+3. `support_count` counts distinct target families, not raw matrix cells or FB-04 support.
+4. Shared EPS, PE, or anchor revisions connect target-family dependency nodes.
+5. Candidate input ordering and duplicate inputs do not change canonical output.
+6. All disjoint clusters are retained and summary fields do not select a target.
+7. Strength thresholds are exact approved profile data and cannot start at one.
+8. Explicit profile selection cannot resurrect a superseded or revoked revision.
+9. A new profile revision requires a new approval; latest approval revoke has no fallback.
+10. Snapshot insert/retrieval and permanent idempotency binding are deterministic.
+11. Direct SQL UPDATE and DELETE against `analysis_snapshots` are rejected.
+12. Snapshot retrieval returns exact stored output and does not recompute.
+13. Capture mode is server controlled; explicit cutoff is historical reconstruction.
+14. Fresh DB, existing Phase 6 DB, rerun, transaction rollback, and checksum behavior pass.
+15. v1 golden remains unchanged and no runtime cache artifacts are tracked.

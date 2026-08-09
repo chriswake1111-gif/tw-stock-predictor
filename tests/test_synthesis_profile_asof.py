@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from src.domain.analysis_snapshot import (
@@ -100,6 +102,18 @@ def test_single_method_strength_threshold_is_rejected():
         invalid.canonical_payload()
 
 
+def test_evidence_strength_labels_must_increase_with_thresholds():
+    invalid = replace(
+        profile(),
+        evidence_strength_policy=(
+            {"minimum_independent_target_components": 2, "label": "high"},
+            {"minimum_independent_target_components": 3, "label": "moderate"},
+        ),
+    )
+    with pytest.raises(ValueError, match="labels must increase"):
+        invalid.canonical_payload()
+
+
 def test_explicit_profile_cannot_resurrect_superseded_revision(tmp_path):
     db_path = tmp_path / "superseded.db"
     repo = SynthesisProfileRepository(str(db_path))
@@ -111,6 +125,53 @@ def test_explicit_profile_cannot_resurrect_superseded_revision(tmp_path):
     )
     rev2 = repo.add_revision(
         profile(2, rev1["id"]), "rev2", ingested_at="2026-02-01T00:00:00Z"
+    )
+    selected, error = EvidenceAnalysisService(str(db_path)).select_profile(
+        "2330.TW",
+        "2026-02-02T00:00:00Z",
+        profile_revision_id=rev1["id"],
+    )
+    assert selected is None
+    assert error["reason"] == "synthesis_profile_revision_superseded"
+    assert error["effective_profile_revision_id"] == rev2["id"]
+
+
+def test_multiple_applicable_profiles_require_explicit_selection(tmp_path):
+    db_path = tmp_path / "multiple.db"
+    repo = SynthesisProfileRepository(str(db_path))
+    first = repo.add_revision(
+        profile(), "first", ingested_at="2026-01-01T00:00:00Z"
+    )
+    second_profile = replace(profile(), logical_profile_id="second-profile")
+    second = repo.add_revision(
+        second_profile, "second", ingested_at="2026-01-01T00:00:00Z"
+    )
+    for index, item in enumerate((first, second), start=1):
+        repo.add_approval(
+            approval(item["id"]),
+            f"approval-{index}",
+            ingested_at="2026-01-02T00:00:00Z",
+        )
+    selected, error = EvidenceAnalysisService(str(db_path)).select_profile(
+        "2330.TW", "2026-01-03T00:00:00Z"
+    )
+    assert selected is None
+    assert error["reason"] == "synthesis_profile_selection_required"
+
+
+def test_explicit_old_profile_cannot_bypass_revoked_latest_revision(tmp_path):
+    db_path = tmp_path / "revoked-latest.db"
+    repo = SynthesisProfileRepository(str(db_path))
+    rev1 = repo.add_revision(
+        profile(), "rev1", ingested_at="2026-01-01T00:00:00Z"
+    )
+    repo.add_approval(
+        approval(rev1["id"]), "approve-rev1", ingested_at="2026-01-02T00:00:00Z"
+    )
+    rev2 = repo.add_revision(
+        profile(2, rev1["id"], status="revoked"),
+        "rev2-revoked",
+        ingested_at="2026-02-01T00:00:00Z",
     )
     selected, error = EvidenceAnalysisService(str(db_path)).select_profile(
         "2330.TW",

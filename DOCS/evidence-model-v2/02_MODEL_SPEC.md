@@ -444,3 +444,22 @@ class AnalysisSnapshot:
 - 固定 PB < 1.5、殖利率 > 4% 冠名為本人固定門檻。
 - 固定 M1B 比率或成交金額直接賣出。
 - 全歷史極值 hindsight 結果進入即時綜合結論。
+
+---
+
+## 15. Phase 7 approved project operationalization
+
+Phase 7 uses only approved VAL-01 and FB-03 target candidates. FB-04 is support-only. Candidate
+cells are grouped by method family, then target-family nodes sharing an authoritative upstream
+revision are connected. Independent method count is the connected-component count. Fewer than
+two independent target components is not TGT-01 confluence and must not emit TGT-01 Rule Trace or
+evidence strength.
+
+Point-to-range tolerance, Decimal precision, overlap clustering, and strength thresholds belong
+to an exact approved immutable synthesis profile. The engine has no one-method strength mapping.
+All disjoint clusters are retained; any top-level strength is explicitly a maximum-cluster summary
+and does not select a recommended target.
+
+Snapshot cutoff is the full UTC `knowledge_cutoff_at` timestamp. Capture mode is server-assigned
+as `live_refresh` only when the caller supplies no cutoff, otherwise
+`historical_reconstruction`. Retrieval returns exact stored output and never recomputes it.
