@@ -110,7 +110,11 @@
 - [x] Phase 7 implemented on its authorized branch: TGT-01 approved synthesis profiles,
       deterministic family/dependency overlap, protected refresh, and DB-enforced immutable
       snapshots. It remains unmerged pending Draft PR Code Review.
-- [ ] Phase 8 has not started and requires separate explicit authorization after Phase 7 review.
+- [x] Phase 8 constrained MVP implemented on its authorized branch: immutable Phase 7 snapshot input,
+      approved evaluation profile, hash-verified fixed Phase 2 outcome manifest, deterministic 20/60
+      session evaluator, immutable stored results, protected run API, and origin-separated descriptive
+      historical summary.
+- [ ] Phase 8 remains Draft/Unmerged pending first Code Review. Phase 9 has not started.
 
 ## Evidence Model V2 Phase 3 status (2026-08-01)
 

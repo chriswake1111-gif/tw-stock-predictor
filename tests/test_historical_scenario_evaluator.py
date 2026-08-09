@@ -155,3 +155,45 @@ def test_quality_warning_preserves_observation_without_counting_a_model_miss_or_
     assert result.terminal_outcome == "quality_warning"
     assert result.target_reached is None
     assert result.subject_metadata["observed_outcome_excluded_from_rate"] == "target_reached"
+
+
+def test_evaluator_never_calls_current_model_or_approval_services(monkeypatch):
+    from src.services.evidence_analysis_service import EvidenceAnalysisService
+    from src.services.forward_eps_service import ForwardEPSService
+    from src.services.security_screening_service import SecurityScreeningService
+    from src.services.technical_scenario_service import TechnicalScenarioService
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Phase 8 attempted to rebuild current model state")
+
+    monkeypatch.setattr(EvidenceAnalysisService, "synthesize", forbidden)
+    monkeypatch.setattr(ForwardEPSService, "analyze", forbidden)
+    monkeypatch.setattr(SecurityScreeningService, "analyze", forbidden)
+    monkeypatch.setattr(TechnicalScenarioService, "analyze", forbidden)
+    first = [item.canonical_payload() for item in evaluate()]
+    second = [item.canonical_payload() for item in evaluate()]
+    assert first == second
+
+
+def test_first_missing_symbol_bar_is_skipped_but_horizon_uses_frozen_calendar():
+    dates = sessions()
+    result = find(evaluate(dataset(missing={dates[1]})), "val")
+    assert result.evaluation_start_session == dates[2]
+    assert result.market_sessions_skipped == 1
+    assert result.evaluation_end_session == dates[22]
+
+
+def test_exact_target_boundaries_are_closed_and_weekend_cutoff_never_uses_same_day():
+    snap = snapshot(cutoff="2025-01-04T04:00:00Z")  # Saturday in Asia/Taipei
+    snap["output"]["target_confluence"]["supporting_methods"][0]["price_low"] = "121"
+    snap["output"]["target_confluence"]["supporting_methods"][0]["price_high"] = "130"
+    result = find(evaluate(snap=snap), "val")
+    assert result.evaluation_start_session == "2025-01-06"
+    assert result.target_reached is True
+
+
+def test_adjusted_price_series_is_used_without_runtime_corporate_action_rewrite():
+    result = find(evaluate(), "val")
+    assert result.start_price == "100"
+    assert result.forward_return == "0.01"
+    assert result.maximum_upside_excursion == "0.21"

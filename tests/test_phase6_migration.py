@@ -3,6 +3,7 @@ import sqlite3
 
 from src.repositories.migration_runner import (
     MIGRATION_FILES,
+    MIGRATION_ID,
     MIGRATION_IDS,
     _statements,
     apply_valuation_migration,
@@ -80,9 +81,7 @@ def test_latest_migration_applies_to_existing_phase6_database(tmp_path):
         conn.commit()
 
     result = apply_valuation_migration(str(db))
-    assert result["applied_migration_ids"] == [
-        "20260809_08_evidence_model_v2_synthesis_snapshot"
-    ]
+    assert result["applied_migration_ids"] == [MIGRATION_ID]
     with sqlite3.connect(db) as conn:
         assert conn.execute(
             "SELECT 1 FROM schema_migrations WHERE version_id = ?",
