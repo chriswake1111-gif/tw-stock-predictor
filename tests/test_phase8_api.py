@@ -1,11 +1,54 @@
+from datetime import date, timedelta
+from decimal import Decimal
+from hashlib import sha256
+
 from fastapi.testclient import TestClient
 
 from src.api.main import app
 from src.domain.analysis_snapshot import AnalysisSnapshot, CaptureMode
+from src.domain.performance_validation import OutcomeResourceManifest
 from src.repositories.analysis_snapshot_repository import AnalysisSnapshotRepository
+from src.services.fixed_outcome_dataset import OutcomeBar, VerifiedOutcomeDataset
 
 
 client = TestClient(app)
+HASH = sha256(b"phase8-api-fixed-outcome").hexdigest()
+
+
+def install_fixed_outcome_fixture(monkeypatch):
+    dates = []
+    current = date(2025, 1, 1)
+    while len(dates) < 80:
+        if current.weekday() < 5:
+            dates.append(current.isoformat())
+        current += timedelta(days=1)
+    bars = tuple(
+        OutcomeBar(day, Decimal("100"), Decimal("105"), Decimal("95"), Decimal("101"))
+        for day in dates
+    )
+    manifest = OutcomeResourceManifest(
+        manifest_id="phase8-api-test-manifest", manifest_version=1,
+        dataset_name="phase8-api-fixed-fixture", provider="test fixture",
+        dataset_hash=HASH, date_start=dates[0], date_end=dates[-1],
+        universe_definition="phase2_fixed_14_symbol_research_cohort",
+        calendar_resource={"policy": "fixed_test_calendar"}, calendar_hash=HASH,
+        benchmark_resource={"symbol": "^TWII"}, benchmark_hash=HASH,
+        ohlc_adjustment_contract="provider_compatible_adjusted_v1",
+        corporate_action_contract="fixed_test_adjusted_history",
+        symbol_resources=(
+            {"symbol": "2317.TW", "path": "2317.csv", "sha256": HASH, "quality_status": "available"},
+            {"symbol": "2308.TW", "path": "2308.csv", "sha256": HASH, "quality_status": "quality_warning"},
+        ),
+        ingested_at="2026-08-09T16:00:00Z", created_at="2026-08-09T16:00:00Z",
+    )
+    fixed = VerifiedOutcomeDataset(
+        manifest=manifest, calendar=tuple(dates),
+        bars_by_symbol={"2317.TW": bars, "2308.TW": bars}, benchmark_bars=bars,
+    )
+    monkeypatch.setattr(
+        "src.services.performance_validation_service.FixedPhase2OutcomeAdapter.load",
+        lambda self, *, ingested_at: fixed,
+    )
 
 
 def add_snapshot(
@@ -63,6 +106,7 @@ def test_phase8_run_write_is_default_closed(monkeypatch, tmp_path):
 
 
 def test_phase8_protected_run_exact_get_and_origin_separated_summary(monkeypatch, tmp_path):
+    install_fixed_outcome_fixture(monkeypatch)
     db_path = tmp_path / "phase8.db"
     key = "phase8-secret"
     monkeypatch.setenv("DATABASE_PATH", str(db_path))
@@ -142,6 +186,7 @@ def test_phase8_profile_acknowledgement_fails_closed(monkeypatch, tmp_path):
 
 
 def test_quality_warning_stays_in_coverage_but_not_target_rate_denominator(monkeypatch, tmp_path):
+    install_fixed_outcome_fixture(monkeypatch)
     db_path = tmp_path / "warning.db"
     key = "phase8-secret"
     monkeypatch.setenv("DATABASE_PATH", str(db_path))
