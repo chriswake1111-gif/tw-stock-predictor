@@ -311,3 +311,11 @@ class SynthesisProfileRepository:
                 (cutoff, cutoff, cutoff, cutoff),
             ).fetchall()
         return [self._public_profile(dict(row)) for row in rows]
+
+    def get_revision(self, profile_revision_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM synthesis_profile_revisions WHERE id = ?",
+                (profile_revision_id,),
+            ).fetchone()
+        return self._public_profile(dict(row)) if row else None

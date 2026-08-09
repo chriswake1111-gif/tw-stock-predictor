@@ -7,6 +7,7 @@ from src.domain.analysis_snapshot import (
 )
 from src.domain.valuation import ApprovalStatus
 from src.repositories.synthesis_profile_repository import SynthesisProfileRepository
+from src.services.evidence_analysis_service import EvidenceAnalysisService
 
 
 def profile(revision=1, revision_of=None, status="available"):
@@ -97,3 +98,25 @@ def test_single_method_strength_threshold_is_rejected():
     )
     with pytest.raises(ValueError, match="start at two"):
         invalid.canonical_payload()
+
+
+def test_explicit_profile_cannot_resurrect_superseded_revision(tmp_path):
+    db_path = tmp_path / "superseded.db"
+    repo = SynthesisProfileRepository(str(db_path))
+    rev1 = repo.add_revision(
+        profile(), "rev1", ingested_at="2026-01-01T00:00:00Z"
+    )
+    repo.add_approval(
+        approval(rev1["id"]), "rev1-approval", ingested_at="2026-01-02T00:00:00Z"
+    )
+    rev2 = repo.add_revision(
+        profile(2, rev1["id"]), "rev2", ingested_at="2026-02-01T00:00:00Z"
+    )
+    selected, error = EvidenceAnalysisService(str(db_path)).select_profile(
+        "2330.TW",
+        "2026-02-02T00:00:00Z",
+        profile_revision_id=rev1["id"],
+    )
+    assert selected is None
+    assert error["reason"] == "synthesis_profile_revision_superseded"
+    assert error["effective_profile_revision_id"] == rev2["id"]
