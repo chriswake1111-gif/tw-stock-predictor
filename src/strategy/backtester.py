@@ -27,7 +27,8 @@ class TWSalesTaxCommissionScheme(bt.CommissionInfo):
             comm += value * self.p.tax
         return comm
 
-class TuStrategy(bt.Strategy):
+class LegacyExperimentalStrategy(bt.Strategy):
+    """V1 legacy experimental MA/pullback strategy; simulation only."""
     """僅供歷史回測的 20/30/50 模擬策略，不具任何真實委託能力。"""
     
     params = (
@@ -229,7 +230,11 @@ class TuStrategy(bt.Strategy):
                     self.pending_order = self.buy(size=size)
                     self.pending_stage = 3
 
+TuStrategy = LegacyExperimentalStrategy
+
+
 class TuBacktester:
+    """V1 legacy experimental backtester retained for API compatibility."""
     """杜金龍策略歷史回測執行器"""
 
     def __init__(

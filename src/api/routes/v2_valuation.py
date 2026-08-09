@@ -10,7 +10,7 @@ from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Header, HTTPException, Query
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.analysis_service import normalize_symbol
 from src.domain.valuation import (
@@ -31,6 +31,13 @@ from src.domain.technical_anchor import (
     AnchorType,
     ManualAnchorSetRevision,
 )
+from src.domain.deployment import (
+    DeploymentPlanRevision,
+    DeploymentPlanStatus,
+    DeploymentTrigger,
+    TriggerType,
+)
+from src.services.deployment_plan_service import DeploymentPlanService
 from src.services.forward_eps_service import ForwardEPSService
 from src.services.market_liquidity_service import MarketLiquidityService
 from src.services.rule_registry import RuleRegistry
@@ -113,6 +120,34 @@ class TechnicalApprovalRequest(StrictRequest):
     approved_at: str
 
 
+class DeploymentTriggerRequest(StrictRequest):
+    stage: int
+    trigger_type: TriggerType
+    value: str | float | None = None
+    reference_id: str | None = None
+    anchor_revision_id: str | None = None
+    approval_id: str | None = None
+    rule_id: str | None = None
+
+
+class DeploymentPlanRequest(StrictRequest):
+    logical_campaign_id: str
+    revision_number: int
+    revision_of: str | None = None
+    symbol: str
+    planned_total_capital: str | float
+    triggers: list[DeploymentTriggerRequest] = Field(default_factory=list)
+    available_at: str
+    source_note: str | None = None
+    status: DeploymentPlanStatus = DeploymentPlanStatus.AVAILABLE
+
+
+class DeploymentApprovalRequest(StrictRequest):
+    decision: ApprovalStatus
+    rationale: str
+    approved_at: str
+
+
 def _service() -> ForwardEPSService:
     return ForwardEPSService(os.getenv("DATABASE_PATH", "data/cache.db"))
 
@@ -131,6 +166,10 @@ def _liquidity_service() -> MarketLiquidityService:
 
 def _technical_service() -> TechnicalScenarioService:
     return TechnicalScenarioService(os.getenv("DATABASE_PATH", "data/cache.db"))
+
+
+def _deployment_service() -> DeploymentPlanService:
+    return DeploymentPlanService(os.getenv("DATABASE_PATH", "data/cache.db"))
 
 
 def _require_write_access(api_key: str | None) -> str:
@@ -402,6 +441,77 @@ def list_manual_anchor_sets(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.post("/deployment-plan")
+def create_deployment_plan(
+    payload: DeploymentPlanRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    admin_api_key: str | None = Header(default=None, alias="X-Admin-API-Key"),
+):
+    try:
+        actor = _require_write_access(admin_api_key)
+        revision = DeploymentPlanRevision(
+            logical_campaign_id=payload.logical_campaign_id,
+            revision_number=payload.revision_number,
+            revision_of=payload.revision_of,
+            symbol=normalize_symbol(payload.symbol),
+            planned_total_capital=payload.planned_total_capital,
+            triggers=tuple(DeploymentTrigger(
+                stage=item.stage,
+                trigger_type=item.trigger_type,
+                value=item.value,
+                reference_id=item.reference_id,
+                anchor_revision_id=item.anchor_revision_id,
+                approval_id=item.approval_id,
+                rule_id=item.rule_id,
+            ) for item in payload.triggers),
+            available_at=payload.available_at,
+            created_by=actor,
+            source_note=payload.source_note,
+            status=payload.status,
+        )
+        record = _deployment_service().ingest(revision, idempotency_key)
+        plan = _deployment_service()._plan_for_state({**record, "approval": None})
+        return {"status": plan["status"], "reason": plan["reason"], "deployment_plan": _public_dto(plan)}
+    except (ValueError, RuntimeError, sqlite3.IntegrityError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/deployment-plan/{plan_revision_id}/approval")
+def approve_deployment_plan(
+    plan_revision_id: str,
+    payload: DeploymentApprovalRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    admin_api_key: str | None = Header(default=None, alias="X-Admin-API-Key"),
+):
+    try:
+        actor = _require_write_access(admin_api_key)
+        result = _deployment_service().record_approval(
+            plan_revision_id=plan_revision_id,
+            decision=payload.decision,
+            rationale=payload.rationale,
+            approved_at=payload.approved_at,
+            approved_by=actor,
+            idempotency_key=idempotency_key,
+        )
+        return {"status": "available", "approval": _public_dto(result)}
+    except (ValueError, RuntimeError, sqlite3.IntegrityError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/deployment-plan/{symbol}")
+def get_deployment_plans(
+    symbol: str,
+    knowledge_cutoff_at: str | None = Query(default=None),
+    as_of_date: str | None = Query(default=None),
+):
+    try:
+        cutoff, cutoff_policy = resolve_knowledge_cutoff(knowledge_cutoff_at, as_of_date)
+        result = _deployment_service().analyze(normalize_symbol(symbol), cutoff)
+        return {**_public_dto(result), "cutoff_policy": cutoff_policy}
+    except (ValueError, RuntimeError, sqlite3.Error) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/analysis/{symbol}")
 def get_v2_analysis(
     symbol: str,
@@ -437,6 +547,16 @@ def get_v2_analysis(
             "status": "insufficient_data",
             "reason": f"technical_anchor_data_unavailable: {exc}",
             "scenarios": [],
+            "rules_used": [],
+        }
+
+    try:
+        deployment_plan = _deployment_service().analyze(normalized_symbol, cutoff)
+    except (ValueError, RuntimeError, sqlite3.Error) as exc:
+        deployment_plan = {
+            "status": "insufficient_data",
+            "reason": f"deployment_plan_data_unavailable: {exc}",
+            "plans": [],
             "rules_used": [],
         }
 
@@ -494,9 +614,9 @@ def get_v2_analysis(
         "wave_scenarios": {"status": "needs_human_input", "reason": "phase_4_not_implemented"},
         "fibonacci_scenarios": {"status": "unsupported", "reason": "use_technical_support_phase_4"},
         "target_confluence": {"status": "unsupported", "reason": "phase_7_not_implemented"},
-        "deployment_plan": {"status": "unsupported", "reason": "phase_5_not_implemented"},
+        "deployment_plan": deployment_plan,
         "invalidation": valuation["invalidation_conditions"],
-        "rules_used": valuation["rules_used"] + liquidity.get("rules_used", []) + technical_support.get("rules_used", []),
+        "rules_used": valuation["rules_used"] + liquidity.get("rules_used", []) + technical_support.get("rules_used", []) + deployment_plan.get("rules_used", []),
         "unsupported": ["eva_formula", "margin_return_8_percent_formula"],
         "snapshot_id": None,
     }

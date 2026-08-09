@@ -151,6 +151,33 @@ POST /api/v2/deployment-plan
 
 ---
 
+## Phase 5 deployment API
+
+`POST /api/v2/deployment-plan` creates an immutable draft revision. Writes are disabled by default
+and require the admin API key. Callers cannot provide approval or evidence metadata. Missing
+triggers return `deployment_triggers_required`; complete unapproved triggers return
+`approved_deployment_plan_required`.
+
+`POST /api/v2/deployment-plan/{plan_revision_id}/approval` records a protected ENT-02 decision.
+`GET /api/v2/deployment-plan/{symbol}` reconstructs state at the knowledge cutoff. Available output
+contains three budgets, external trigger metadata, `automatic_order=false`, and exact approval trace.
+
+General analysis returns `deployment_plan_request_required` when there is no active request. Because
+deployment is optional and user-initiated, this does not add a missing section or human-input item to
+analysis-level `data_quality`.
+
+An FB-04 deployment trigger is valid only when its symbol and effective latest anchor revision match
+the deployment plan at approval time. Superseded or revoked revisions and a revoked latest approval
+fail closed without fallback. `reference_id` is a provenance label because Phase 4 has no persisted
+scenario resource; FB-04, symbol, anchor revision ID, and approval ID are authoritative.
+
+Historical simulator output uses `approved_trigger` copied from the approved plan. Caller event text
+is disclosed separately as `signal_event_source` and cannot change evidence provenance.
+Same-campaign events with the same normalized signal time return `ambiguous_same_time_events`;
+this ordering policy is a project operationalization.
+
+---
+
 ## Phase 4 technical support section
 
 受保護的寫入端點：
