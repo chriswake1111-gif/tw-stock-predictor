@@ -347,6 +347,31 @@ def resolve_knowledge_cutoff(
     }
 
 
+_COMPOSITION_SECTIONS = (
+    "valuation",
+    "liquidity",
+    "technical_support",
+    "screening",
+    "target_confluence",
+)
+_COMPLETE_SECTION_STATUSES = {"available", "not_applicable"}
+_USABLE_SECTION_STATUSES = {
+    "available", "not_applicable", "partial", "quality_warning"
+}
+
+
+def _compose_analysis_status(section_statuses: dict[str, str]) -> str:
+    """Conservatively compose presentation state without scoring model outputs."""
+    statuses = [section_statuses[name] for name in _COMPOSITION_SECTIONS]
+    if all(status in _COMPLETE_SECTION_STATUSES for status in statuses):
+        return "available"
+    if any(status in _USABLE_SECTION_STATUSES for status in statuses):
+        return "partial"
+    if any(status == "needs_human_input" for status in statuses):
+        return "needs_human_input"
+    return "insufficient_data"
+
+
 @router.post("/forward-eps")
 def create_forward_eps(
     payload: ForwardEPSRequest,
@@ -821,6 +846,54 @@ def get_deployment_plans(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.get("/market-overview")
+def get_market_overview(
+    knowledge_cutoff_at: str | None = Query(default=None),
+    as_of_date: str | None = Query(default=None),
+):
+    try:
+        cutoff, cutoff_policy = resolve_knowledge_cutoff(
+            knowledge_cutoff_at, as_of_date
+        )
+        result = _liquidity_service().analyze(cutoff)
+        return {
+            "status": result["status"],
+            "knowledge_cutoff_at": cutoff,
+            "cutoff_policy": cutoff_policy,
+            "market_overview": _public_dto(result),
+        }
+    except (ValueError, RuntimeError, sqlite3.Error) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/analysis/snapshots")
+def list_v2_analysis_snapshots(
+    symbol: str | None = Query(default=None),
+    capture_mode: CaptureMode | None = Query(default=None),
+    before: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+):
+    try:
+        normalized_symbol = normalize_symbol(symbol) if symbol else None
+        result = _evidence_analysis_service().snapshot_repository.list_summaries(
+            symbol=normalized_symbol,
+            capture_mode=capture_mode.value if capture_mode else None,
+            before=before,
+            limit=limit,
+        )
+        return {
+            "status": "available",
+            "snapshots": _public_dto(result["items"]),
+            "next_before": result["next_before"],
+            "filters": {
+                "symbol": normalized_symbol,
+                "capture_mode": capture_mode.value if capture_mode else None,
+            },
+        }
+    except (ValueError, RuntimeError, sqlite3.Error) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/analysis/{symbol}")
 def get_v2_analysis(
     symbol: str,
@@ -907,33 +980,23 @@ def get_v2_analysis(
             "automatic_order": False,
         }
 
-    valuation_available = valuation["status"] in {"available", "not_applicable"}
-    liquidity_available = liquidity["status"] == "available"
-    technical_available = technical_support["status"] == "available"
-    screening_available = screening["status"] == "available"
-    confluence_available = target_confluence["status"] == "available"
-    available_sections = []
-    missing = []
-    if valuation_available:
-        available_sections.append("valuation")
-    else:
-        missing.append("forward_valuation")
-    if liquidity_available:
-        available_sections.append("liquidity")
-    else:
-        missing.append("liquidity")
-    if technical_available:
-        available_sections.append("technical_support")
-    else:
-        missing.append("technical_support")
-    if screening_available:
-        available_sections.append("screening")
-    else:
-        missing.append("screening")
-    if confluence_available:
-        available_sections.append("target_confluence")
-    else:
-        missing.append("target_confluence")
+    section_statuses = {
+        "valuation": valuation["status"],
+        "liquidity": liquidity["status"],
+        "technical_support": technical_support["status"],
+        "screening": screening["status"],
+        "target_confluence": target_confluence["status"],
+    }
+    aggregate_status = _compose_analysis_status(section_statuses)
+    available_sections = [
+        name for name, status in section_statuses.items()
+        if status in _COMPLETE_SECTION_STATUSES
+    ]
+    missing = [
+        "forward_valuation" if name == "valuation" else name
+        for name, status in section_statuses.items()
+        if status not in _COMPLETE_SECTION_STATUSES
+    ]
     needs_human = []
     if valuation["status"] == "needs_human_input":
         if valuation["reason"] == "approved_forward_eps_required":
@@ -969,7 +1032,7 @@ def get_v2_analysis(
         if synthesis_requirement:
             needs_human.append(synthesis_requirement)
     return {
-        "status": "partial",
+        "status": aggregate_status,
         "symbol": normalized_symbol,
         "knowledge_cutoff_at": cutoff,
         "cutoff_policy": cutoff_policy,
@@ -979,17 +1042,40 @@ def get_v2_analysis(
             "official_affiliation": False,
         },
         "data_quality": {
-            "status": "partial",
+            "status": aggregate_status,
+            "section_statuses": section_statuses,
             "available_sections": available_sections,
             "missing_sections": missing,
+            "partial_sections": [
+                name for name, status in section_statuses.items()
+                if status == "partial"
+            ],
+            "quality_warning_sections": [
+                name for name, status in section_statuses.items()
+                if status == "quality_warning"
+            ],
+            "unsupported_sections": [
+                name for name, status in section_statuses.items()
+                if status == "unsupported"
+            ],
+            "not_applicable_sections": [
+                name for name, status in section_statuses.items()
+                if status == "not_applicable"
+            ],
             "stale_sections": [],
             "needs_human_input": needs_human,
         },
         "valuation": valuation,
         "liquidity": liquidity,
         "technical_support": technical_support,
-        "wave_scenarios": {"status": "needs_human_input", "reason": "phase_4_not_implemented"},
-        "fibonacci_scenarios": {"status": "unsupported", "reason": "use_technical_support_phase_4"},
+        "wave_scenarios": {
+            "status": "unsupported",
+            "reason": "automatic_wave_scenarios_not_supported_in_v2",
+        },
+        "fibonacci_scenarios": {
+            "status": "unsupported",
+            "reason": "standalone_section_replaced_by_technical_support",
+        },
         "target_confluence": target_confluence,
         "deployment_plan": deployment_plan,
         "screening": screening,
@@ -1079,6 +1165,29 @@ def create_evaluation_run(
         detail = str(exc)
         status_code = 409 if "idempotency key" in detail else 422
         raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.get("/evaluations/runs")
+def list_evaluation_runs(
+    before: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    status: str | None = Query(default=None),
+):
+    if status is not None and status != "completed":
+        raise HTTPException(status_code=422, detail="unsupported_evaluation_run_status")
+    try:
+        result = _performance_validation_service().list_runs(
+            before=before,
+            limit=limit,
+            status=status,
+        )
+        return {
+            "status": "available",
+            "evaluation_runs": _public_dto(result["items"]),
+            "next_before": result["next_before"],
+        }
+    except (ValueError, RuntimeError, sqlite3.Error) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/evaluations/runs/{run_id}/results")

@@ -7,7 +7,7 @@ import sqlite3
 from typing import Any
 
 from src.domain.analysis_snapshot import AnalysisSnapshot, canonical_json, sha256_json
-from src.domain.valuation import utc_now_timestamp
+from src.domain.valuation import normalize_utc_timestamp, utc_now_timestamp
 from src.repositories.migration_runner import apply_valuation_migration
 
 
@@ -132,3 +132,80 @@ class AnalysisSnapshotRepository:
         if sha256_json(result["output"]) != result["output_sha256"]:
             raise RuntimeError("stored analysis snapshot output failed integrity verification")
         return result
+
+    @staticmethod
+    def _decode_before(before: str | None) -> tuple[str, str] | None:
+        if before is None:
+            return None
+        created_at, separator, snapshot_id = before.strip().partition("|")
+        if not separator or not created_at or not snapshot_id:
+            raise ValueError("before must be '<created_at>|<snapshot_id>'")
+        return normalize_utc_timestamp(created_at, "before.created_at"), snapshot_id
+
+    def list_summaries(
+        self,
+        *,
+        symbol: str | None = None,
+        capture_mode: str | None = None,
+        before: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Return deterministic immutable snapshot metadata without duplicating outputs."""
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        cursor = self._decode_before(before)
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if symbol is not None:
+            clauses.append("symbol = ?")
+            parameters.append(symbol)
+        if capture_mode is not None:
+            clauses.append("capture_mode = ?")
+            parameters.append(capture_mode)
+        if cursor is not None:
+            clauses.append(
+                "(created_at < ? OR (created_at = ? AND snapshot_id < ?))"
+            )
+            parameters.extend([cursor[0], cursor[0], cursor[1]])
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        parameters.append(limit + 1)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT snapshot_id,symbol,knowledge_cutoff_at,capture_mode,
+                       model_version,created_at,supersedes_snapshot_id,
+                       output_json,output_sha256
+                FROM analysis_snapshots
+                {where}
+                ORDER BY created_at DESC, snapshot_id DESC
+                LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+        has_more = len(rows) > limit
+        visible = rows[:limit]
+        summaries = []
+        for row in visible:
+            output = json.loads(row["output_json"])
+            if sha256_json(output) != row["output_sha256"]:
+                raise RuntimeError(
+                    "stored analysis snapshot output failed integrity verification"
+                )
+            summaries.append({
+                "snapshot_id": row["snapshot_id"],
+                "symbol": row["symbol"],
+                "knowledge_cutoff_at": row["knowledge_cutoff_at"],
+                "capture_mode": row["capture_mode"],
+                "model_version": row["model_version"],
+                "created_at": row["created_at"],
+                "supersedes_snapshot_id": row["supersedes_snapshot_id"],
+                "analysis_status": output.get("status"),
+            })
+        next_before = None
+        if has_more and summaries:
+            last = summaries[-1]
+            next_before = f"{last['created_at']}|{last['snapshot_id']}"
+        return {
+            "items": summaries,
+            "next_before": next_before,
+        }

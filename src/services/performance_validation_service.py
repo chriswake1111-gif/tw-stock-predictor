@@ -154,6 +154,15 @@ class PerformanceValidationService:
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         return self.repository.get_run(run_id)
 
+    def list_runs(
+        self,
+        *,
+        before: str | None = None,
+        limit: int = 50,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        return self.repository.list_runs(before=before, limit=limit, status=status)
+
     def results_for_run(self, run_id: str) -> list[dict[str, Any]] | None:
         return self.repository.results_for_run(run_id)
 
