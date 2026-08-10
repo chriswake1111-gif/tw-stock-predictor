@@ -8,6 +8,7 @@
 /frontend/dist/
 /frontend/coverage/
 /frontend/test-results/
+/frontend/.phase9-visual-results/
 /frontend/playwright-report/
 /frontend/.vite/
 

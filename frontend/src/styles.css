@@ -85,7 +85,7 @@ button, a, input { -webkit-tap-highlight-color: transparent; }
 .evidence-card h2 { margin: 0; font-size: 19px; letter-spacing: -.01em; }
 .evidence-link { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; min-height: 36px; margin-top: auto; padding: 0; border: 0; background: transparent; color: #174da9; cursor: pointer; font-size: 13px; font-weight: 750; }
 .scenario-table-wrap { overflow: auto; }
-.scenario-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.scenario-table { width: 100%; min-width: 600px; border-collapse: collapse; font-size: 13px; }
 .scenario-table th { padding: 9px 10px; border-bottom: 1px solid var(--border); color: var(--muted); text-align: left; font-size: 11px; text-transform: uppercase; }
 .scenario-table td { padding: 11px 10px; border-bottom: 1px solid #e9edf3; }
 .numeric { font-weight: 800; font-variant-numeric: tabular-nums; }

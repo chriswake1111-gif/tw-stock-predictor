@@ -62,19 +62,19 @@ export function StockWorkspacePage() {
     <div className="workspace-grid">
       <section className="evidence-card evidence-card--wide">
         <header><div><span className="eyebrow">Valuation</span><h2>Forward EPS × PE 情境矩陣</h2></div><StatusBadge status={analysis.valuation.status} reason={analysis.valuation.reason} /></header>
-        {valuationCells.length ? <div className="scenario-table-wrap"><table className="scenario-table"><thead><tr><th>年度</th><th>來源</th><th>EPS 情境</th><th>PE</th><th>目標價</th></tr></thead><tbody>{valuationCells.slice(0, 8).map((cell, index) => <tr key={textOf(cell.cell_id, String(index))}><td>{textOf(cell.fiscal_year)}</td><td>{textOf(cell.source_name)}</td><td>{textOf(cell.eps_scenario ?? cell.eps_case)}</td><td>{textOf(cell.pe_multiple)}</td><td className="numeric">{formatPrice(cell.target_price)}</td></tr>)}</tbody></table></div> : <SectionState status={analysis.valuation.status} reason={analysis.valuation.reason} />}
+        {valuationCells.length ? <div className="scenario-table-wrap" tabIndex={0} role="region" aria-label="估值情境矩陣，可水平捲動"><table className="scenario-table"><thead><tr><th>年度</th><th>來源</th><th>EPS 情境</th><th>PE</th><th>目標價</th></tr></thead><tbody>{valuationCells.slice(0, 8).map((cell, index) => <tr key={textOf(cell.cell_id, String(index))}><td>{textOf(cell.fiscal_year)}</td><td>{textOf(cell.source_name)}</td><td>{textOf(cell.eps_scenario ?? cell.eps_case)}</td><td>{textOf(cell.pe_multiple)}</td><td className="numeric">{formatPrice(cell.target_price)}</td></tr>)}</tbody></table></div> : <SectionState status={analysis.valuation.status} reason={analysis.valuation.reason} />}
         <EvidenceButton section={analysis.valuation} onOpen={() => openEvidence("估值證據", analysis.valuation)} />
       </section>
 
       <section className="evidence-card evidence-card--focus">
         <header><div><span className="eyebrow">Target confluence</span><h2>多方法目標交集</h2></div><StatusBadge status={analysis.target_confluence.status} reason={analysis.target_confluence.reason} /></header>
-        {clusters.length ? <div className="target-range"><span>主要交集區</span><strong>{formatPrice(primaryCluster.price_low)} <ArrowRight aria-hidden="true" /> {formatPrice(primaryCluster.price_high)}</strong><small>TWD / share</small><MethodStrengthIndicator strength={textOf(primaryCluster.evidence_strength, "未分級")} independentMethods={independentMethods} /></div> : <SectionState status={analysis.target_confluence.status} reason={analysis.target_confluence.reason} />}
+        {clusters.length ? <div className="target-range"><span>交集區 1</span><strong>{formatPrice(primaryCluster.price_low)} <ArrowRight aria-hidden="true" /> {formatPrice(primaryCluster.price_high)}</strong><small>TWD / share</small><MethodStrengthIndicator strength={textOf(primaryCluster.evidence_strength, "未分級")} independentMethods={independentMethods} /></div> : <SectionState status={analysis.target_confluence.status} reason={analysis.target_confluence.reason} />}
         <EvidenceButton section={analysis.target_confluence} onOpen={() => openEvidence("目標交集證據", analysis.target_confluence)} />
       </section>
 
       <section className="evidence-card">
         <header><div><span className="eyebrow">Technical support</span><h2>人工錨點技術情境</h2></div><StatusBadge status={analysis.technical_support.status} /></header>
-        {scenarios.length ? <div className="stack-list">{scenarios.map((item, index) => <article key={textOf(item.anchor_set_revision_id, String(index))}><strong>{textOf(item.method, textOf(recordOf(item.rule_trace).rule_id, "技術情境"))}</strong><span>{formatPrice(item.target_price ?? item.price)} TWD</span><small>情境參考，不是保證目標</small></article>)}</div> : <SectionState status={analysis.technical_support.status} reason={analysis.technical_support.reason} />}
+        {scenarios.length ? <div className="stack-list">{scenarios.map((item, index) => <article key={textOf(item.anchor_set_revision_id, String(index))}><strong>{textOf(recordOf(item.rule_trace).rule_id, "技術情境")}</strong><span>{textOf(item.method)} · {formatPrice(item.target_price ?? item.price)} TWD</span><small>支撐情境參考，不是目標或保證價格</small></article>)}</div> : <SectionState status={analysis.technical_support.status} reason={analysis.technical_support.reason} />}
         <EvidenceButton section={analysis.technical_support} onOpen={() => openEvidence("技術支撐證據", analysis.technical_support)} />
       </section>
 
