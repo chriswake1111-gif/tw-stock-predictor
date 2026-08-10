@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./layout/AppShell";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
+import { StockWorkspacePage } from "./pages/StockWorkspacePage";
 
 export default function App() {
   return (
@@ -8,7 +9,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/stocks/2330.TW" replace />} />
         <Route path="/market" element={<PlaceholderPage title="市場概況" description="市場流動性與資料品質將由唯讀 v2 契約呈現。" />} />
-        <Route path="/stocks/:symbol" element={<PlaceholderPage title="個股研究" description="Evidence Workspace 正在載入後端權威分析。" />} />
+        <Route path="/stocks/:symbol" element={<StockWorkspacePage />} />
         <Route path="/snapshots" element={<PlaceholderPage title="歷史快照" description="依標的、模式與時間檢視不可變快照。" />} />
         <Route path="/snapshots/:snapshotId" element={<PlaceholderPage title="快照詳情" description="只呈現已保存輸出，不在瀏覽器重新計算。" />} />
         <Route path="/validation" element={<PlaceholderPage title="歷史觀察" description="描述性呈現既有評估 Run，不產生排行。" />} />
