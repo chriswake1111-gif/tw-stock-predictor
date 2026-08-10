@@ -229,12 +229,13 @@ export interface MarketOverviewResponse {
 
 export interface EvidenceRule extends UnknownRecord {
   rule_id: string;
+  title: string;
   version: string;
   evidence_level: EvidenceLevel;
   implementation_mode: string;
   project_operationalization: boolean;
   human_approval_required: boolean;
-  allowed_uses?: string[];
+  allowed_outputs?: string[];
   forbidden_uses?: string[];
 }
 
