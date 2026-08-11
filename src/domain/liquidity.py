@@ -41,6 +41,7 @@ class M1BMonthlyObservation:
     status: str = "available"
     source_url: str | None = None
     payload_hash: str | None = None
+    publication_evidence_id: str | None = None
     quality_note: str | None = None
 
     def canonical_payload(self) -> dict:
@@ -65,6 +66,7 @@ class M1BMonthlyObservation:
             "source_dataset": self.source_dataset,
             "source_url": self.source_url,
             "payload_hash": self.payload_hash,
+            "publication_evidence_id": self.publication_evidence_id,
             "revision": self.revision,
             "status": self.status,
             "quality_note": self.quality_note,

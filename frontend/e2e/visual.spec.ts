@@ -14,7 +14,18 @@ const runFixture = {
 async function mockApi(page: Page) {
   await page.route("**/api/v2/**", async (route) => {
     const url = route.request().url();
-    const body = url.includes("market-overview")
+    const body = url.includes("dependency-status")
+      ? {
+          status: "available",
+          dependency_status: {
+            snapshot_id: "snapshot-1", comparison_cutoff: "2026-08-11T02:00:00Z",
+            checked_at: "2026-08-11T02:00:00Z", freshness_status: "stale",
+            reasons: ["newer_eligible_forward_eps_revision"], checked_dependencies: [],
+            historical_snapshot_validity: "unchanged",
+          },
+          cutoff_policy: { mode: "request_received_at", timezone: "UTC" },
+        }
+      : url.includes("market-overview")
       ? marketFixture
       : url.includes("analysis/snapshots/snapshot-1")
         ? snapshotFixture

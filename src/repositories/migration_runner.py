@@ -21,6 +21,9 @@ MIGRATION_IDS = (
     "20260809_08_evidence_model_v2_synthesis_snapshot",
     "20260810_09_evidence_model_v2_performance_validation",
     "20260810_10_phase8_review_remediation",
+    "20260811_11_evidence_model_v2_data_foundation",
+    "20260811_12_raw_revision_metadata_identity",
+    "20260811_13_phase10_first_review_remediation",
 )
 MIGRATION_ID = MIGRATION_IDS[-1]
 MIGRATION_FILES = tuple(
@@ -58,7 +61,11 @@ def apply_valuation_migration(db_path: str) -> dict[str, Any]:
         ))
     applied_ids: list[str] = []
     with sqlite3.connect(db_path) as conn:
-        conn.execute("PRAGMA foreign_keys = ON")
+        # Rebuild migrations run with FK enforcement paused, then fail closed on
+        # explicit checks of the rebuilt table and its dependants before commit.
+        # This prevents ALTER TABLE from rewriting child references to a
+        # temporary table name while tolerating unrelated legacy FK debt.
+        conn.execute("PRAGMA foreign_keys = OFF")
         conn.execute("BEGIN IMMEDIATE")
         try:
             conn.execute(
@@ -88,7 +95,32 @@ def apply_valuation_migration(db_path: str) -> dict[str, Any]:
                     (migration_id, checksum, utc_now_timestamp()),
                 )
                 applied_ids.append(migration_id)
+            checked_tables = (
+                "raw_resource_revisions",
+                "data_quality_issues",
+                "trading_calendar_revisions",
+                "resource_publication_evidence",
+                "ingestion_lock_recovery_events",
+                "ingestion_resource_locks",
+                "cbc_m1b_monthly",
+            )
+            existing_tables = {
+                row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            violations = [
+                row
+                for table in checked_tables
+                if table in existing_tables
+                for row in conn.execute(f"PRAGMA foreign_key_check({table})").fetchall()
+            ]
+            if violations:
+                raise sqlite3.IntegrityError(
+                    f"migration foreign key check failed: {violations[:3]}"
+                )
             conn.commit()
+            conn.execute("PRAGMA foreign_keys = ON")
             return {
                 "migration_id": MIGRATION_ID,
                 "checksum_sha256": migrations[-1][2],

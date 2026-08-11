@@ -142,6 +142,13 @@ button, a, input { -webkit-tap-highlight-color: transparent; }
 .secondary-button { min-height: 40px; margin-top: 18px; padding: 0 14px; border: 1px solid var(--border); border-radius: 5px; background: #fff; color: #174da9; cursor: pointer; font-weight: 700; }
 .back-link { display: inline-block; margin-bottom: 18px; color: #174da9; font-weight: 700; text-decoration: none; }
 .snapshot-provenance { margin: 20px 0 16px; }
+.freshness-card { margin: 20px 0 16px; }
+.freshness-card p { margin: 0; line-height: 1.6; }
+.freshness-badge { display: inline-flex; align-items: center; min-height: 30px; padding: 5px 9px; border: 1px solid var(--border); border-radius: 999px; font-size: 12px; font-weight: 800; }
+.freshness-badge--current { color: #166238; background: #edf8f1; border-color: #a8d4b7; }
+.freshness-badge--stale { color: #795000; background: #fff7e6; border-color: #e4c278; }
+.freshness-badge--unknown, .freshness-badge--blocked { color: #8c2f20; background: #fff0ed; border-color: #e0aaa1; }
+.freshness-reasons { display: grid; gap: 5px; margin: 0; padding-left: 20px; color: var(--muted); font-size: 12px; }
 .snapshot-sections { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .snapshot-sections > div { display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 10px; border: 1px solid var(--border); }
 .origin-disclosure { display: flex; align-items: center; gap: 12px; margin: 20px 0; padding: 13px; border: 1px dashed #ae8a4e; background: #fffaf1; font-size: 13px; }

@@ -10,12 +10,25 @@ export function renderWithProviders(ui: ReactElement, route = "/") {
   return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[route]}>{ui}</MemoryRouter></QueryClientProvider>);
 }
 
-export function mockReadApi(analysisOverride?: AnalysisResponse) {
+export function mockReadApi(analysisOverride?: AnalysisResponse, dependencyOverride?: unknown) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = String(input);
     const { analysisFixture, marketFixture, performanceFixture, snapshotFixture } = await import("./fixtures");
     let body: unknown;
-    if (url.includes("/market-overview")) body = marketFixture;
+    if (url.includes("/dependency-status")) body = dependencyOverride ?? {
+      status: "available",
+      dependency_status: {
+        snapshot_id: "snapshot-1",
+        comparison_cutoff: "2026-08-11T02:00:00Z",
+        checked_at: "2026-08-11T02:00:00Z",
+        freshness_status: "stale",
+        reasons: ["newer_eligible_forward_eps_revision", "newer_eligible_pe_scenario_revision"],
+        checked_dependencies: [],
+        historical_snapshot_validity: "unchanged",
+      },
+      cutoff_policy: { mode: "request_received_at", timezone: "UTC" },
+    };
+    else if (url.includes("/market-overview")) body = marketFixture;
     else if (url.includes("/analysis/snapshots/snapshot-1")) body = snapshotFixture;
     else if (url.includes("/analysis/snapshots")) body = {
       status: "available",
