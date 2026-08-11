@@ -46,6 +46,8 @@ TWSE 與 TPEx 的公開資料授權仍應依各資料集與使用情境逐項確
 - 不得把 `fetched_at` 或 `received_at` 回填成歷史 CBC 月資料的發布時間。
 - CBC period 的發布 timestamp 本身不是 authority evidence。只有保存 source reference、source identity、evidence SHA-256、captured time、verification mode 與 actor 的 accepted publication evidence，才能促成 eligible M1B。
 - 只有 bare timestamp 或缺少 publication evidence 時，只保存 `awaiting_review` candidate，`available_at = null`，不得寫入 eligible M1B。
+- Publication evidence lifecycle 是 append-only。查詢時依 `ingested_at <= knowledge_cutoff_at` 解析該 resource／period 的最新 visible revision；最新狀態為 `revoked` 時，舊 accepted evidence 不得繼續支援新的 M1B 分析。
+- Revocation 不刪除或修改舊 M1B。revocation 可見前的 historical cutoff 仍可重建原結果；後續 corrected accepted evidence 必須由新的 M1B revision 精確綁定新 evidence ID，舊 M1B 不得自行復活。
 - 所有 as-of 查詢同時限制 `available_at <= cutoff` 與 `ingested_at <= cutoff`。
 
 ## Immutable revision 與 failure semantics

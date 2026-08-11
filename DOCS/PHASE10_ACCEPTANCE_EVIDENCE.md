@@ -10,6 +10,7 @@
 4. `6936ff0` — provider health and snapshot dependency freshness reads
 5. 本文件所在 commit — tests, recovery and operating documentation
 6. 第一輪 remediation commit — lease recovery, publication evidence and effective-state freshness
+7. 第二輪 remediation commit — publication evidence revocation-aware M1B eligibility
 
 ## Local acceptance commands
 
@@ -32,8 +33,8 @@ git ls-files | Select-String -Pattern '(^|/)(__pycache__/|data/cache\.db$)|\.py[
 
 ## Local results (2026-08-11)
 
-- Full backend regression after first-review remediation: `390 passed, 1 locally surfaced StarletteDeprecationWarning`.
-- Phase 10 focused remediation set: `38 passed`.
+- Full backend regression after second-review remediation: `392 passed, 1 locally surfaced StarletteDeprecationWarning`.
+- Phase 10 focused remediation set: `43 passed`.
 - v1 golden: `2 passed, 1 existing StarletteDeprecationWarning`.
 - Phase 10 migration: `4 passed`.
 - Frontend unit: `16 passed`; lint, typecheck and build passed.
@@ -53,6 +54,7 @@ git ls-files | Select-String -Pattern '(^|/)(__pycache__/|data/cache\.db$)|\.py[
 - Duplicate／corrected raw revision／immutable triggers：covered by repository and ingestion tests.
 - Raw metadata-only eligibility revision：additive migration preserves immutable history and dependent foreign keys.
 - CBC publication provenance：bare timestamp stays candidate; accepted evidence retains source reference, SHA-256, verification mode and actor; changed evidence is append-only.
+- CBC publication revocation：effective evidence is resolved by revision and `ingested_at` at the requested cutoff; revoked evidence cannot support future `latest_m1b_as_of`／`m1b_for_turnover` or liquidity ratios, while pre-revocation reconstruction remains available and corrected acceptance requires a newly linked M1B revision.
 - Calendar：official explicit session meaning only; latest visible revision per trade date wins; no weekday heuristic.
 - Freshness：current requires positive proof; monthly／periodic cadence without authority is unknown; provider error blocks production-backed snapshot dependencies; late old-date correction cannot replace the latest business date.
 - Snapshot：GET does not create or mutate immutable snapshot.

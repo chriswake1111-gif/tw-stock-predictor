@@ -208,6 +208,68 @@ def test_publication_evidence_is_authoritative_idempotent_and_append_only(tmp_pa
     assert changed["evidence_file_sha256"] == sha256_text("official evidence v2")
 
 
+def test_publication_evidence_resolver_is_cutoff_safe_across_revocation(tmp_path):
+    repo = foundation(tmp_path)
+    common = {
+        "provider_id": "twse",
+        "resource_id": "twse.daily_turnover",
+        "logical_revision_key": "2026-08-10",
+        "official_release_at": "2026-08-10T06:00:00Z",
+        "source_reference": "https://example.test/official-release",
+        "source_identity": "TWSE official release notice",
+        "captured_at": "2026-08-10T06:05:00Z",
+        "verification_mode": (
+            PublicationVerificationMode.MANUAL_OFFICIAL_SOURCE_REVIEW
+        ),
+        "verified_by": "internal.researcher",
+    }
+    first = repo.add_publication_evidence(
+        ResourcePublicationEvidence(
+            **common,
+            evidence_file_sha256=sha256_text("accepted-v1"),
+        ),
+        ingested_at="2026-08-10T06:06:00Z",
+    )
+    revoked = repo.add_publication_evidence(
+        ResourcePublicationEvidence(
+            **common,
+            evidence_file_sha256=sha256_text("revoked-v2"),
+            status=PublicationEvidenceStatus.REVOKED,
+        ),
+        ingested_at="2026-08-10T06:08:00Z",
+    )
+    corrected = repo.add_publication_evidence(
+        ResourcePublicationEvidence(
+            **common,
+            evidence_file_sha256=sha256_text("accepted-v3"),
+        ),
+        ingested_at="2026-08-10T06:10:00Z",
+    )
+
+    before_revoke = repo.latest_publication_evidence_as_of(
+        "twse.daily_turnover", "2026-08-10", "2026-08-10T06:07:00Z"
+    )
+    after_revoke = repo.latest_publication_evidence_as_of(
+        "twse.daily_turnover", "2026-08-10", "2026-08-10T06:09:00Z"
+    )
+    after_correction = repo.latest_publication_evidence_as_of(
+        "twse.daily_turnover", "2026-08-10", "2026-08-10T06:11:00Z"
+    )
+
+    assert before_revoke["publication_evidence_id"] == first[
+        "publication_evidence_id"
+    ]
+    assert before_revoke["status"] == "accepted"
+    assert after_revoke["publication_evidence_id"] == revoked[
+        "publication_evidence_id"
+    ]
+    assert after_revoke["status"] == "revoked"
+    assert after_correction["publication_evidence_id"] == corrected[
+        "publication_evidence_id"
+    ]
+    assert after_correction["status"] == "accepted"
+
+
 def test_backup_restore_round_trip_preserves_irreplaceable_and_operational_state(tmp_path):
     repo = foundation(tmp_path)
     repo.add_run(run())

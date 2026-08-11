@@ -116,7 +116,8 @@
 - [x] Phase 8 merged to `main` at `939573b`; immutable scenario evaluation and origin-separated descriptive summaries are closed with main CI evidence.
 - [x] Phase 9 已合併至 `main`：read-only v2 discovery contracts、status presentation hardening 與 Evidence Workspace MVP 已完成。
 - [x] Phase 10 已在 `feature/evidence-model-v2-phase10-data-foundation` 完成五個可獨立審查的 implementation commits：provider/resource contracts、additive migration、official ingestion、freshness reads、recovery 與文件。
-- [x] Phase 10 第一輪 Code Review remediation 已修正 lease lock recovery、CBC publication evidence、fail-closed freshness 與 effective revision collapse；同一 Draft PR 等待第二輪 Review。
+- [x] Phase 10 第一輪 Code Review remediation 已修正 lease lock recovery、CBC publication evidence、fail-closed freshness 與 effective revision collapse。
+- [x] Phase 10 第二輪 Code Review remediation 已讓 accepted／revoked／corrected accepted publication evidence lifecycle 於 M1B as-of read boundary fail closed；同一 Draft PR 等待第三輪 Review。
 - [ ] CBC 歷史月份仍需具 source reference、evidence SHA-256、verification metadata 與 actor 的官方 publication evidence；bare timestamp 只保存 `awaiting_review` candidate。
 - [ ] Phase 10 不含 current quote、admin frontend、browser writes、automatic approval、broker integration 或真實交易。
 

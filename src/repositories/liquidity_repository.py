@@ -85,22 +85,54 @@ class LiquidityRepository:
 
     def latest_m1b_as_of(self, knowledge_cutoff_at: str) -> dict | None:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
+        return self._eligible_m1b_as_of(cutoff, cutoff)
+
+    def _eligible_m1b_as_of(
+        self,
+        m1b_available_cutoff: str,
+        knowledge_cutoff_at: str,
+    ) -> dict | None:
+        """Return M1B only when its effective publication evidence remains valid."""
         with self._connect() as conn:
             row = conn.execute(
                 """
-                WITH ranked AS (
-                    SELECT *, ROW_NUMBER() OVER (
+                WITH ranked_m1b AS (
+                    SELECT m.*, ROW_NUMBER() OVER (
                         PARTITION BY period, source_dataset
                         ORDER BY revision DESC, available_at DESC, ingested_at DESC, id DESC
                     ) AS rank_no
-                    FROM cbc_m1b_monthly
+                    FROM cbc_m1b_monthly m
                     WHERE available_at <= ? AND ingested_at <= ?
+                ), ranked_evidence AS (
+                    SELECT e.*, ROW_NUMBER() OVER (
+                        PARTITION BY resource_id, logical_revision_key
+                        ORDER BY revision_number DESC, ingested_at DESC,
+                                 publication_evidence_id DESC
+                    ) AS evidence_rank_no
+                    FROM resource_publication_evidence e
+                    WHERE resource_id = 'cbc.m1b' AND ingested_at <= ?
                 )
-                SELECT * FROM ranked
-                WHERE rank_no = 1 AND status = 'available'
-                ORDER BY available_at DESC, period DESC, revision DESC, ingested_at DESC
+                SELECT m.* FROM ranked_m1b m
+                LEFT JOIN ranked_evidence e
+                  ON e.logical_revision_key = m.period
+                 AND e.evidence_rank_no = 1
+                WHERE m.rank_no = 1 AND m.status = 'available'
+                  AND (
+                    (e.publication_evidence_id IS NULL
+                     AND m.publication_evidence_id IS NULL)
+                    OR
+                    (e.status = 'accepted'
+                     AND m.publication_evidence_id = e.publication_evidence_id)
+                  )
+                ORDER BY m.available_at DESC, m.period DESC, m.revision DESC,
+                         m.ingested_at DESC
                 LIMIT 1
-                """, (cutoff, cutoff),
+                """,
+                (
+                    m1b_available_cutoff,
+                    knowledge_cutoff_at,
+                    knowledge_cutoff_at,
+                ),
             ).fetchone()
         return dict(row) if row else None
 
@@ -151,21 +183,4 @@ class LiquidityRepository:
     def m1b_for_turnover(self, turnover: dict, knowledge_cutoff_at: str) -> dict | None:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
         public_at = min(turnover["available_at"], cutoff)
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                WITH ranked AS (
-                    SELECT *, ROW_NUMBER() OVER (
-                        PARTITION BY period, source_dataset
-                        ORDER BY revision DESC, available_at DESC, ingested_at DESC, id DESC
-                    ) AS rank_no
-                    FROM cbc_m1b_monthly
-                    WHERE available_at <= ? AND ingested_at <= ?
-                )
-                SELECT * FROM ranked
-                WHERE rank_no = 1 AND status = 'available'
-                ORDER BY available_at DESC, period DESC, revision DESC, ingested_at DESC
-                LIMIT 1
-                """, (public_at, cutoff),
-            ).fetchone()
-        return dict(row) if row else None
+        return self._eligible_m1b_as_of(public_at, cutoff)

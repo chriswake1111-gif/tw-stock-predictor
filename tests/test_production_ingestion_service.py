@@ -4,10 +4,18 @@ import sqlite3
 import pytest
 import requests
 
-from src.domain.data_foundation import IngestionRun, TriggerType
-from src.domain.data_foundation import sha256_text
+from src.domain.data_foundation import (
+    IngestionRun,
+    PublicationEvidenceStatus,
+    PublicationVerificationMode,
+    ResourcePublicationEvidence,
+    TriggerType,
+    sha256_text,
+)
+from src.domain.liquidity import MarketTurnoverObservation
 from src.repositories.data_foundation_repository import DataFoundationRepository
 from src.repositories.liquidity_repository import LiquidityRepository
+from src.services.market_liquidity_service import MarketLiquidityService
 from src.services.production_ingestion_service import ProductionIngestionService
 
 
@@ -248,6 +256,112 @@ def test_changed_cbc_publication_evidence_is_append_only(tmp_path):
         assert evidence_rows[1][0] == 2
         assert evidence_rows[1][1] is not None
         assert conn.execute("SELECT COUNT(*) FROM cbc_m1b_monthly").fetchone()[0] == 2
+
+
+def test_cbc_revocation_is_asof_safe_and_reaccept_requires_new_m1b(tmp_path):
+    with open("tests/fixtures/cbc_ef15m01_response.json", encoding="utf-8") as source:
+        payload = json.load(source)
+    db_path = str(tmp_path / "publication-lifecycle.db")
+    service = ProductionIngestionService(db_path)
+    liquidity = LiquidityRepository(db_path)
+
+    accepted = service.ingest_cbc_m1b(
+        payload,
+        {"2026-05": publication_evidence(evidence_text="accepted-v1")},
+        observed_at="2026-08-11T10:00:00+08:00",
+    )
+    m1 = accepted["records"][0]
+    turnover = liquidity.add_turnover(
+        MarketTurnoverObservation(
+            trade_date="2026-08-11",
+            twse_turnover_twd=800_000_000,
+            tpex_turnover_twd=100_000_000,
+            twse_source="TWSE",
+            tpex_source="TPEx",
+            twse_dataset="exchangeReport/FMTQIK",
+            tpex_dataset="tpex_daily_trading_index",
+            available_at="2026-08-11T02:05:00Z",
+            fetched_at="2026-08-11T02:05:30Z",
+        ),
+        ingested_at="2026-08-11T02:05:30Z",
+    )
+    before_revoke = MarketLiquidityService(db_path).analyze(
+        "2026-08-11T02:06:00Z"
+    )
+
+    revoked_evidence = publication_evidence(evidence_text="revoked-v2")
+    revoked_evidence["status"] = "revoked"
+    revoked = service.ingest_cbc_m1b(
+        payload,
+        {"2026-05": revoked_evidence},
+        observed_at="2026-08-11T10:10:00+08:00",
+    )
+
+    assert before_revoke["status"] == "available"
+    assert before_revoke["turnover_m1b_ratio_pct"] == 3.0
+    assert revoked["status"] == "blocked"
+    assert revoked["records"] == []
+    assert liquidity.latest_m1b_as_of("2026-08-11T02:09:59Z")["id"] == m1["id"]
+    assert liquidity.latest_m1b_as_of("2026-08-11T02:10:00Z") is None
+    assert liquidity.m1b_for_turnover(
+        turnover, "2026-08-11T02:09:59Z"
+    )["id"] == m1["id"]
+    assert liquidity.m1b_for_turnover(
+        turnover, "2026-08-11T02:10:00Z"
+    ) is None
+    after_revoke = MarketLiquidityService(db_path).analyze(
+        "2026-08-11T02:11:00Z"
+    )
+    assert after_revoke["status"] == "insufficient_data"
+    assert after_revoke["reason"] == "m1b_unavailable_for_latest_turnover"
+
+    corrected_input = publication_evidence(evidence_text="accepted-v3")
+    corrected_evidence = DataFoundationRepository(db_path).add_publication_evidence(
+        ResourcePublicationEvidence(
+            provider_id="cbc",
+            resource_id="cbc.m1b",
+            logical_revision_key="2026-05",
+            official_release_at=corrected_input["official_release_at"],
+            source_reference=corrected_input["source_reference"],
+            source_identity=corrected_input["source_identity"],
+            evidence_file_sha256=corrected_input["evidence_file_sha256"],
+            captured_at=corrected_input["captured_at"],
+            verification_mode=PublicationVerificationMode(
+                corrected_input["verification_mode"]
+            ),
+            verified_by=corrected_input["verified_by"],
+            status=PublicationEvidenceStatus.ACCEPTED,
+        ),
+        ingested_at="2026-08-11T02:20:00Z",
+    )
+    assert liquidity.latest_m1b_as_of("2026-08-11T02:20:00Z") is None
+
+    corrected = service.ingest_cbc_m1b(
+        payload,
+        {"2026-05": corrected_input},
+        observed_at="2026-08-11T10:21:00+08:00",
+    )
+    m2 = corrected["records"][0]
+    latest = liquidity.latest_m1b_as_of("2026-08-11T02:22:00Z")
+    historical = liquidity.latest_m1b_as_of("2026-08-11T02:09:59Z")
+    recovered = MarketLiquidityService(db_path).analyze("2026-08-11T02:22:00Z")
+
+    assert m2["revision"] == 2
+    assert m2["id"] != m1["id"]
+    assert m2["publication_evidence_id"] != m1["publication_evidence_id"]
+    assert m2["publication_evidence_id"] == corrected_evidence[
+        "publication_evidence_id"
+    ]
+    assert latest["id"] == m2["id"]
+    assert historical["id"] == m1["id"]
+    assert recovered["status"] == "available"
+    with sqlite3.connect(db_path) as conn:
+        stored_m1 = conn.execute(
+            "SELECT status, publication_evidence_id FROM cbc_m1b_monthly WHERE id = ?",
+            (m1["id"],),
+        ).fetchone()
+        assert stored_m1 == ("available", m1["publication_evidence_id"])
+        assert conn.execute("SELECT COUNT(*) FROM analysis_snapshots").fetchone()[0] == 0
 
 
 def test_cbc_future_or_unknown_publication_metadata_is_rejected_before_writes(tmp_path):

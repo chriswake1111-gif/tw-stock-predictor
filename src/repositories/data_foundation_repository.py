@@ -427,6 +427,29 @@ class DataFoundationRepository:
                 "created": True,
             }
 
+    def latest_publication_evidence_as_of(
+        self,
+        resource_id: str,
+        logical_revision_key: str,
+        knowledge_cutoff_at: str,
+    ) -> dict[str, Any] | None:
+        """Resolve the latest visible immutable evidence event for one logical key."""
+        cutoff = normalize_utc_timestamp(
+            knowledge_cutoff_at, "knowledge_cutoff_at"
+        )
+        with self._connect() as conn:
+            return self._row(conn.execute(
+                """
+                SELECT * FROM resource_publication_evidence
+                WHERE resource_id = ? AND logical_revision_key = ?
+                  AND ingested_at <= ?
+                ORDER BY revision_number DESC, ingested_at DESC,
+                         publication_evidence_id DESC
+                LIMIT 1
+                """,
+                (resource_id, logical_revision_key, cutoff),
+            ).fetchone())
+
     def latest_raw_revision(
         self, provider_id: str, resource_id: str, logical_revision_key: str
     ) -> dict[str, Any] | None:
