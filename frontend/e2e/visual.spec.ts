@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { analysisFixture, marketFixture, performanceFixture, snapshotFixture } from "../src/test/fixtures";
+import { analysisFixture, marketFixture, performanceFixture, snapshotComparisonFixture, snapshotFixture } from "../src/test/fixtures";
 
 const runFixture = {
   status: "available",
@@ -14,7 +14,9 @@ const runFixture = {
 async function mockApi(page: Page) {
   await page.route("**/api/v2/**", async (route) => {
     const url = route.request().url();
-    const body = url.includes("dependency-status")
+    const body = url.includes("analysis/snapshots/compare")
+      ? snapshotComparisonFixture
+      : url.includes("dependency-status")
       ? {
           status: "available",
           dependency_status: {
@@ -29,6 +31,16 @@ async function mockApi(page: Page) {
       ? marketFixture
       : url.includes("analysis/snapshots/snapshot-1")
         ? snapshotFixture
+        : url.includes("analysis/snapshots")
+          ? {
+              status: "available",
+              snapshots: [
+                { ...snapshotFixture.snapshot, analysis_status: snapshotFixture.snapshot.output.status },
+                { ...snapshotFixture.snapshot, snapshot_id: "snapshot-2", created_at: "2026-08-11T02:00:00Z", analysis_status: snapshotFixture.snapshot.output.status },
+              ],
+              next_before: null,
+              filters: { symbol: null, capture_mode: null },
+            }
         : url.includes("performance/summary")
           ? performanceFixture
           : url.includes("evaluations/runs/run-1")
@@ -53,4 +65,18 @@ test("captures deterministic Phase 9 acceptance states", async ({ page }, testIn
     if (mobileStock) await page.locator(".scenario-table-wrap").evaluate((element) => element.scrollIntoView({ block: "center" }));
     await page.screenshot({ path: testInfo.outputPath(`${name}.png`), fullPage: !mobileStock });
   }
+});
+
+test("captures the Phase 11 read-only snapshot comparison", async ({ page }, testInfo) => {
+  await mockApi(page);
+  await page.goto("/snapshots/compare");
+  await page.getByLabel("Base snapshot").selectOption("snapshot-1");
+  await page.getByLabel("Comparison snapshot").selectOption("snapshot-2");
+  await page.getByLabel("Comparison cutoff").fill("2026-08-12T12:00:00+08:00");
+  await page.getByRole("button", { name: "執行只讀比較" }).click();
+  await expect(page.getByRole("heading", { name: "Stored Snapshot Facts" })).toBeVisible();
+  await expect(page.getByText("approval_revoked").first()).toBeVisible();
+  const noHorizontalOverflow = await page.locator("main").evaluate((element) => element.scrollWidth <= element.clientWidth);
+  expect(noHorizontalOverflow).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("snapshot-comparison.png"), fullPage: true });
 });
