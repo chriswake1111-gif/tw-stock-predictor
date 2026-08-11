@@ -121,6 +121,16 @@
 - [ ] CBC 歷史月份仍需具 source reference、evidence SHA-256、verification metadata 與 actor 的官方 publication evidence；bare timestamp 只保存 `awaiting_review` candidate。
 - [ ] Phase 10 不含 current quote、admin frontend、browser writes、automatic approval、broker integration 或真實交易。
 
+## Evidence Model V2 Phase 11 status (2026-08-12)
+
+- [x] Deterministic `analysis_snapshot_v1` comparison contract and semantic whitelist implemented.
+- [x] Stored snapshot facts and cutoff-bound current dependency context are separated.
+- [x] Shared SQLite read transaction and connection-aware repository reads implemented.
+- [x] GET-only v2 comparison API and read-only Evidence Workspace page implemented.
+- [x] Focused backend, frontend unit, responsive Playwright, and governance coverage added.
+- [ ] Draft PR review and main CI closure remain pending.
+- [ ] Phase 12 has not started and requires a separate explicit authorization.
+
 ## Evidence Model V2 Phase 3 status (2026-08-01)
 
 M1B／市場成交額 additive contracts、as-of repository、流動性 engine／service 與 v2 API section 已進入本階段驗收。CBC 歷史月份若沒有經官方發布日曆或新聞稿核對的 `available_at` mapping，必須保持 `needs_human_input`；不得用抓取時間回填。Phase 4 尚未開始。
