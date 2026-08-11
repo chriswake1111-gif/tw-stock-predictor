@@ -3,10 +3,12 @@ import sys
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 # 將專案根目錄加入 PYTHONPATH
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
@@ -90,7 +92,30 @@ def get_analysis(symbol: str):
         raise HTTPException(status_code=404, detail=f"無法獲取標的 {symbol} 的 K 線數據")
     return {**analysis, **LEGACY_V1_MODEL_METADATA}
 
-# 掛載靜態網頁端點
-static_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../ui_alert/web"))
-if os.path.exists(static_dir):
-    app.mount("/", StaticFiles(directory=static_dir, html=True), name="web")
+class SPAStaticFiles(StaticFiles):
+    """Serve bookmarkable React routes while leaving API routing untouched."""
+
+    _ASSET_SUFFIXES = {
+        ".css", ".gif", ".ico", ".jpeg", ".jpg", ".js", ".json", ".map",
+        ".png", ".svg", ".txt", ".webmanifest", ".webp", ".woff", ".woff2",
+    }
+
+    async def get_response(self, path: str, scope):
+        try:
+            response = await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404 or Path(path).suffix.lower() in self._ASSET_SUFFIXES:
+                raise
+            return await super().get_response("index.html", scope)
+        if response.status_code == 404 and Path(path).suffix.lower() not in self._ASSET_SUFFIXES:
+            return await super().get_response("index.html", scope)
+        return response
+
+
+# Phase 9 build is preferred when present; legacy static UI remains the fallback.
+project_root = Path(__file__).resolve().parents[2]
+phase9_static_dir = project_root / "frontend" / "dist"
+legacy_static_dir = project_root / "src" / "ui_alert" / "web"
+static_dir = phase9_static_dir if phase9_static_dir.exists() else legacy_static_dir
+if static_dir.exists():
+    app.mount("/", SPAStaticFiles(directory=str(static_dir), html=True), name="web")

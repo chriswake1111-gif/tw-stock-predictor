@@ -113,8 +113,9 @@
       approved evaluation profile, hash-verified fixed Phase 2 outcome manifest, deterministic 20/60
       session evaluator, immutable stored results, protected run API, and origin-separated descriptive
       historical summary.
-- [ ] Phase 8 remains Draft/Unmerged while first Code Review remediation is validated. Phase 9 has
-      not started.
+- [x] Phase 8 merged to `main` at `939573b`; immutable scenario evaluation and origin-separated descriptive summaries are closed with main CI evidence.
+- [x] Phase 9 implementation is active on `feature/evidence-model-v2-phase9-ui`: read-only v2 discovery contracts, status presentation hardening and the Evidence Workspace MVP are implemented for Draft PR review.
+- [ ] Phase 9 is not merged and Phase 10 has not started. Do not add current quote, admin writes, ranking, probability, PWA or broker integration during Phase 9 review.
 
 ## Evidence Model V2 Phase 3 status (2026-08-01)
 

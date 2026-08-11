@@ -48,6 +48,6 @@ def test_v2_api_liquidity_missing_does_not_break_valuation_contract(monkeypatch,
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "partial"
+    assert data["status"] == "needs_human_input"
     assert data["liquidity"]["status"] == "insufficient_data"
     assert "liquidity" in data["data_quality"]["missing_sections"]

@@ -480,6 +480,62 @@ class PerformanceValidationRepository:
                 "results": self._results(conn, run_id),
             } if row else None
 
+    @staticmethod
+    def _decode_run_before(before: str | None) -> tuple[str, str] | None:
+        if before is None:
+            return None
+        created_at, separator, run_id = before.strip().partition("|")
+        if not separator or not created_at or not run_id:
+            raise ValueError("before must be '<created_at>|<evaluation_run_id>'")
+        return normalize_utc_timestamp(created_at, "before.created_at"), run_id
+
+    def list_runs(
+        self,
+        *,
+        before: str | None = None,
+        limit: int = 50,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        """List stored run metadata without loading or recomputing results."""
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        if status is not None and status != "completed":
+            raise ValueError("unsupported_evaluation_run_status")
+        cursor = self._decode_run_before(before)
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if status is not None:
+            clauses.append("status = ?")
+            parameters.append(status)
+        if cursor is not None:
+            clauses.append(
+                "(created_at < ? OR (created_at = ? AND evaluation_run_id < ?))"
+            )
+            parameters.extend([cursor[0], cursor[0], cursor[1]])
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        parameters.append(limit + 1)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT evaluation_run_id,evaluation_profile_revision_id,
+                       evaluator_version,evaluation_origin_policy,
+                       outcome_resource_manifest_id,universe_definition,
+                       created_at,status
+                FROM evaluation_runs
+                {where}
+                ORDER BY created_at DESC, evaluation_run_id DESC
+                LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+        has_more = len(rows) > limit
+        items = [dict(row) for row in rows[:limit]]
+        next_before = None
+        if has_more and items:
+            last = items[-1]
+            next_before = f"{last['created_at']}|{last['evaluation_run_id']}"
+        return {"items": items, "next_before": next_before}
+
     def memberships_for_run(self, run_id: str) -> list[dict[str, Any]] | None:
         with self._connect() as conn:
             exists = conn.execute(

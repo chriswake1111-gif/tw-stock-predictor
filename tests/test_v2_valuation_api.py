@@ -135,12 +135,14 @@ def test_date_only_cutoff_prevents_same_day_lookahead(monkeypatch, tmp_path):
     assert date_only.json()["valuation"]["status"] == "insufficient_data"
 
 
-def test_partial_data_does_not_fail_v2_analysis(monkeypatch, tmp_path):
+def test_missing_approved_inputs_returns_needs_human_without_http_failure(
+    monkeypatch, tmp_path
+):
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "valuation.db"))
     response = client.get("/api/v2/analysis/2330?knowledge_cutoff_at=2026-08-01T00:00:00Z")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "partial"
+    assert data["status"] == "needs_human_input"
     assert data["valuation"]["status"] == "insufficient_data"
     assert data["model"]["official_affiliation"] is False
 

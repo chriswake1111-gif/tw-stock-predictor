@@ -4,6 +4,13 @@
 .pytest_cache/
 /data/cache.db
 .env
+/frontend/node_modules/
+/frontend/dist/
+/frontend/coverage/
+/frontend/test-results/
+/frontend/.phase9-visual-results/
+/frontend/playwright-report/
+/frontend/.vite/
 
 # 可由固定 snapshot 與 CLI 重建的大型研究產物
 reports/backtest/**/report.json

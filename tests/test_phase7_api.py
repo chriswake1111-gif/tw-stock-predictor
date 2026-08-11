@@ -158,7 +158,7 @@ def test_analysis_confluence_refresh_and_exact_snapshot_retrieval(monkeypatch, t
     analysis = client.get(
         "/api/v2/analysis/2330.TW",
         params={
-            "knowledge_cutoff_at": "2026-08-10T00:00:00Z",
+            "knowledge_cutoff_at": "2030-01-01T00:00:00Z",
             "synthesis_profile_revision_id": profile_id,
         },
     )
@@ -171,7 +171,7 @@ def test_analysis_confluence_refresh_and_exact_snapshot_retrieval(monkeypatch, t
     assert body["target_confluence"]["summary_policy"] == "maximum_cluster_strength"
     refresh = client.post(
         "/api/v2/analysis/2330.TW/refresh",
-        params={"knowledge_cutoff_at": "2026-08-10T00:00:00Z"},
+        params={"knowledge_cutoff_at": "2030-01-01T00:00:00Z"},
         headers=headers(key, "snapshot-create"),
         json={"synthesis_profile_revision_id": profile_id},
     )
@@ -193,14 +193,14 @@ def test_refresh_idempotency_key_is_permanently_bound(monkeypatch, tmp_path):
     key = configure(monkeypatch, tmp_path)
     first = client.post(
         "/api/v2/analysis/2330.TW/refresh",
-        params={"knowledge_cutoff_at": "2026-08-10T00:00:00Z"},
+        params={"knowledge_cutoff_at": "2030-01-01T00:00:00Z"},
         headers=headers(key, "bound-refresh"),
         json={},
     )
     first.raise_for_status()
     conflict = client.post(
         "/api/v2/analysis/2317.TW/refresh",
-        params={"knowledge_cutoff_at": "2026-08-10T00:00:00Z"},
+        params={"knowledge_cutoff_at": "2030-01-01T00:00:00Z"},
         headers=headers(key, "bound-refresh"),
         json={},
     )
