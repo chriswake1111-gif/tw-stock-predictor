@@ -91,6 +91,7 @@ class TechnicalScenarioService:
             }
             scenarios.append({
                 **result,
+                "semantic_role": "target" if rule_id == "FB-03" else "support",
                 "symbol": symbol,
                 "anchor_set_revision_id": state["id"],
                 "anchor_revision_number": state["revision_number"],

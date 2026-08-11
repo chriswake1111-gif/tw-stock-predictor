@@ -73,6 +73,7 @@ def test_approved_anchor_generates_traceable_scenario_and_is_symbol_isolated(mon
     data = client.get("/api/v2/analysis/2330?knowledge_cutoff_at=2026-02-16T00:00:00Z").json()
     scenario = data["technical_support"]["scenarios"][0]
     assert scenario["calculated_level"] == 180.0
+    assert scenario["semantic_role"] == "target"
     assert scenario["rule_trace"]["rule_id"] == "FB-03"
     assert scenario["rule_trace"]["approval_id"] == approval_id
     assert {trace["rule_id"] for trace in data["rules_used"]} >= {"FB-03"}

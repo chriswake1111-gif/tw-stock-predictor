@@ -1,0 +1,113 @@
+{
+  "valuation_target_matrix": [
+    {
+      "status": "available",
+      "observation_id": "feps_5d9d6e264b9599bf5f3c4b13",
+      "pe_scenario_id": "pe_20488a89ab0ff5fcf099f699",
+      "fiscal_year": 2027,
+      "source_name": "manual-research",
+      "eps_scenario": "low",
+      "eps_value": 5.0,
+      "pe_value": 20.0,
+      "target_price": 100.0
+    },
+    {
+      "status": "available",
+      "observation_id": "feps_5d9d6e264b9599bf5f3c4b13",
+      "pe_scenario_id": "pe_20488a89ab0ff5fcf099f699",
+      "fiscal_year": 2027,
+      "source_name": "manual-research",
+      "eps_scenario": "base",
+      "eps_value": 5.0,
+      "pe_value": 20.0,
+      "target_price": 100.0
+    },
+    {
+      "status": "available",
+      "observation_id": "feps_5d9d6e264b9599bf5f3c4b13",
+      "pe_scenario_id": "pe_20488a89ab0ff5fcf099f699",
+      "fiscal_year": 2027,
+      "source_name": "manual-research",
+      "eps_scenario": "high",
+      "eps_value": 5.0,
+      "pe_value": 20.0,
+      "target_price": 100.0
+    }
+  ],
+  "technical_scenarios": [
+    {
+      "anchor_set_revision_id": "anchor_00319427c9b8f0eabdca38da",
+      "scenario_type": "equal_amplitude",
+      "semantic_role": "target",
+      "calculated_level": 100.0,
+      "price_unit": "TWD_per_share",
+      "rule_trace": { "rule_id": "FB-03" }
+    },
+    {
+      "anchor_set_revision_id": "anchor_ca20c67116c009115fe8a4d6",
+      "scenario_type": "retracement_0382",
+      "semantic_role": "support",
+      "calculated_level": 92.36,
+      "price_unit": "TWD_per_share",
+      "rule_trace": { "rule_id": "FB-04" }
+    }
+  ],
+  "deployment_entries": [
+    {
+      "stage": 1,
+      "weight": "0.333333",
+      "capital_budget": "300000.00",
+      "currency": "TWD",
+      "trigger": { "stage": 1, "trigger_type": "manual_price", "value": "100" },
+      "remaining_entries_after_stage": 2
+    },
+    {
+      "stage": 2,
+      "weight": "0.333333",
+      "capital_budget": "300000.00",
+      "currency": "TWD",
+      "trigger": { "stage": 2, "trigger_type": "manual_price", "value": "95" },
+      "remaining_entries_after_stage": 1
+    },
+    {
+      "stage": 3,
+      "weight": "0.333334",
+      "capital_budget": "300000.00",
+      "currency": "TWD",
+      "trigger": { "stage": 3, "trigger_type": "manual_price", "value": "90" },
+      "remaining_entries_after_stage": 0
+    }
+  ],
+  "target_confluence_clusters": [
+    {
+      "cluster_id": "target_cluster_4eb9da4729f245600a86",
+      "price_low": "790",
+      "price_high": "805",
+      "price_unit": "TWD_per_share",
+      "candidate_count": 2,
+      "support_count": 2,
+      "independent_method_count": 2,
+      "evidence_strength": "moderate",
+      "target_method_families": ["FB-03", "VAL-01"],
+      "candidate_ids": ["a-fb", "a-val"],
+      "shared_dependencies": []
+    },
+    {
+      "cluster_id": "target_cluster_f68481855f09821f8c6e",
+      "price_low": "920",
+      "price_high": "950",
+      "price_unit": "TWD_per_share",
+      "candidate_count": 3,
+      "support_count": 3,
+      "independent_method_count": 3,
+      "evidence_strength": "high",
+      "target_method_families": ["FB-03", "VAL-01", "VAL-03"],
+      "candidate_ids": ["b-fb", "b-val", "b-val03"],
+      "shared_dependencies": []
+    }
+  ],
+  "snapshot_detail": {
+    "analysis_status_present": false,
+    "status_source": "output.status"
+  }
+}

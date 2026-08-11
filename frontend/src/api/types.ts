@@ -45,6 +45,73 @@ export interface AnalysisSection extends UnknownRecord {
   source_resource_versions?: SourceResourceVersion[];
 }
 
+export interface ForwardPeTargetCell extends UnknownRecord {
+  status: SectionStatus;
+  observation_id: string;
+  pe_scenario_id: string;
+  fiscal_year: number;
+  source_name: string;
+  eps_scenario: string;
+  eps_value: number;
+  pe_value: number;
+  target_price: number | null;
+}
+
+export interface ValuationSection extends AnalysisSection {
+  target_matrix: ForwardPeTargetCell[];
+}
+
+export interface TechnicalScenario extends UnknownRecord {
+  anchor_set_revision_id: string;
+  scenario_type: "equal_amplitude" | "retracement_0382";
+  semantic_role: "target" | "support";
+  calculated_level: number;
+  price_unit: "TWD_per_share";
+  rule_trace: RuleTrace;
+}
+
+export interface TechnicalSupportSection extends AnalysisSection {
+  scenarios: TechnicalScenario[];
+}
+
+export interface TargetConfluenceCluster extends UnknownRecord {
+  cluster_id: string;
+  price_low: string;
+  price_high: string;
+  price_unit: "TWD_per_share";
+  candidate_count: number;
+  support_count: number;
+  independent_method_count: number;
+  evidence_strength: string | null;
+  target_method_families: string[];
+  candidate_ids: string[];
+  shared_dependencies: string[];
+}
+
+export interface TargetConfluenceSection extends AnalysisSection {
+  overlap_ranges: TargetConfluenceCluster[];
+  summary_policy?: string;
+}
+
+export interface DeploymentEntry extends UnknownRecord {
+  stage: number;
+  weight: string;
+  capital_budget: string;
+  currency: "TWD";
+  trigger: UnknownRecord | null;
+  remaining_entries_after_stage: number;
+}
+
+export interface DeploymentPlan extends UnknownRecord {
+  plan_revision_id: string;
+  logical_campaign_id: string;
+  entries: DeploymentEntry[];
+}
+
+export interface DeploymentPlanSection extends AnalysisSection {
+  plans: DeploymentPlan[];
+}
+
 export interface DataQuality extends UnknownRecord {
   status: SectionStatus;
   section_statuses: Record<string, SectionStatus>;
@@ -69,18 +136,18 @@ export interface AnalysisResponse extends UnknownRecord {
     official_affiliation: false;
   };
   data_quality: DataQuality;
-  valuation: AnalysisSection;
+  valuation: ValuationSection;
   liquidity: AnalysisSection;
-  technical_support: AnalysisSection;
-  target_confluence: AnalysisSection;
-  deployment_plan: AnalysisSection;
+  technical_support: TechnicalSupportSection;
+  target_confluence: TargetConfluenceSection;
+  deployment_plan: DeploymentPlanSection;
   screening: AnalysisSection;
   rules_used: RuleTrace[];
   unsupported: string[];
   snapshot_id: string | null;
 }
 
-export interface SnapshotSummary extends UnknownRecord {
+export interface SnapshotBase extends UnknownRecord {
   snapshot_id: string;
   symbol: string;
   knowledge_cutoff_at: string;
@@ -88,6 +155,9 @@ export interface SnapshotSummary extends UnknownRecord {
   model_version: string;
   created_at: string;
   supersedes_snapshot_id: string | null;
+}
+
+export interface SnapshotSummary extends SnapshotBase {
   analysis_status: SectionStatus;
 }
 
@@ -101,7 +171,7 @@ export interface SnapshotListResponse {
   };
 }
 
-export interface SnapshotDetail extends SnapshotSummary {
+export interface SnapshotDetail extends SnapshotBase {
   used_rule_versions: Record<string, string>;
   source_resource_versions: SourceResourceVersion[];
   manual_approval_ids: string[];

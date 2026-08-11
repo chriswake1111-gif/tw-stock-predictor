@@ -6,6 +6,7 @@ import { EvidenceLevelBadge, MethodStrengthIndicator, OriginBadge, StatusBadge }
 import { sectionStatusValues } from "../api/types";
 import { statusPresentation } from "../lib/status";
 import { renderWithProviders } from "./render";
+import { snapshotFixture } from "./fixtures";
 
 describe("Phase 9 semantic guardrails", () => {
   it("renders every authoritative status and fails unknown closed", () => {
@@ -26,5 +27,11 @@ describe("Phase 9 semantic guardrails", () => {
     expect(source).not.toContain("/api/analysis/");
     expect(source).not.toMatch(/method:\s*["'](?:POST|PUT|PATCH|DELETE)/);
     expect(source).not.toContain("X-Admin-API-Key");
+    expect(source).not.toContain("Idempotency-Key");
+  });
+
+  it("models exact snapshot detail without inventing list-only analysis_status", () => {
+    expect(snapshotFixture.snapshot).not.toHaveProperty("analysis_status");
+    expect(snapshotFixture.snapshot.output.status).toBe("partial");
   });
 });

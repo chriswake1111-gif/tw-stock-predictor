@@ -16,7 +16,12 @@ export function mockReadApi() {
     let body: unknown;
     if (url.includes("/market-overview")) body = marketFixture;
     else if (url.includes("/analysis/snapshots/snapshot-1")) body = snapshotFixture;
-    else if (url.includes("/analysis/snapshots")) body = { status: "available", snapshots: [snapshotFixture.snapshot], next_before: null, filters: { symbol: null, capture_mode: null } };
+    else if (url.includes("/analysis/snapshots")) body = {
+      status: "available",
+      snapshots: [{ ...snapshotFixture.snapshot, analysis_status: snapshotFixture.snapshot.output.status }],
+      next_before: null,
+      filters: { symbol: null, capture_mode: null },
+    };
     else if (url.includes("/performance/summary")) body = performanceFixture;
     else if (url.includes("/evaluations/runs/run-1")) body = { status: "available", evaluation_run: { evaluation_run_id: "run-1", evaluation_profile_revision_id: "profile-1", evaluator_version: "phase8_mvp_v1", evaluation_origin_policy: "separate_by_evaluation_origin", outcome_resource_manifest_id: "manifest-1", universe_definition: "fixed cohort", created_at: "2026-08-10T02:00:00Z", status: "completed", snapshot_memberships: [], results: [] } };
     else if (url.includes("/evaluations/runs")) body = { status: "available", evaluation_runs: [], next_before: null };

@@ -90,6 +90,8 @@ button, a, input { -webkit-tap-highlight-color: transparent; }
 .scenario-table td { padding: 11px 10px; border-bottom: 1px solid #e9edf3; }
 .numeric { font-weight: 800; font-variant-numeric: tabular-nums; }
 .target-range { display: grid; gap: 8px; padding: 14px 0; }
+.target-cluster-list { display: grid; gap: 12px; }
+.target-cluster-list .target-range { padding: 14px; border: 1px solid var(--border); background: var(--surface); }
 .target-range > span, .target-range > small { color: var(--muted); font-size: 12px; }
 .target-range > strong { display: flex; align-items: center; gap: 9px; font-size: clamp(23px, 3vw, 34px); font-variant-numeric: tabular-nums; }
 .stack-list, .plan-grid, .drawer-rule-list { display: grid; gap: 10px; }
