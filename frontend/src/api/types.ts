@@ -204,6 +204,67 @@ export interface SnapshotDependencyStatusResponse {
   cutoff_policy: UnknownRecord;
 }
 
+export type CanonicalComparisonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | { state: "missing" }
+  | CanonicalComparisonValue[]
+  | { [key: string]: CanonicalComparisonValue };
+
+export interface SnapshotComparisonDelta {
+  category: "stored_fact" | "current_context";
+  change_type: string;
+  section: string;
+  resource_type: string | null;
+  canonical_identity: string;
+  field_path: string;
+  before: CanonicalComparisonValue;
+  after: CanonicalComparisonValue;
+  absolute_delta?: string;
+}
+
+export interface SnapshotComparisonReference {
+  snapshot_id: string;
+  symbol: string;
+  knowledge_cutoff_at: string;
+  capture_mode: CaptureMode;
+  model_version: string;
+  output_sha256: string;
+}
+
+export interface SnapshotComparisonContext {
+  snapshot_id: string;
+  comparison_cutoff: string;
+  checked_at: string;
+  freshness_status: SnapshotFreshnessStatus;
+  reasons: string[];
+  checked_dependencies: UnknownRecord[];
+  historical_snapshot_validity: "unchanged";
+}
+
+export interface SnapshotComparisonResponse {
+  status: "available" | "incomparable_contract";
+  comparison_policy_version: "1.0";
+  comparison_snapshot_contract: "analysis_snapshot_v1";
+  comparison_cutoff: string;
+  direction: {
+    base_snapshot_id: string;
+    comparison_snapshot_id: string;
+    absolute_delta_formula: "comparison_minus_base";
+  };
+  base_snapshot: SnapshotComparisonReference;
+  comparison_snapshot: SnapshotComparisonReference;
+  compatibility: { compatible: boolean; reasons: string[] };
+  stored_deltas: SnapshotComparisonDelta[];
+  base_current_context: SnapshotComparisonContext | null;
+  comparison_current_context: SnapshotComparisonContext | null;
+  current_context_deltas: SnapshotComparisonDelta[];
+  warnings: string[];
+  reasons: string[];
+}
+
 export interface EvaluationRunSummary extends UnknownRecord {
   evaluation_run_id: string;
   evaluation_profile_revision_id: string;

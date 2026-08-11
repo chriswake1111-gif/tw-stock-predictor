@@ -10,12 +10,13 @@ export function renderWithProviders(ui: ReactElement, route = "/") {
   return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[route]}>{ui}</MemoryRouter></QueryClientProvider>);
 }
 
-export function mockReadApi(analysisOverride?: AnalysisResponse, dependencyOverride?: unknown) {
+export function mockReadApi(analysisOverride?: AnalysisResponse, dependencyOverride?: unknown, comparisonOverride?: unknown) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = String(input);
-    const { analysisFixture, marketFixture, performanceFixture, snapshotFixture } = await import("./fixtures");
+    const { analysisFixture, marketFixture, performanceFixture, snapshotFixture, snapshotComparisonFixture } = await import("./fixtures");
     let body: unknown;
-    if (url.includes("/dependency-status")) body = dependencyOverride ?? {
+    if (url.includes("/analysis/snapshots/compare")) body = comparisonOverride ?? snapshotComparisonFixture;
+    else if (url.includes("/dependency-status")) body = dependencyOverride ?? {
       status: "available",
       dependency_status: {
         snapshot_id: "snapshot-1",
@@ -32,7 +33,10 @@ export function mockReadApi(analysisOverride?: AnalysisResponse, dependencyOverr
     else if (url.includes("/analysis/snapshots/snapshot-1")) body = snapshotFixture;
     else if (url.includes("/analysis/snapshots")) body = {
       status: "available",
-      snapshots: [{ ...snapshotFixture.snapshot, analysis_status: snapshotFixture.snapshot.output.status }],
+      snapshots: [
+        { ...snapshotFixture.snapshot, analysis_status: snapshotFixture.snapshot.output.status },
+        { ...snapshotFixture.snapshot, snapshot_id: "snapshot-2", created_at: "2026-08-11T02:00:00Z", analysis_status: snapshotFixture.snapshot.output.status },
+      ],
       next_before: null,
       filters: { symbol: null, capture_mode: null },
     };
