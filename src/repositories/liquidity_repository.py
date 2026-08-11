@@ -41,14 +41,15 @@ class LiquidityRepository:
                 INSERT INTO cbc_m1b_monthly (
                     id,period,value_raw,raw_unit,value_twd,data_date,available_at,
                     fetched_at,ingested_at,source,source_dataset,source_url,payload_hash,
-                    revision,status,quality_note
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    revision,status,quality_note,publication_evidence_id
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (record_id, payload["period"], payload["value_raw"], payload["raw_unit"],
                  payload["value_twd"], payload["data_date"], payload["available_at"],
                  payload["fetched_at"], ingested, payload["source"],
                  payload["source_dataset"], payload["source_url"], payload["payload_hash"],
-                 payload["revision"], payload["status"], payload["quality_note"]),
+                 payload["revision"], payload["status"], payload["quality_note"],
+                 payload["publication_evidence_id"]),
             )
             row = conn.execute("SELECT * FROM cbc_m1b_monthly WHERE id = ?", (record_id,)).fetchone()
         return dict(row)

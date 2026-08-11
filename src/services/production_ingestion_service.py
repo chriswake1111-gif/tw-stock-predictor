@@ -32,7 +32,10 @@ from src.domain.data_foundation import (
     IngestionRunItem,
     IngestionRunStatus,
     ProviderType,
+    PublicationEvidenceStatus,
+    PublicationVerificationMode,
     RawResourceRevision,
+    ResourcePublicationEvidence,
     ResourceType,
     StoragePolicy,
     TradingSessionStatus,
@@ -47,7 +50,7 @@ from src.repositories.data_foundation_repository import DataFoundationRepository
 from src.repositories.liquidity_repository import LiquidityRepository
 
 
-RUNNER_VERSION = "phase10.1"
+RUNNER_VERSION = "phase10.2"
 REGISTRY_CREATED_AT = "2026-08-11T00:00:00Z"
 TWSE_CALENDAR_URL = (
     "https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule"
@@ -543,7 +546,7 @@ class ProductionIngestionService:
     def ingest_cbc_m1b(
         self,
         payload: dict,
-        available_at_by_period: dict[str, str],
+        publication_evidence_by_period: dict[str, Any],
         *,
         observed_at: str | None = None,
         trigger_type: TriggerType = TriggerType.MANUAL,
@@ -590,24 +593,62 @@ class ProductionIngestionService:
                 return {"run_id": run.ingestion_run_id, "status": "failed", "items": [item]}
 
             schema_hash = schema_fingerprint(("period", "data_date", "value_raw", "raw_unit"))
-            normalized_releases: dict[str, str] = {}
+            accepted_evidence: dict[str, dict[str, Any]] = {}
+            validated_evidence: dict[str, ResourcePublicationEvidence] = {}
             try:
                 known_periods = {row["period"] for row in rows}
-                unknown_periods = set(available_at_by_period) - known_periods
+                unknown_periods = set(publication_evidence_by_period) - known_periods
                 if unknown_periods:
-                    raise ValueError("publication map contains an unknown CBC period")
-                for period, release in available_at_by_period.items():
-                    normalized = normalize_utc_timestamp(
-                        release, f"available_at[{period}]"
+                    raise ValueError("publication evidence contains an unknown CBC period")
+                for period, value in publication_evidence_by_period.items():
+                    if isinstance(value, str):
+                        normalized = normalize_utc_timestamp(
+                            value, f"official_release_at[{period}]"
+                        )
+                        if parse_aware_timestamp(
+                            normalized, f"official_release_at[{period}]"
+                        ) > parse_aware_timestamp(observed, "observed_at"):
+                            raise ValueError(
+                                "CBC publication timestamp cannot be later than observed_at"
+                            )
+                        continue
+                    if not isinstance(value, dict):
+                        raise ValueError(
+                            "CBC publication evidence must be an object or bare timestamp"
+                        )
+                    evidence = ResourcePublicationEvidence(
+                        provider_id="cbc",
+                        resource_id=resource_id,
+                        logical_revision_key=period,
+                        official_release_at=value.get("official_release_at", ""),
+                        source_reference=value.get("source_reference", ""),
+                        source_identity=value.get("source_identity", ""),
+                        evidence_file_sha256=value.get("evidence_file_sha256", ""),
+                        captured_at=value.get("captured_at", ""),
+                        verification_mode=PublicationVerificationMode(
+                            value.get("verification_mode", "")
+                        ),
+                        verified_by=value.get("verified_by", ""),
+                        status=PublicationEvidenceStatus(
+                            value.get("status", "accepted")
+                        ),
                     )
+                    evidence_payload = evidence.canonical_payload()
                     if parse_aware_timestamp(
-                        normalized, f"available_at[{period}]"
+                        evidence_payload["official_release_at"],
+                        f"official_release_at[{period}]",
                     ) > parse_aware_timestamp(observed, "observed_at"):
                         raise ValueError(
                             "CBC publication timestamp cannot be later than observed_at"
                         )
-                    normalized_releases[period] = normalized
-            except (TypeError, ValueError) as exc:
+                    if parse_aware_timestamp(
+                        evidence_payload["captured_at"], f"captured_at[{period}]"
+                    ) > parse_aware_timestamp(observed, "observed_at"):
+                        raise ValueError(
+                            "CBC publication evidence captured_at cannot be later than observed_at"
+                        )
+                    validated_evidence[period] = evidence
+            except (KeyError, TypeError, ValueError) as exc:
                 item = self.foundation.add_run_item(IngestionRunItem(
                     ingestion_run_item_id=_id("item"),
                     ingestion_run_id=run.ingestion_run_id,
@@ -625,12 +666,21 @@ class ProductionIngestionService:
                     "records": [], "candidate_periods": [],
                     "raw_revisions": [], "items": [item],
                 }
+            for period, evidence in validated_evidence.items():
+                stored = self.foundation.add_publication_evidence(
+                    evidence, ingested_at=observed
+                )
+                if stored["status"] == PublicationEvidenceStatus.ACCEPTED.value:
+                    accepted_evidence[period] = stored
             records = []
             candidates = []
             raw_records = []
             for row in rows:
                 period = row["period"]
-                normalized_release = normalized_releases.get(period)
+                evidence = accepted_evidence.get(period)
+                normalized_release = (
+                    evidence["official_release_at"] if evidence else None
+                )
                 row_hash = _payload_hash(row)
                 raw = self._add_raw(
                     provider_id="cbc", resource_id=resource_id,
@@ -640,14 +690,19 @@ class ProductionIngestionService:
                     eligibility=(EligibilityStatus.ELIGIBLE if normalized_release else EligibilityStatus.AWAITING_REVIEW),
                     source_published_at=normalized_release,
                     available_at=normalized_release,
-                    reason=(None if normalized_release else "historical_official_release_timestamp_required"),
+                    reason=(None if normalized_release else "verified_publication_evidence_required"),
                 )
                 raw_records.append(raw)
                 if not normalized_release:
                     candidates.append(period)
                     continue
                 previous = self.liquidity.latest_m1b_revision(period)
-                if raw["created"] or previous is None:
+                if (
+                    raw["created"]
+                    or previous is None
+                    or previous.get("publication_evidence_id")
+                    != evidence["publication_evidence_id"]
+                ):
                     records.append(self.liquidity.add_m1b(
                         M1BMonthlyObservation(
                             period=period,
@@ -660,6 +715,9 @@ class ProductionIngestionService:
                             source_dataset=CBCCollector.OFFICIAL_M1B_DATASET,
                             source_url=CBCCollector.OFFICIAL_M1B_URL,
                             payload_hash=row_hash,
+                            publication_evidence_id=evidence[
+                                "publication_evidence_id"
+                            ],
                             revision=(int(previous["revision"]) + 1 if previous else 1),
                         ),
                         ingested_at=observed,
@@ -682,11 +740,11 @@ class ProductionIngestionService:
                 parser_version="1", schema_fingerprint=schema_hash,
                 record_count=len(rows),
                 accepted_count=sum(
-                    1 for row in rows if row["period"] in normalized_releases
+                    1 for row in rows if row["period"] in accepted_evidence
                 ),
                 rejected_count=0,
                 reason=(
-                    "historical_official_release_timestamp_required"
+                    "verified_publication_evidence_required"
                     if candidates else None
                 ),
             ))
@@ -702,6 +760,7 @@ class ProductionIngestionService:
                 "records": records,
                 "candidate_periods": candidates,
                 "raw_revisions": raw_records,
+                "publication_evidence": list(accepted_evidence.values()),
                 "items": [item],
             }
         finally:
@@ -855,7 +914,7 @@ class ProductionIngestionService:
 
     def fetch_cbc_m1b(
         self,
-        available_at_by_period: dict[str, str],
+        publication_evidence_by_period: dict[str, Any],
         *,
         observed_at: str | None = None,
         actor_id: str = "internal.cli",
@@ -881,7 +940,7 @@ class ProductionIngestionService:
         except (TypeError, ValueError, json.JSONDecodeError):
             payload = {}
         return self.ingest_cbc_m1b(
-            payload, available_at_by_period,
+            payload, publication_evidence_by_period,
             observed_at=observed, actor_id=actor_id,
             trigger_type=trigger_type, retry_of_run_id=retry_of_run_id,
         )

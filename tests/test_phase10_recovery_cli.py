@@ -1,7 +1,9 @@
 import json
 import subprocess
 import sys
+from datetime import datetime, timezone
 
+from src.domain.data_foundation import IngestionRun, TriggerType
 from src.services.production_ingestion_service import ProductionIngestionService
 
 
@@ -30,3 +32,29 @@ def test_recovery_cli_backup_validate_restore_round_trip(tmp_path):
     assert restored_result == backed_up
     assert backed_up["operational_provenance_counts"]["data_providers"] == 3
     assert backed_up["operational_provenance_counts"]["data_resources"] == 4
+
+
+def test_ingestion_cli_returns_nonzero_when_resource_is_blocked(tmp_path):
+    db_path = tmp_path / "blocked.db"
+    service = ProductionIngestionService(str(db_path))
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    holder = IngestionRun(
+        ingestion_run_id="run.cli-holder", started_at=now,
+        trigger_type=TriggerType.MANUAL, runner_version="test",
+        requested_resources=("twse.market-turnover",),
+        actor_id="internal.test",
+    )
+    service.foundation.add_run(holder)
+    service.foundation.acquire_resource_lock(
+        "twse.market-turnover", holder.ingestion_run_id, now, lease_seconds=3600
+    )
+    result = subprocess.run(
+        [
+            sys.executable, "tools/ingest_production_data.py",
+            "--database", str(db_path), "official-daily",
+            "--trade-date", "2026-08-11",
+        ],
+        check=False, capture_output=True, text=True, encoding="utf-8",
+    )
+    assert result.returncode != 0
+    assert json.loads(result.stdout)["status"] == "blocked"

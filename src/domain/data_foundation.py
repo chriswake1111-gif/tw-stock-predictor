@@ -115,6 +115,16 @@ class TradingSessionStatus(str, Enum):
     SPECIAL = "special"
 
 
+class PublicationEvidenceStatus(str, Enum):
+    ACCEPTED = "accepted"
+    REVOKED = "revoked"
+
+
+class PublicationVerificationMode(str, Enum):
+    MANUAL_OFFICIAL_SOURCE_REVIEW = "manual_official_source_review"
+    OFFICIAL_MACHINE_SOURCE = "official_machine_source"
+
+
 def canonical_json(value: Any) -> str:
     return json.dumps(
         value,
@@ -446,6 +456,53 @@ class RawResourceRevision:
             )
         }
         return f"rawrev_{sha256_text(canonical_json(identity))[:24]}"
+
+
+@dataclass(frozen=True)
+class ResourcePublicationEvidence:
+    provider_id: str
+    resource_id: str
+    logical_revision_key: str
+    official_release_at: str
+    source_reference: str
+    source_identity: str
+    evidence_file_sha256: str
+    captured_at: str
+    verification_mode: PublicationVerificationMode
+    verified_by: str
+    status: PublicationEvidenceStatus = PublicationEvidenceStatus.ACCEPTED
+
+    def canonical_payload(self) -> dict[str, Any]:
+        release = normalize_utc_timestamp(
+            self.official_release_at, "official_release_at"
+        )
+        captured = normalize_utc_timestamp(self.captured_at, "captured_at")
+        if parse_aware_timestamp(release, "official_release_at") > parse_aware_timestamp(
+            captured, "captured_at"
+        ):
+            raise ValueError("official_release_at cannot be later than captured_at")
+        return {
+            "provider_id": _identifier(self.provider_id, "provider_id"),
+            "resource_id": _identifier(self.resource_id, "resource_id"),
+            "logical_revision_key": _non_blank(
+                self.logical_revision_key, "logical_revision_key"
+            ),
+            "official_release_at": release,
+            "source_reference": _non_blank(
+                self.source_reference, "source_reference"
+            ),
+            "source_identity": _non_blank(self.source_identity, "source_identity"),
+            "evidence_file_sha256": _sha256(
+                self.evidence_file_sha256, "evidence_file_sha256"
+            ),
+            "captured_at": captured,
+            "verification_mode": self.verification_mode.value,
+            "verified_by": _identifier(self.verified_by, "verified_by"),
+            "status": self.status.value,
+        }
+
+    def deterministic_identity(self) -> str:
+        return f"publication_{sha256_text(canonical_json(self.canonical_payload()))[:24]}"
 
 
 @dataclass(frozen=True)

@@ -76,6 +76,14 @@ DEPENDENCIES = {
     ),
 }
 
+PRODUCTION_DEPENDENCY_RESOURCES = {
+    "market_turnover_revision": (
+        "twse.market-turnover",
+        "tpex.market-turnover",
+    ),
+    "m1b_revision": ("cbc.m1b",),
+}
+
 
 class DataFreshnessService:
     def __init__(self, db_path: str = "data/cache.db"):
@@ -130,15 +138,21 @@ class DataFreshnessService:
                 elif not actual or actual < expected:
                     freshness = "stale"
                     freshness_reason = "newer_official_session_expected"
-                elif actual == cutoff_trade_date or expected == cutoff_trade_date:
+                elif actual == expected == cutoff_trade_date:
                     freshness = "current"
                     freshness_reason = None
                 else:
                     freshness = "unknown"
                     freshness_reason = "official_calendar_coverage_incomplete"
+            elif row["expected_frequency"] == "monthly_publication":
+                freshness = "unknown"
+                freshness_reason = "publication_cadence_not_proven"
+            elif row["expected_frequency"] == "periodic":
+                freshness = "unknown"
+                freshness_reason = "authoritative_periodic_cadence_not_proven"
             else:
-                freshness = "current"
-                freshness_reason = None
+                freshness = "unknown"
+                freshness_reason = "manual_resource_has_no_freshness_proof"
             results.append({
                 "provider_id": row["provider_id"],
                 "provider_name": row["display_name"],
@@ -297,9 +311,48 @@ class DataFreshnessService:
         if latest_eligible is None:
             checked["status"] = "unknown"
             return checked, "no_eligible_dependency_revision", False
+        production_resources = PRODUCTION_DEPENDENCY_RESOURCES.get(resource_type, ())
+        operational_unknown = False
+        operational_stale = False
+        if production_resources:
+            operational = []
+            for production_resource in production_resources:
+                states = self.provider_health(
+                    cutoff, resource_id=production_resource
+                )
+                operational.extend(states)
+            checked["operational_resources"] = [
+                {
+                    "resource_id": state["resource_id"],
+                    "status": state["status"],
+                    "freshness": state["freshness"],
+                    "freshness_reason": state["freshness_reason"],
+                }
+                for state in operational
+            ]
+            if any(state["freshness"] == "blocked" for state in operational):
+                checked["status"] = "blocked"
+                reason = (
+                    "dependency_provider_error"
+                    if any(state["status"] == "provider_error" for state in operational)
+                    else "dependency_operational_blocked"
+                )
+                return checked, reason, True
+            operational_unknown = not operational or any(
+                state["freshness"] == "unknown" for state in operational
+            )
+            operational_stale = any(
+                state["freshness"] == "stale" for state in operational
+            )
         if latest_eligible["id"] != resource_id:
             checked["status"] = "stale"
             return checked, f"newer_eligible_{resource_type}", False
+        if operational_unknown:
+            checked["status"] = "unknown"
+            return checked, "dependency_freshness_unknown", False
+        if operational_stale:
+            checked["status"] = "stale"
+            return checked, "dependency_source_stale", False
         checked["status"] = "current"
         return checked, None, False
 

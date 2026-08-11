@@ -80,7 +80,8 @@ class EvidenceBackupService:
                     "data_providers", "data_resources", "ingestion_runs",
                     "ingestion_run_items", "raw_resource_revisions",
                     "data_quality_issues", "trading_calendar_revisions",
-                    "snapshot_dependency_checks",
+                    "snapshot_dependency_checks", "resource_publication_evidence",
+                    "ingestion_lock_recovery_events", "ingestion_resource_locks",
                 )
                 if table in table_names
             }

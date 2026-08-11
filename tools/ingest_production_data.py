@@ -3,7 +3,7 @@
 Examples:
   python tools/ingest_production_data.py official-daily --trade-date 2026-08-11
   python tools/ingest_production_data.py calendar
-  python tools/ingest_production_data.py cbc --publication-map release-times.json
+  python tools/ingest_production_data.py cbc --publication-evidence release-evidence.json
 """
 
 from __future__ import annotations
@@ -26,8 +26,16 @@ def _json_file(path: str | None) -> dict:
     with Path(path).open(encoding="utf-8") as source:
         value = json.load(source)
     if not isinstance(value, dict):
-        raise ValueError("publication map must be a JSON object")
+        raise ValueError("publication evidence must be a JSON object")
     return value
+
+
+def _exit_code(status: str) -> int:
+    if status == "succeeded":
+        return 0
+    if status == "partial":
+        return 2
+    return 1
 
 
 def main() -> int:
@@ -43,8 +51,12 @@ def main() -> int:
     calendar.add_argument("--retry-of")
     cbc = commands.add_parser("cbc")
     cbc.add_argument(
-        "--publication-map",
-        help="JSON map of YYYY-MM to authoritative timezone-aware release timestamp",
+        "--publication-evidence", "--publication-map",
+        dest="publication_evidence",
+        help=(
+            "JSON map of YYYY-MM to publication evidence objects; the legacy "
+            "publication-map alias remains accepted but bare timestamps stay candidates"
+        ),
     )
     cbc.add_argument("--retry-of")
     args = parser.parse_args()
@@ -61,11 +73,11 @@ def main() -> int:
         )
     else:
         result = service.fetch_cbc_m1b(
-            _json_file(args.publication_map),
+            _json_file(args.publication_evidence),
             trigger_type=trigger, retry_of_run_id=retry_of,
         )
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-    return 0 if result["status"] in {"succeeded", "partial", "blocked"} else 1
+    return _exit_code(result["status"])
 
 
 if __name__ == "__main__":

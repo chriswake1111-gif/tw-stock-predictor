@@ -9,6 +9,7 @@
 3. `151e8d8` — official calendar／turnover／CBC candidate ingestion
 4. `6936ff0` — provider health and snapshot dependency freshness reads
 5. 本文件所在 commit — tests, recovery and operating documentation
+6. 第一輪 remediation commit — lease recovery, publication evidence and effective-state freshness
 
 ## Local acceptance commands
 
@@ -31,7 +32,8 @@ git ls-files | Select-String -Pattern '(^|/)(__pycache__/|data/cache\.db$)|\.py[
 
 ## Local results (2026-08-11)
 
-- Full backend regression: `381 passed, 1 existing StarletteDeprecationWarning`.
+- Full backend regression after first-review remediation: `390 passed, 1 locally surfaced StarletteDeprecationWarning`.
+- Phase 10 focused remediation set: `38 passed`.
 - v1 golden: `2 passed, 1 existing StarletteDeprecationWarning`.
 - Phase 10 migration: `4 passed`.
 - Frontend unit: `16 passed`; lint, typecheck and build passed.
@@ -47,11 +49,12 @@ git ls-files | Select-String -Pattern '(^|/)(__pycache__/|data/cache\.db$)|\.py[
 
 - Provider registry／resource registry：covered by domain and repository tests.
 - Run／run item／timeout／HTTP／schema drift／partial outage：covered by production ingestion tests.
+- Persistent lock：15-minute lease, active lock rejection, expired orphan recovery, immutable audit event and wrong-owner release tests.
 - Duplicate／corrected raw revision／immutable triggers：covered by repository and ingestion tests.
 - Raw metadata-only eligibility revision：additive migration preserves immutable history and dependent foreign keys.
-- CBC missing publication metadata：candidate only; no eligible M1B row.
-- Calendar：official explicit session meaning only; no weekday heuristic.
-- Freshness：current／stale／unknown／blocked, fixed cutoff, revoked approval, unapproved candidate, PE／liquidity multiple reasons and profile supersession.
+- CBC publication provenance：bare timestamp stays candidate; accepted evidence retains source reference, SHA-256, verification mode and actor; changed evidence is append-only.
+- Calendar：official explicit session meaning only; latest visible revision per trade date wins; no weekday heuristic.
+- Freshness：current requires positive proof; monthly／periodic cadence without authority is unknown; provider error blocks production-backed snapshot dependencies; late old-date correction cannot replace the latest business date.
 - Snapshot：GET does not create or mutate immutable snapshot.
 - Recovery：backup／validate／restore round trip with integrity and row-count evidence.
 - Browser：GET-only client; stale is not described as invalid; unknown fails closed; multiple reasons visible.
@@ -59,6 +62,6 @@ git ls-files | Select-String -Pattern '(^|/)(__pycache__/|data/cache\.db$)|\.py[
 ## Known limitations
 
 - 官方 calendar endpoint 的已保存 coverage 以來源明示列為準；未證明的日期回傳 unknown。
-- CBC 歷史 period 仍需官方 release timestamp mapping；不得由 fetch time 推測。
+- CBC 歷史 period 仍需可稽核的官方 publication evidence；bare timestamp 或 fetch time 不具升格資格。
 - Provider health 是 operational context，不是投資訊號。
 - 既有 FastAPI TestClient 第三方 deprecation warning 另行追蹤，不改變本階段模型語意。

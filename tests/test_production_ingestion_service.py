@@ -5,6 +5,7 @@ import pytest
 import requests
 
 from src.domain.data_foundation import IngestionRun, TriggerType
+from src.domain.data_foundation import sha256_text
 from src.repositories.data_foundation_repository import DataFoundationRepository
 from src.repositories.liquidity_repository import LiquidityRepository
 from src.services.production_ingestion_service import ProductionIngestionService
@@ -43,6 +44,23 @@ def turnover_fetcher(twse_payload, tpex_payload):
 TWSE_ROW = {"Date": "115/08/11", "TradeValue": "300,000"}
 TPEX_ROW = {"Date": "115/08/11", "TradeAmount": "20,000"}
 OBSERVED = "2026-08-11T10:00:00+08:00"
+
+
+def publication_evidence(
+    *,
+    release="2026-06-25T16:00:00+08:00",
+    evidence_text="cbc release evidence v1",
+):
+    return {
+        "official_release_at": release,
+        "source_reference": "https://example.test/cbc/official-release",
+        "source_identity": "CBC official publication notice",
+        "evidence_file_sha256": sha256_text(evidence_text),
+        "captured_at": "2026-06-25T16:05:00+08:00",
+        "verification_mode": "manual_official_source_review",
+        "verified_by": "internal.researcher",
+        "status": "accepted",
+    }
 
 
 @pytest.mark.parametrize(
@@ -132,7 +150,7 @@ def test_cbc_missing_release_time_stays_candidate_and_never_enters_m1b(tmp_path)
     assert raw == ("awaiting_review", None)
 
 
-def test_cbc_authoritative_release_map_enables_asof_record(tmp_path):
+def test_cbc_bare_release_timestamp_is_not_authoritative_evidence(tmp_path):
     with open("tests/fixtures/cbc_ef15m01_response.json", encoding="utf-8") as source:
         payload = json.load(source)
     db_path = str(tmp_path / "data.db")
@@ -141,15 +159,41 @@ def test_cbc_authoritative_release_map_enables_asof_record(tmp_path):
         {"2026-05": "2026-06-25T16:00:00+08:00"},
         observed_at="2026-08-11T10:00:00+08:00",
     )
+    assert result["status"] == "blocked"
+    assert result["candidate_periods"] == ["2026-05"]
+    assert result["records"] == []
+    assert LiquidityRepository(db_path).latest_m1b_as_of(
+        "2026-08-11T02:01:00Z"
+    ) is None
+
+
+def test_cbc_verified_publication_evidence_enables_asof_record(tmp_path):
+    with open("tests/fixtures/cbc_ef15m01_response.json", encoding="utf-8") as source:
+        payload = json.load(source)
+    db_path = str(tmp_path / "verified.db")
+    result = ProductionIngestionService(db_path).ingest_cbc_m1b(
+        payload,
+        {"2026-05": publication_evidence()},
+        observed_at="2026-08-11T10:00:00+08:00",
+    )
     assert result["status"] == "succeeded"
     assert result["candidate_periods"] == []
     assert result["records"][0]["available_at"] == "2026-06-25T08:00:00.000000Z"
+    evidence = result["publication_evidence"][0]
+    assert evidence["evidence_file_sha256"] == sha256_text(
+        "cbc release evidence v1"
+    )
+    assert result["records"][0]["publication_evidence_id"] == evidence[
+        "publication_evidence_id"
+    ]
     assert LiquidityRepository(db_path).latest_m1b_as_of(
         "2026-06-25T07:59:59Z"
     ) is None
     assert LiquidityRepository(db_path).latest_m1b_as_of(
         "2026-08-11T02:01:00Z"
     )["period"] == "2026-05"
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM valuation_approvals").fetchone()[0] == 0
 
 
 def test_cbc_candidate_can_be_promoted_only_by_explicit_release_metadata(tmp_path):
@@ -160,7 +204,7 @@ def test_cbc_candidate_can_be_promoted_only_by_explicit_release_metadata(tmp_pat
     candidate = service.ingest_cbc_m1b(payload, {}, observed_at=OBSERVED)
     promoted = service.ingest_cbc_m1b(
         payload,
-        {"2026-05": "2026-06-25T16:00:00+08:00"},
+        {"2026-05": publication_evidence()},
         observed_at="2026-08-11T10:05:00+08:00",
     )
     assert candidate["status"] == "blocked"
@@ -178,12 +222,40 @@ def test_cbc_candidate_can_be_promoted_only_by_explicit_release_metadata(tmp_pat
     assert rows[1][1] is not None
 
 
+def test_changed_cbc_publication_evidence_is_append_only(tmp_path):
+    with open("tests/fixtures/cbc_ef15m01_response.json", encoding="utf-8") as source:
+        payload = json.load(source)
+    db_path = str(tmp_path / "evidence-revision.db")
+    service = ProductionIngestionService(db_path)
+    first = service.ingest_cbc_m1b(
+        payload, {"2026-05": publication_evidence()}, observed_at=OBSERVED
+    )
+    second = service.ingest_cbc_m1b(
+        payload,
+        {"2026-05": publication_evidence(evidence_text="cbc release evidence v2")},
+        observed_at="2026-08-11T10:05:00+08:00",
+    )
+    assert first["records"][0]["revision"] == 1
+    assert second["records"][0]["revision"] == 2
+    with sqlite3.connect(db_path) as conn:
+        evidence_rows = conn.execute(
+            """
+            SELECT revision_number, supersedes_evidence_id
+            FROM resource_publication_evidence ORDER BY revision_number
+            """
+        ).fetchall()
+        assert evidence_rows[0] == (1, None)
+        assert evidence_rows[1][0] == 2
+        assert evidence_rows[1][1] is not None
+        assert conn.execute("SELECT COUNT(*) FROM cbc_m1b_monthly").fetchone()[0] == 2
+
+
 def test_cbc_future_or_unknown_publication_metadata_is_rejected_before_writes(tmp_path):
     with open("tests/fixtures/cbc_ef15m01_response.json", encoding="utf-8") as source:
         payload = json.load(source)
     for publication_map in (
         {"2026-05": "2026-08-12T00:00:00Z"},
-        {"2026-06": "2026-08-01T00:00:00Z"},
+        {"2026-06": publication_evidence()},
     ):
         db_path = str(tmp_path / f"bad-{len(publication_map)}-{next(iter(publication_map))}.db")
         result = ProductionIngestionService(db_path).ingest_cbc_m1b(
@@ -194,6 +266,9 @@ def test_cbc_future_or_unknown_publication_metadata_is_rejected_before_writes(tm
         with sqlite3.connect(db_path) as conn:
             assert conn.execute("SELECT COUNT(*) FROM raw_resource_revisions").fetchone()[0] == 0
             assert conn.execute("SELECT COUNT(*) FROM cbc_m1b_monthly").fetchone()[0] == 0
+            assert conn.execute(
+                "SELECT COUNT(*) FROM resource_publication_evidence"
+            ).fetchone()[0] == 0
 
 
 def test_official_calendar_uses_explicit_session_meaning_and_cutoff(tmp_path):
@@ -305,3 +380,90 @@ def test_failed_run_retry_is_traceable_without_duplicate_accepted_revisions(tmp_
         assert retry_row == ("retry", failed["run_id"])
         assert conn.execute("SELECT COUNT(*) FROM raw_resource_revisions").fetchone()[0] == 2
         assert conn.execute("SELECT COUNT(*) FROM market_turnover_daily").fetchone()[0] == 1
+
+
+def test_late_correction_does_not_replace_latest_logical_business_date(tmp_path):
+    db_path = str(tmp_path / "late-correction.db")
+    twse_rows = [
+        {"Date": "115/08/10", "TradeValue": "300,000"},
+        {"Date": "115/08/11", "TradeValue": "310,000"},
+    ]
+    tpex_rows = [
+        {"Date": "115/08/10", "TradeAmount": "20,000"},
+        {"Date": "115/08/11", "TradeAmount": "21,000"},
+    ]
+    service = ProductionIngestionService(
+        db_path, turnover_fetcher(twse_rows, tpex_rows)
+    )
+    service.ingest_official_turnover(
+        "2026-08-10", observed_at="2026-08-10T02:00:00Z"
+    )
+    service.ingest_official_turnover(
+        "2026-08-11", observed_at="2026-08-11T02:00:00Z"
+    )
+    service.fetcher = turnover_fetcher(
+        [{"Date": "115/08/10", "TradeValue": "305,000"}],
+        [{"Date": "115/08/10", "TradeAmount": "20,500"}],
+    )
+    service.ingest_official_turnover(
+        "2026-08-10", observed_at="2026-08-12T02:00:00Z"
+    )
+    health = service.foundation.provider_health_as_of(
+        "2026-08-12T03:00:00Z", resource_id="twse.market-turnover"
+    )[0]
+    assert health["last_eligible_logical_key"] == "2026-08-11"
+
+
+def test_calendar_effective_revision_collapse_handles_corrections_and_revoke(tmp_path):
+    trading_row = {
+        "Name": "開始交易", "Date": "1150812", "Weekday": "三",
+        "Description": "開始交易",
+    }
+    holiday_row = {
+        "Name": "休市放假", "Date": "1150812", "Weekday": "三",
+        "Description": "依規定放假",
+    }
+
+    trading_to_holiday = ProductionIngestionService(
+        str(tmp_path / "trading-holiday.db")
+    )
+    trading_to_holiday.ingest_twse_calendar(
+        [trading_row], observed_at="2026-08-11T01:00:00Z"
+    )
+    trading_to_holiday.ingest_twse_calendar(
+        [holiday_row], observed_at="2026-08-11T02:00:00Z"
+    )
+    assert trading_to_holiday.foundation.provider_health_as_of(
+        "2026-08-11T03:00:00Z", resource_id="twse.market-turnover"
+    )[0]["latest_expected_trade_date"] is None
+
+    holiday_to_trading = ProductionIngestionService(
+        str(tmp_path / "holiday-trading.db")
+    )
+    holiday_to_trading.ingest_twse_calendar(
+        [holiday_row], observed_at="2026-08-11T01:00:00Z"
+    )
+    holiday_to_trading.ingest_twse_calendar(
+        [trading_row], observed_at="2026-08-11T02:00:00Z"
+    )
+    assert holiday_to_trading.foundation.provider_health_as_of(
+        "2026-08-11T03:00:00Z", resource_id="twse.market-turnover"
+    )[0]["latest_expected_trade_date"] == "2026-08-12"
+
+    trading_to_revoked = ProductionIngestionService(
+        str(tmp_path / "trading-revoked.db")
+    )
+    first = trading_to_revoked.ingest_twse_calendar(
+        [trading_row], observed_at="2026-08-11T01:00:00Z"
+    )["calendar_revisions"][0]
+    trading_to_revoked.foundation.add_calendar_revision(
+        calendar_revision_id="calendar.revoked",
+        raw_resource_revision_id=first["raw_resource_revision_id"],
+        market="TW", trade_date="2026-08-12", session_status="trading",
+        available_at="2026-08-11T02:00:00Z",
+        ingested_at="2026-08-11T02:00:00Z",
+        status="revoked", note="official correction revoked session",
+    )
+    assert trading_to_revoked.foundation.provider_health_as_of(
+        "2026-08-11T03:00:00Z", resource_id="twse.market-turnover"
+    )[0]["latest_expected_trade_date"] is None

@@ -1,4 +1,5 @@
 import sqlite3
+import json
 
 import requests
 
@@ -10,6 +11,7 @@ from src.domain.analysis_snapshot import (
     SynthesisProfileScope,
 )
 from src.domain.liquidity import MarketTurnoverObservation
+from src.domain.data_foundation import sha256_text
 from src.domain.valuation import (
     ApprovalResourceType,
     ApprovalStatus,
@@ -216,6 +218,20 @@ def test_provider_health_reads_stored_state_and_provider_error_is_not_fresh(tmp_
     )[0]
     assert health["freshness"] == "current"
     assert health["last_success_at"] == "2026-08-11T02:01:00.000000Z"
+    calendar_health = DataFreshnessService(db_path).provider_health(
+        "2026-08-11T02:02:00Z", resource_id="twse.trading-calendar"
+    )[0]
+    assert calendar_health["freshness"] == "unknown"
+    assert calendar_health["freshness_reason"] == (
+        "authoritative_periodic_cadence_not_proven"
+    )
+    unknown_coverage = DataFreshnessService(db_path).provider_health(
+        "2026-08-12T00:00:00Z", resource_id="twse.market-turnover"
+    )[0]
+    assert unknown_coverage["freshness"] == "unknown"
+    assert unknown_coverage["freshness_reason"] == (
+        "official_calendar_coverage_incomplete"
+    )
 
     service.ingest_twse_calendar(
         [
@@ -447,3 +463,101 @@ def test_approved_synthesis_profile_supersession_makes_snapshot_stale(tmp_path):
     )
     assert result["freshness_status"] == "stale"
     assert result["reasons"] == ["newer_eligible_synthesis_profile_revision"]
+
+
+def test_monthly_publication_without_proven_cadence_is_unknown(tmp_path):
+    db_path = str(tmp_path / "cbc-freshness.db")
+    with open("tests/fixtures/cbc_ef15m01_response.json", encoding="utf-8") as source:
+        payload = json.load(source)
+    evidence = {
+        "official_release_at": "2026-06-25T16:00:00+08:00",
+        "source_reference": "https://example.test/cbc/official-release",
+        "source_identity": "CBC official publication notice",
+        "evidence_file_sha256": sha256_text("cbc official evidence"),
+        "captured_at": "2026-06-25T16:05:00+08:00",
+        "verification_mode": "manual_official_source_review",
+        "verified_by": "internal.researcher",
+        "status": "accepted",
+    }
+    ingestion_result = ProductionIngestionService(db_path).ingest_cbc_m1b(
+        payload, {"2026-05": evidence},
+        observed_at="2026-08-11T02:00:00Z",
+    )
+    health = DataFreshnessService(db_path).provider_health(
+        "2026-08-11T03:00:00Z", resource_id="cbc.m1b"
+    )[0]
+    assert health["freshness"] == "unknown"
+    assert health["freshness_reason"] == "publication_cadence_not_proven"
+    m1b = ingestion_result["records"][0]
+    stored = snapshot_with_dependencies(
+        AnalysisSnapshotRepository(db_path),
+        [{
+            "section": "liquidity", "resource_type": "m1b_revision",
+            "resource_id": m1b["id"], "logical_resource_id": m1b["period"],
+            "revision_number": m1b["revision"],
+            "available_at": m1b["available_at"],
+            "ingested_at": m1b["ingested_at"], "approval_ids": [],
+        }],
+        suffix="cbc-unknown",
+    )
+    snapshot_state = DataFreshnessService(db_path).snapshot_dependency_freshness(
+        stored["snapshot_id"], "2026-08-11T03:00:00Z"
+    )
+    assert snapshot_state["freshness_status"] == "unknown"
+    assert snapshot_state["reasons"] == ["dependency_freshness_unknown"]
+
+
+def test_provider_failure_blocks_prior_turnover_snapshot_without_mutation(tmp_path):
+    db_path = str(tmp_path / "provider-blocked.db")
+    twse_10 = [{"Date": "115/08/10", "TradeValue": "300,000"}]
+    tpex_10 = [{"Date": "115/08/10", "TradeAmount": "20,000"}]
+
+    def success(url, timeout):
+        return Response(twse_10 if "twse.com.tw" in url else tpex_10)
+
+    ingestion = ProductionIngestionService(db_path, success)
+    ingestion.ingest_twse_calendar(
+        [{"Name": "開始交易", "Date": "1150810", "Weekday": "一", "Description": "開始交易"}],
+        observed_at="2026-08-10T01:00:00Z",
+    )
+    turnover_result = ingestion.ingest_official_turnover(
+        "2026-08-10", observed_at="2026-08-10T02:00:00Z"
+    )
+    turnover_row = turnover_result["turnover"]
+    stored = snapshot_with_dependencies(
+        AnalysisSnapshotRepository(db_path),
+        [{
+            "section": "liquidity",
+            "resource_type": "market_turnover_revision",
+            "resource_id": turnover_row["id"],
+            "logical_resource_id": turnover_row["trade_date"],
+            "revision_number": turnover_row["revision"],
+            "available_at": turnover_row["available_at"],
+            "ingested_at": turnover_row["ingested_at"],
+            "approval_ids": [],
+        }],
+        suffix="provider-blocked",
+    )
+    original_hash = stored["output_sha256"]
+    ingestion.ingest_twse_calendar(
+        [
+            {"Name": "開始交易", "Date": "1150810", "Weekday": "一", "Description": "開始交易"},
+            {"Name": "開始交易", "Date": "1150811", "Weekday": "二", "Description": "開始交易"},
+        ],
+        observed_at="2026-08-11T01:00:00Z",
+    )
+    ingestion.fetcher = lambda _url, timeout: Response(
+        error=requests.ConnectionError("provider down")
+    )
+    assert ingestion.ingest_official_turnover(
+        "2026-08-11", observed_at="2026-08-11T02:00:00Z"
+    )["status"] == "failed"
+    result = DataFreshnessService(db_path).snapshot_dependency_freshness(
+        stored["snapshot_id"], "2026-08-11T03:00:00Z"
+    )
+    assert result["freshness_status"] == "blocked"
+    assert result["reasons"] == ["dependency_provider_error"]
+    assert result["historical_snapshot_validity"] == "unchanged"
+    assert AnalysisSnapshotRepository(db_path).get(stored["snapshot_id"])[
+        "output_sha256"
+    ] == original_hash

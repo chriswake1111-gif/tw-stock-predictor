@@ -10,6 +10,7 @@ Official Source
   → provider/resource registry
   → immutable run + run item + raw revision
   → schema / unit / availability validation
+  → publication / authority evidence when required
   → explicit eligibility
   → existing Evidence Model repository
   → immutable snapshot
@@ -43,7 +44,8 @@ TWSE 與 TPEx 的公開資料授權仍應依各資料集與使用情境逐項確
 
 - 當次官方查詢只能證明資料在 `received_at` 時已可取得；此保守觀測時間可用於當次 daily turnover／calendar ingestion。
 - 不得把 `fetched_at` 或 `received_at` 回填成歷史 CBC 月資料的發布時間。
-- CBC period 沒有具時區的官方發布 timestamp mapping 時，只保存 `awaiting_review` candidate，`available_at = null`，不得寫入 eligible M1B。
+- CBC period 的發布 timestamp 本身不是 authority evidence。只有保存 source reference、source identity、evidence SHA-256、captured time、verification mode 與 actor 的 accepted publication evidence，才能促成 eligible M1B。
+- 只有 bare timestamp 或缺少 publication evidence 時，只保存 `awaiting_review` candidate，`available_at = null`，不得寫入 eligible M1B。
 - 所有 as-of 查詢同時限制 `available_at <= cutoff` 與 `ingested_at <= cutoff`。
 
 ## Immutable revision 與 failure semantics
@@ -53,10 +55,15 @@ TWSE 與 TPEx 的公開資料授權仍應依各資料集與使用情境逐項確
 - TWSE／TPEx 各自建立 run item；單邊失敗保存 `partial`，不以舊完整值遮蔽。
 - provider timeout、HTTP error、schema drift、awaiting review 與 concurrent lock 都是可查詢狀態。
 - retry 建立新 run 並保存 `retry_of_run_id`；成功重試不得複製既有 accepted revision。
+- resource lock 使用 15 分鐘 lease。未到期不得搶鎖；到期後 acquisition 會在同一 transaction 將仍為 running 的舊 run 標成 failed、寫入 immutable recovery event，再 reclaim lock。migration 前既有 lock 會保守標成已到期，等待下次 acquisition 留下 recovery audit。
 
 ## Official trading calendar
 
-日曆只接受官方資料列明示的 session meaning，不使用 weekday、OHLCV 或第三方行情推測。未出現在已保存官方資料中的日期保持 unknown。日曆 coverage 無法證明 cutoff 當日狀態時，daily freshness 必須回傳 `unknown`，不得沿用舊 success 宣稱 fresh。
+日曆只接受官方資料列明示的 session meaning，不使用 weekday、OHLCV 或第三方行情推測。採用 Policy A：calendar 是 daily freshness authority。每個 `market + trade_date` 先 collapse 成 latest visible revision；只有 latest state 為 available 的 trading／special 才是 expected session，舊 trading revision 不得在新 holiday／revoked revision 後存活。
+
+`current` 是需要正向證據的聲明。Daily resource 只有 actual logical date、official expected session 與 cutoff 台北日期三者一致時才是 current；coverage 不足回傳 unknown。Monthly publication／periodic resource 若沒有 authoritative cadence contract，一律 unknown，不由月份、月底或 ingestion time 推測。
+
+Raw daily revisions 亦先依 `provider + resource + logical business date` collapse，再從有效 eligible logical dates 取最大日期。晚到的舊日期修正不會取代最新 business date。
 
 ## Read APIs
 
@@ -66,7 +73,7 @@ GET /api/v2/providers/status
 GET /api/v2/analysis/snapshots/{snapshot_id}/dependency-status
 ```
 
-這些 GET 只讀 stored state，不呼叫 provider、不建立 snapshot、不重算或覆寫歷史輸出。可用 `provider`／`resource` 與 timestamp cutoff 做最小篩選。
+這些 GET 只讀 stored state，不呼叫 provider、不建立 snapshot、不重算或覆寫歷史輸出。可用 `provider`／`resource` 與 timestamp cutoff 做最小篩選。具 Phase 10 source backing 的 turnover／M1B dependency 同時檢查 domain eligible revision 與 provider operational freshness；明確 provider error 會 blocked，證據不足則 unknown，不得保持 current。
 
 Snapshot freshness 狀態：
 
@@ -82,7 +89,7 @@ Snapshot freshness 狀態：
 ```text
 python tools/ingest_production_data.py official-daily --trade-date 2026-08-11
 python tools/ingest_production_data.py calendar
-python tools/ingest_production_data.py cbc --publication-map path/to/release-times.json
+python tools/ingest_production_data.py cbc --publication-evidence path/to/release-evidence.json
 ```
 
 重試使用原 run ID，例如：
@@ -90,6 +97,25 @@ python tools/ingest_production_data.py cbc --publication-map path/to/release-tim
 ```text
 python tools/ingest_production_data.py official-daily --trade-date 2026-08-11 --retry-of run_xxx
 ```
+
+CBC evidence 檔案格式：
+
+```json
+{
+  "2026-05": {
+    "official_release_at": "2026-06-25T16:00:00+08:00",
+    "source_reference": "official source URL or document reference",
+    "source_identity": "CBC official publication notice",
+    "evidence_file_sha256": "64 lowercase hex characters",
+    "captured_at": "2026-06-25T16:05:00+08:00",
+    "verification_mode": "manual_official_source_review",
+    "verified_by": "internal.researcher",
+    "status": "accepted"
+  }
+}
+```
+
+Legacy `--publication-map` alias 仍可解析，但 bare timestamp 永遠不足以升格，只會留下 candidate。CLI exit codes：succeeded=`0`、partial=`2`、blocked／failed=`1`；partial 表示部分官方資料已保存但需要人工注意。
 
 本機部署可由 Windows Task Scheduler 呼叫上述 deterministic CLI；scheduler 不屬於資料正確性的一部分。不得把 legacy `src/scheduler.py` 靜默改成 Evidence V2 ingestion runner。
 

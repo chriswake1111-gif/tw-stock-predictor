@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import timedelta
 from typing import Any
 
 from src.domain.data_foundation import (
@@ -12,10 +13,11 @@ from src.domain.data_foundation import (
     IngestionRun,
     IngestionRunItem,
     RawResourceRevision,
+    ResourcePublicationEvidence,
     canonical_json,
     sha256_text,
 )
-from src.domain.valuation import normalize_utc_timestamp
+from src.domain.valuation import normalize_utc_timestamp, parse_aware_timestamp
 from src.repositories.migration_runner import apply_valuation_migration
 
 
@@ -239,17 +241,99 @@ class DataFoundationRepository:
             ).fetchone()), "created": True}
 
     def acquire_resource_lock(
-        self, resource_id: str, owner_run_id: str, acquired_at: str
-    ) -> None:
+        self,
+        resource_id: str,
+        owner_run_id: str,
+        acquired_at: str,
+        *,
+        lease_seconds: int = 900,
+    ) -> dict[str, Any]:
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be greater than zero")
         acquired = normalize_utc_timestamp(acquired_at, "acquired_at")
-        try:
-            with self._connect() as conn:
+        acquired_time = parse_aware_timestamp(acquired, "acquired_at")
+        lease_expires = normalize_utc_timestamp(
+            (acquired_time + timedelta(seconds=lease_seconds)).isoformat(),
+            "lease_expires_at",
+        )
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT * FROM ingestion_resource_locks WHERE resource_id = ?",
+                (resource_id,),
+            ).fetchone()
+            if existing is None:
                 conn.execute(
-                    "INSERT INTO ingestion_resource_locks VALUES (?,?,?)",
-                    (resource_id, owner_run_id, acquired),
+                    "INSERT INTO ingestion_resource_locks VALUES (?,?,?,?)",
+                    (resource_id, owner_run_id, acquired, lease_expires),
                 )
-        except sqlite3.IntegrityError as exc:
-            raise RuntimeError("resource ingestion is already locked") from exc
+                return dict(conn.execute(
+                    "SELECT * FROM ingestion_resource_locks WHERE resource_id = ?",
+                    (resource_id,),
+                ).fetchone())
+            if parse_aware_timestamp(
+                existing["lease_expires_at"], "lease_expires_at"
+            ) > acquired_time:
+                raise RuntimeError("resource ingestion is already locked")
+            owner = conn.execute(
+                "SELECT * FROM ingestion_runs WHERE ingestion_run_id = ?",
+                (existing["owner_run_id"],),
+            ).fetchone()
+            if owner is None:
+                raise RuntimeError("resource lock owner run is missing")
+            if parse_aware_timestamp(owner["started_at"], "started_at") > acquired_time:
+                raise RuntimeError("resource lock recovery precedes owner run")
+            previous_status = owner["status"]
+            action = "terminal_owner_lock_reclaimed"
+            if previous_status == "running":
+                conn.execute(
+                    """
+                    UPDATE ingestion_runs
+                    SET completed_at = ?, status = 'failed'
+                    WHERE ingestion_run_id = ? AND status = 'running'
+                    """,
+                    (acquired, existing["owner_run_id"]),
+                )
+                action = "run_marked_failed_and_lock_reclaimed"
+            event_identity = canonical_json({
+                "resource_id": resource_id,
+                "previous_owner_run_id": existing["owner_run_id"],
+                "recovering_run_id": owner_run_id,
+                "previous_lease_expires_at": existing["lease_expires_at"],
+                "recovered_at": acquired,
+            })
+            recovery_event_id = f"lock_recovery_{sha256_text(event_identity)[:24]}"
+            conn.execute(
+                """
+                INSERT INTO ingestion_lock_recovery_events VALUES (
+                    ?,?,?,?,?,?,?,?,?,?
+                )
+                """,
+                (
+                    recovery_event_id, resource_id, existing["owner_run_id"],
+                    owner_run_id, existing["acquired_at"],
+                    existing["lease_expires_at"], acquired, previous_status,
+                    action, "orphaned_resource_lock_recovered",
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE ingestion_resource_locks
+                SET owner_run_id = ?, acquired_at = ?, lease_expires_at = ?
+                WHERE resource_id = ? AND owner_run_id = ?
+                """,
+                (
+                    owner_run_id, acquired, lease_expires, resource_id,
+                    existing["owner_run_id"],
+                ),
+            )
+            return {
+                **dict(conn.execute(
+                    "SELECT * FROM ingestion_resource_locks WHERE resource_id = ?",
+                    (resource_id,),
+                ).fetchone()),
+                "recovery_event_id": recovery_event_id,
+            }
 
     def release_resource_lock(self, resource_id: str, owner_run_id: str) -> None:
         with self._connect() as conn:
@@ -266,6 +350,82 @@ class DataFoundationRepository:
                 "SELECT * FROM raw_resource_revisions WHERE raw_resource_revision_id = ?",
                 (revision_id,),
             ).fetchone())
+
+    def add_publication_evidence(
+        self,
+        evidence: ResourcePublicationEvidence,
+        *,
+        ingested_at: str,
+    ) -> dict[str, Any]:
+        payload = evidence.canonical_payload()
+        ingested = normalize_utc_timestamp(ingested_at, "ingested_at")
+        if parse_aware_timestamp(ingested, "ingested_at") < parse_aware_timestamp(
+            payload["captured_at"], "captured_at"
+        ):
+            raise ValueError("publication evidence ingested_at cannot precede captured_at")
+        fingerprint = sha256_text(canonical_json(payload))
+        evidence_id = evidence.deterministic_identity()
+        with self._connect() as conn:
+            authority = conn.execute(
+                """
+                SELECT p.authority_tier, r.provider_id AS resource_provider_id
+                FROM data_providers p
+                JOIN data_resources r ON r.resource_id = ?
+                WHERE p.provider_id = ?
+                """,
+                (payload["resource_id"], payload["provider_id"]),
+            ).fetchone()
+            if (
+                authority is None
+                or authority["authority_tier"] != "authoritative"
+                or authority["resource_provider_id"] != payload["provider_id"]
+            ):
+                raise ValueError("publication evidence requires its authoritative provider")
+            existing = conn.execute(
+                "SELECT * FROM resource_publication_evidence WHERE identity_fingerprint = ?",
+                (fingerprint,),
+            ).fetchone()
+            if existing:
+                return {**dict(existing), "created": False}
+            previous = conn.execute(
+                """
+                SELECT * FROM resource_publication_evidence
+                WHERE provider_id = ? AND resource_id = ?
+                  AND logical_revision_key = ?
+                ORDER BY revision_number DESC, ingested_at DESC,
+                         publication_evidence_id DESC
+                LIMIT 1
+                """,
+                (
+                    payload["provider_id"], payload["resource_id"],
+                    payload["logical_revision_key"],
+                ),
+            ).fetchone()
+            revision_number = int(previous["revision_number"]) + 1 if previous else 1
+            conn.execute(
+                """
+                INSERT INTO resource_publication_evidence VALUES (
+                    ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+                )
+                """,
+                (
+                    evidence_id, fingerprint, payload["provider_id"],
+                    payload["resource_id"], payload["logical_revision_key"],
+                    payload["official_release_at"], payload["source_reference"],
+                    payload["source_identity"], payload["evidence_file_sha256"],
+                    payload["captured_at"], payload["verification_mode"],
+                    payload["verified_by"], payload["status"], revision_number,
+                    previous["publication_evidence_id"] if previous else None,
+                    ingested, ingested,
+                ),
+            )
+            return {
+                **dict(conn.execute(
+                    "SELECT * FROM resource_publication_evidence WHERE publication_evidence_id = ?",
+                    (evidence_id,),
+                ).fetchone()),
+                "created": True,
+            }
 
     def latest_raw_revision(
         self, provider_id: str, resource_id: str, logical_revision_key: str
@@ -393,24 +553,39 @@ class DataFoundationRepository:
                         'accepted','partial','awaiting_review','quality_warning'
                     )
                     GROUP BY resource_id
-                ), latest_eligible AS (
+                ), visible_raw AS (
                     SELECT raw.*, ROW_NUMBER() OVER (
-                        PARTITION BY raw.resource_id
-                        ORDER BY raw.available_at DESC, raw.ingested_at DESC,
+                        PARTITION BY raw.resource_id, raw.logical_revision_key
+                        ORDER BY raw.ingested_at DESC, raw.available_at DESC,
                                  raw.raw_resource_revision_id DESC
                     ) AS rank_no
                     FROM raw_resource_revisions raw
                     WHERE raw.available_at <= ? AND raw.ingested_at <= ?
-                      AND raw.eligibility_status = 'eligible'
-                ), expected_session AS (
-                    SELECT trade_date, ROW_NUMBER() OVER (
-                        ORDER BY trade_date DESC, revision_number DESC,
-                                 available_at DESC, ingested_at DESC
+                ), effective_eligible AS (
+                    SELECT * FROM visible_raw
+                    WHERE rank_no = 1 AND eligibility_status = 'eligible'
+                ), latest_business_key AS (
+                    SELECT resource_id, MAX(logical_revision_key) AS logical_revision_key
+                    FROM effective_eligible GROUP BY resource_id
+                ), latest_eligible AS (
+                    SELECT eligible.*
+                    FROM effective_eligible eligible
+                    JOIN latest_business_key business
+                      ON business.resource_id = eligible.resource_id
+                     AND business.logical_revision_key = eligible.logical_revision_key
+                ), visible_calendar AS (
+                    SELECT calendar.*, ROW_NUMBER() OVER (
+                        PARTITION BY market, trade_date
+                        ORDER BY revision_number DESC, available_at DESC,
+                                 ingested_at DESC, calendar_revision_id DESC
                     ) AS rank_no
-                    FROM trading_calendar_revisions
+                    FROM trading_calendar_revisions calendar
                     WHERE market = 'TW' AND available_at <= ? AND ingested_at <= ?
-                      AND status = 'available'
-                      AND session_status IN ('trading','special')
+                ), expected_session AS (
+                    SELECT MAX(trade_date) AS trade_date
+                    FROM visible_calendar
+                    WHERE rank_no = 1 AND status = 'available'
+                      AND session_status IN ('trading', 'special')
                 )
                 SELECT r.*, p.display_name, p.authority_tier, p.provider_type,
                        li.started_at AS last_attempt_at,
@@ -420,7 +595,7 @@ class DataFoundationRepository:
                        li.status AS latest_item_status,
                        li.quality_status AS operational_status,
                        li.reason AS latest_error,
-                       (SELECT trade_date FROM expected_session WHERE rank_no = 1)
+                       (SELECT trade_date FROM expected_session)
                            AS latest_expected_trade_date
                 FROM data_resources r
                 JOIN data_providers p ON p.provider_id = r.provider_id
@@ -428,7 +603,7 @@ class DataFoundationRepository:
                   ON li.resource_id = r.resource_id AND li.rank_no = 1
                 LEFT JOIN successes s ON s.resource_id = r.resource_id
                 LEFT JOIN latest_eligible le
-                  ON le.resource_id = r.resource_id AND le.rank_no = 1
+                  ON le.resource_id = r.resource_id
                 {where}
                 ORDER BY r.provider_id, r.resource_id
                 """,

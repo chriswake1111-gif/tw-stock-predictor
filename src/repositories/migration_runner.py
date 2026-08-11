@@ -23,6 +23,7 @@ MIGRATION_IDS = (
     "20260810_10_phase8_review_remediation",
     "20260811_11_evidence_model_v2_data_foundation",
     "20260811_12_raw_revision_metadata_identity",
+    "20260811_13_phase10_first_review_remediation",
 )
 MIGRATION_ID = MIGRATION_IDS[-1]
 MIGRATION_FILES = tuple(
@@ -98,10 +99,20 @@ def apply_valuation_migration(db_path: str) -> dict[str, Any]:
                 "raw_resource_revisions",
                 "data_quality_issues",
                 "trading_calendar_revisions",
+                "resource_publication_evidence",
+                "ingestion_lock_recovery_events",
+                "ingestion_resource_locks",
+                "cbc_m1b_monthly",
             )
+            existing_tables = {
+                row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
             violations = [
                 row
                 for table in checked_tables
+                if table in existing_tables
                 for row in conn.execute(f"PRAGMA foreign_key_check({table})").fetchall()
             ]
             if violations:

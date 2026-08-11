@@ -6,7 +6,7 @@ import src.repositories.migration_runner as migration_runner
 from src.repositories.migration_runner import apply_valuation_migration
 
 
-PHASE10_MIGRATION = "20260811_12_raw_revision_metadata_identity"
+PHASE10_MIGRATION = "20260811_13_phase10_first_review_remediation"
 
 
 def test_phase10_migration_is_additive_rerunnable_and_fresh_parent_safe(tmp_path):
@@ -27,8 +27,19 @@ def test_phase10_migration_is_additive_rerunnable_and_fresh_parent_safe(tmp_path
         "ingestion_run_items", "raw_resource_revisions", "data_quality_issues",
         "trading_calendar_revisions", "snapshot_dependency_checks",
         "ingestion_resource_locks",
+        "ingestion_lock_recovery_events", "resource_publication_evidence",
     }.issubset(tables)
     assert "analysis_snapshots" in tables
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert "lease_expires_at" in {
+            row[1] for row in conn.execute(
+                "PRAGMA table_info(ingestion_resource_locks)"
+            )
+        }
+        assert "publication_evidence_id" in {
+            row[1] for row in conn.execute("PRAGMA table_info(cbc_m1b_monthly)")
+        }
 
 
 def test_raw_revision_metadata_identity_upgrade_preserves_foreign_keys(tmp_path):
@@ -67,6 +78,17 @@ def test_raw_revision_metadata_identity_upgrade_preserves_foreign_keys(tmp_path)
                 "awaiting_review", "awaiting_review", None, "candidate",
             ),
         )
+        conn.execute(
+            "INSERT INTO ingestion_runs VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                "run-legacy-lock", "2026-08-11T00:00:00Z", None, "manual",
+                "phase10.1", '["test.raw"]', "internal.test", "running", None,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO ingestion_resource_locks VALUES (?,?,?)",
+            ("test.raw", "run-legacy-lock", "2026-08-11T00:00:00Z"),
+        )
     result = apply_valuation_migration(str(db_path))
     assert result["applied_migration_ids"] == [PHASE10_MIGRATION]
     with sqlite3.connect(db_path) as conn:
@@ -74,6 +96,9 @@ def test_raw_revision_metadata_identity_upgrade_preserves_foreign_keys(tmp_path)
         assert conn.execute(
             "SELECT eligibility_status FROM raw_resource_revisions WHERE raw_resource_revision_id='raw-1'"
         ).fetchone()[0] == "awaiting_review"
+        assert conn.execute(
+            "SELECT lease_expires_at FROM ingestion_resource_locks WHERE resource_id='test.raw'"
+        ).fetchone()[0] == "2026-08-11T00:00:00Z"
 
 
 def test_phase10_migration_upgrades_current_main_schema_without_rewrite(

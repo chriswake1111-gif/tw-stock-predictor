@@ -14,7 +14,10 @@ from src.domain.data_foundation import (
     IngestionRunItem,
     IngestionRunStatus,
     ProviderType,
+    PublicationEvidenceStatus,
+    PublicationVerificationMode,
     RawResourceRevision,
+    ResourcePublicationEvidence,
     ResourceType,
     StoragePolicy,
     TriggerType,
@@ -135,10 +138,104 @@ def test_resource_lock_prevents_concurrent_ingestion(tmp_path):
     repo.release_resource_lock("twse.daily_turnover", "run.owner")
 
 
+def test_expired_lock_recovery_marks_orphan_run_failed_and_keeps_audit(tmp_path):
+    repo = foundation(tmp_path)
+    repo.add_run(run("run.owner"))
+    repo.add_run(run("run.recovering"))
+    repo.acquire_resource_lock(
+        "twse.daily_turnover", "run.owner", NOW, lease_seconds=60
+    )
+    recovered = repo.acquire_resource_lock(
+        "twse.daily_turnover", "run.recovering",
+        "2026-08-11T00:02:00Z", lease_seconds=60,
+    )
+    assert recovered["owner_run_id"] == "run.recovering"
+    assert recovered["recovery_event_id"].startswith("lock_recovery_")
+    with sqlite3.connect(repo.db_path) as conn:
+        assert conn.execute(
+            "SELECT status FROM ingestion_runs WHERE ingestion_run_id='run.owner'"
+        ).fetchone()[0] == "failed"
+        audit = conn.execute(
+            """
+            SELECT previous_owner_run_id, recovering_run_id, reason
+            FROM ingestion_lock_recovery_events
+            """
+        ).fetchone()
+        assert audit == (
+            "run.owner", "run.recovering", "orphaned_resource_lock_recovered"
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            conn.execute(
+                "UPDATE ingestion_lock_recovery_events SET reason='hidden'"
+            )
+    repo.release_resource_lock("twse.daily_turnover", "run.recovering")
+
+
+def test_publication_evidence_is_authoritative_idempotent_and_append_only(tmp_path):
+    repo = foundation(tmp_path)
+    evidence = ResourcePublicationEvidence(
+        provider_id="twse", resource_id="twse.daily_turnover",
+        logical_revision_key="2026-08-10",
+        official_release_at="2026-08-10T06:00:00Z",
+        source_reference="https://example.test/official-release",
+        source_identity="TWSE official release notice",
+        evidence_file_sha256=sha256_text("official evidence v1"),
+        captured_at="2026-08-10T06:05:00Z",
+        verification_mode=PublicationVerificationMode.MANUAL_OFFICIAL_SOURCE_REVIEW,
+        verified_by="internal.researcher",
+        status=PublicationEvidenceStatus.ACCEPTED,
+    )
+    first = repo.add_publication_evidence(
+        evidence, ingested_at="2026-08-10T06:06:00Z"
+    )
+    duplicate = repo.add_publication_evidence(
+        evidence, ingested_at="2026-08-10T06:07:00Z"
+    )
+    changed = repo.add_publication_evidence(
+        ResourcePublicationEvidence(
+            **{
+                **evidence.__dict__,
+                "evidence_file_sha256": sha256_text("official evidence v2"),
+            }
+        ),
+        ingested_at="2026-08-10T06:08:00Z",
+    )
+    assert first["created"] is True
+    assert duplicate["created"] is False
+    assert duplicate["publication_evidence_id"] == first["publication_evidence_id"]
+    assert changed["revision_number"] == 2
+    assert changed["supersedes_evidence_id"] == first["publication_evidence_id"]
+    assert changed["evidence_file_sha256"] == sha256_text("official evidence v2")
+
+
 def test_backup_restore_round_trip_preserves_irreplaceable_and_operational_state(tmp_path):
     repo = foundation(tmp_path)
     repo.add_run(run())
     repo.add_raw_revision(raw("rawrev.first", "payload-a"))
+    repo.add_publication_evidence(
+        ResourcePublicationEvidence(
+            provider_id="twse", resource_id="twse.daily_turnover",
+            logical_revision_key="2026-08-10",
+            official_release_at="2026-08-10T06:00:00Z",
+            source_reference="https://example.test/official-release",
+            source_identity="TWSE official release notice",
+            evidence_file_sha256=sha256_text("backup evidence"),
+            captured_at="2026-08-10T06:05:00Z",
+            verification_mode=PublicationVerificationMode.MANUAL_OFFICIAL_SOURCE_REVIEW,
+            verified_by="internal.researcher",
+        ),
+        ingested_at="2026-08-10T06:06:00Z",
+    )
+    repo.add_run(run("run.backup-owner"))
+    repo.add_run(run("run.backup-recovering"))
+    repo.acquire_resource_lock(
+        "twse.daily_turnover", "run.backup-owner", NOW, lease_seconds=60
+    )
+    repo.acquire_resource_lock(
+        "twse.daily_turnover", "run.backup-recovering",
+        "2026-08-11T00:02:00Z", lease_seconds=60,
+    )
+    repo.release_resource_lock("twse.daily_turnover", "run.backup-recovering")
     source = repo.db_path
     backup = tmp_path / "backups" / "evidence.db"
     restored = tmp_path / "restored" / "evidence.db"
@@ -148,12 +245,15 @@ def test_backup_restore_round_trip_preserves_irreplaceable_and_operational_state
     assert restore_result["operational_provenance_counts"] == {
         "data_providers": 1,
         "data_resources": 1,
-        "ingestion_runs": 1,
+        "ingestion_runs": 3,
         "ingestion_run_items": 0,
         "raw_resource_revisions": 1,
         "data_quality_issues": 0,
         "trading_calendar_revisions": 0,
         "snapshot_dependency_checks": 0,
+        "resource_publication_evidence": 1,
+        "ingestion_lock_recovery_events": 1,
+        "ingestion_resource_locks": 0,
     }
     assert set(restore_result["irreplaceable_counts"]) >= {
         "forward_eps_observations", "valuation_approvals", "analysis_snapshots"
