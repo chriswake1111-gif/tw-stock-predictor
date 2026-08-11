@@ -10,9 +10,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from src.services.production_ingestion_service import ProductionIngestionService
+from src.domain.data_foundation import TriggerType
 
 
 def _json_file(path: str | None) -> dict:
@@ -33,20 +38,32 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     daily = commands.add_parser("official-daily")
     daily.add_argument("--trade-date", required=True)
-    commands.add_parser("calendar")
+    daily.add_argument("--retry-of")
+    calendar = commands.add_parser("calendar")
+    calendar.add_argument("--retry-of")
     cbc = commands.add_parser("cbc")
     cbc.add_argument(
         "--publication-map",
         help="JSON map of YYYY-MM to authoritative timezone-aware release timestamp",
     )
+    cbc.add_argument("--retry-of")
     args = parser.parse_args()
     service = ProductionIngestionService(args.database)
+    retry_of = getattr(args, "retry_of", None)
+    trigger = TriggerType.RETRY if retry_of else TriggerType.MANUAL
     if args.command == "official-daily":
-        result = service.ingest_official_turnover(args.trade_date)
+        result = service.ingest_official_turnover(
+            args.trade_date, trigger_type=trigger, retry_of_run_id=retry_of
+        )
     elif args.command == "calendar":
-        result = service.fetch_twse_calendar()
+        result = service.fetch_twse_calendar(
+            trigger_type=trigger, retry_of_run_id=retry_of
+        )
     else:
-        result = service.fetch_cbc_m1b(_json_file(args.publication_map))
+        result = service.fetch_cbc_m1b(
+            _json_file(args.publication_map),
+            trigger_type=trigger, retry_of_run_id=retry_of,
+        )
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     return 0 if result["status"] in {"succeeded", "partial", "blocked"} else 1
 

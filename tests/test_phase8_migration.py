@@ -8,7 +8,7 @@ from src.repositories.migration_runner import apply_valuation_migration
 
 PHASE8_MIGRATION = "20260810_09_evidence_model_v2_performance_validation"
 PHASE8_REMEDIATION_MIGRATION = "20260810_10_phase8_review_remediation"
-PHASE10_MIGRATION = "20260811_11_evidence_model_v2_data_foundation"
+PHASE10_MIGRATION = "20260811_12_raw_revision_metadata_identity"
 
 
 def test_phase8_migration_is_additive_rerunnable_and_fresh_parent_safe(tmp_path):

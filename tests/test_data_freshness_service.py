@@ -2,16 +2,27 @@ import sqlite3
 
 import requests
 
-from src.domain.analysis_snapshot import AnalysisSnapshot, CaptureMode
+from src.domain.analysis_snapshot import (
+    AnalysisSnapshot,
+    CaptureMode,
+    SynthesisProfileApproval,
+    SynthesisProfileRevision,
+    SynthesisProfileScope,
+)
+from src.domain.liquidity import MarketTurnoverObservation
 from src.domain.valuation import (
     ApprovalResourceType,
     ApprovalStatus,
     ForwardEPSObservation,
     ForwardEPSSourceType,
+    PEScenario,
+    PEScope,
     ValuationApproval,
 )
 from src.repositories.analysis_snapshot_repository import AnalysisSnapshotRepository
 from src.repositories.forward_eps_repository import ForwardEPSRepository
+from src.repositories.liquidity_repository import LiquidityRepository
+from src.repositories.synthesis_profile_repository import SynthesisProfileRepository
 from src.services.data_freshness_service import DataFreshnessService
 from src.services.production_ingestion_service import ProductionIngestionService
 
@@ -65,6 +76,19 @@ def approval(repo, resource_id, name, when, decision=ApprovalStatus.APPROVED):
 
 
 def snapshot(repo, resource, approval_id, suffix="a"):
+    return snapshot_with_dependencies(repo, [{
+        "section": "valuation",
+        "resource_type": "forward_eps_revision",
+        "resource_id": resource["id"],
+        "logical_resource_id": resource["logical_series_id"],
+        "revision_number": resource["revision_number"],
+        "available_at": resource["available_at"],
+        "ingested_at": resource["ingested_at"],
+        "approval_ids": [approval_id],
+    }], [approval_id], suffix)
+
+
+def snapshot_with_dependencies(repo, dependencies, approval_ids=(), suffix="a"):
     return repo.add(
         AnalysisSnapshot(
             symbol="2330.TW",
@@ -72,21 +96,28 @@ def snapshot(repo, resource, approval_id, suffix="a"):
             capture_mode=CaptureMode.HISTORICAL_RECONSTRUCTION,
             model_version="2.0.0",
             used_rule_versions={"VAL-02": "2.0.0"},
-            source_resource_versions=[{
-                "section": "valuation",
-                "resource_type": "forward_eps_revision",
-                "resource_id": resource["id"],
-                "logical_resource_id": resource["logical_series_id"],
-                "revision_number": resource["revision_number"],
-                "available_at": resource["available_at"],
-                "ingested_at": resource["ingested_at"],
-                "approval_ids": [approval_id],
-            }],
-            manual_approval_ids=[approval_id],
+            source_resource_versions=dependencies,
+            manual_approval_ids=approval_ids,
             output={"status": "available", "symbol": "2330.TW"},
             created_at="2026-07-02T01:00:00Z",
         ),
         f"snapshot-{suffix}",
+    )
+
+
+def turnover(revision, *, status="available", available_at):
+    return MarketTurnoverObservation(
+        trade_date="2026-07-01",
+        twse_turnover_twd=100_000,
+        tpex_turnover_twd=20_000,
+        twse_source="TWSE",
+        tpex_source="TPEx",
+        twse_dataset="FMTQIK",
+        tpex_dataset="tpex_daily_trading_index",
+        available_at=available_at,
+        fetched_at=available_at,
+        revision=revision,
+        status=status,
     )
 
 
@@ -239,3 +270,180 @@ def test_freshness_check_is_read_only_and_deterministic(tmp_path):
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM analysis_snapshots").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM snapshot_dependency_checks").fetchone()[0] == 0
+
+
+def test_new_pe_and_liquidity_revisions_produce_multiple_stale_reasons(tmp_path):
+    db_path = str(tmp_path / "multiple.db")
+    valuation = ForwardEPSRepository(db_path)
+    liquidity = LiquidityRepository(db_path)
+    pe1 = valuation.add_pe_scenario(
+        PEScenario(
+            logical_series_id="2330-approved-pe", revision_number=1,
+            label="base", pe_value=15, rationale="reviewed scenario",
+            evidence_level="U", scope=PEScope.SYMBOL, symbol="2330.TW",
+            available_at="2026-07-01T08:00:00Z",
+            approval_status=ApprovalStatus.DRAFT,
+        ),
+        "pe-1", ingested_at="2026-07-01T08:00:00Z",
+    )
+    pe1_approval = valuation.add_approval(
+        ValuationApproval(
+            approval_id="approval-pe-1",
+            resource_type=ApprovalResourceType.PE_SCENARIO,
+            resource_id=pe1["id"], decision=ApprovalStatus.APPROVED,
+            rule_id="VAL-04", evidence_level="B",
+            project_operationalization=False, approved_by="test-admin",
+            rationale="reviewed scenario", available_at="2026-07-01T08:01:00Z",
+        ),
+        "approval-pe-1", ingested_at="2026-07-01T08:01:00Z",
+    )
+    turnover1 = liquidity.add_turnover(
+        turnover(1, available_at="2026-07-01T09:00:00Z"),
+        ingested_at="2026-07-01T09:00:00Z",
+    )
+    stored = snapshot_with_dependencies(
+        AnalysisSnapshotRepository(db_path),
+        [
+            {
+                "section": "valuation", "resource_type": "pe_scenario_revision",
+                "resource_id": pe1["id"], "logical_resource_id": pe1["logical_series_id"],
+                "revision_number": 1, "available_at": pe1["available_at"],
+                "ingested_at": pe1["ingested_at"],
+                "approval_ids": [pe1_approval["approval_id"]],
+            },
+            {
+                "section": "liquidity", "resource_type": "market_turnover_revision",
+                "resource_id": turnover1["id"], "logical_resource_id": turnover1["trade_date"],
+                "revision_number": 1, "available_at": turnover1["available_at"],
+                "ingested_at": turnover1["ingested_at"], "approval_ids": [],
+            },
+        ],
+        [pe1_approval["approval_id"]], "multiple",
+    )
+    pe2 = valuation.add_pe_scenario(
+        PEScenario(
+            logical_series_id="2330-approved-pe", revision_number=2,
+            revision_of=pe1["id"], label="base", pe_value=16,
+            rationale="reviewed revision", evidence_level="U",
+            scope=PEScope.SYMBOL, symbol="2330.TW",
+            available_at="2026-07-03T08:00:00Z",
+            approval_status=ApprovalStatus.DRAFT,
+        ),
+        "pe-2", ingested_at="2026-07-03T08:00:00Z",
+    )
+    valuation.add_approval(
+        ValuationApproval(
+            approval_id="approval-pe-2",
+            resource_type=ApprovalResourceType.PE_SCENARIO,
+            resource_id=pe2["id"], decision=ApprovalStatus.APPROVED,
+            rule_id="VAL-04", evidence_level="B",
+            project_operationalization=False, approved_by="test-admin",
+            rationale="reviewed revision", available_at="2026-07-03T08:01:00Z",
+        ),
+        "approval-pe-2", ingested_at="2026-07-03T08:01:00Z",
+    )
+    liquidity.add_turnover(
+        turnover(2, available_at="2026-07-03T09:00:00Z"),
+        ingested_at="2026-07-03T09:00:00Z",
+    )
+    result = DataFreshnessService(db_path).snapshot_dependency_freshness(
+        stored["snapshot_id"], "2026-07-04T00:00:00Z"
+    )
+    assert result["freshness_status"] == "stale"
+    assert result["reasons"] == [
+        "newer_eligible_market_turnover_revision",
+        "newer_eligible_pe_scenario_revision",
+    ]
+
+
+def test_latest_revoked_liquidity_revision_does_not_resurrect_old_value(tmp_path):
+    db_path = str(tmp_path / "turnover-revoked.db")
+    liquidity = LiquidityRepository(db_path)
+    first = liquidity.add_turnover(
+        turnover(1, available_at="2026-07-01T09:00:00Z"),
+        ingested_at="2026-07-01T09:00:00Z",
+    )
+    stored = snapshot_with_dependencies(
+        AnalysisSnapshotRepository(db_path),
+        [{
+            "section": "liquidity", "resource_type": "market_turnover_revision",
+            "resource_id": first["id"], "logical_resource_id": first["trade_date"],
+            "revision_number": 1, "available_at": first["available_at"],
+            "ingested_at": first["ingested_at"], "approval_ids": [],
+        }],
+        suffix="turnover-revoked",
+    )
+    liquidity.add_turnover(
+        turnover(2, status="revoked", available_at="2026-07-03T09:00:00Z"),
+        ingested_at="2026-07-03T09:00:00Z",
+    )
+    result = DataFreshnessService(db_path).snapshot_dependency_freshness(
+        stored["snapshot_id"], "2026-07-04T00:00:00Z"
+    )
+    assert result["freshness_status"] == "blocked"
+    assert result["reasons"] == ["dependency_revoked"]
+
+
+def test_approved_synthesis_profile_supersession_makes_snapshot_stale(tmp_path):
+    db_path = str(tmp_path / "profile-stale.db")
+    profiles = SynthesisProfileRepository(db_path)
+
+    def profile(revision, available_at, revision_of=None):
+        return SynthesisProfileRevision(
+            logical_profile_id="default-target-profile",
+            revision_number=revision,
+            revision_of=revision_of,
+            scope=SynthesisProfileScope.GLOBAL,
+            allowed_method_families=("VAL-01", "FB-03"),
+            overlap_tolerance="0.05",
+            evidence_strength_policy=(
+                {"minimum_independent_target_components": 2, "label": "moderate"},
+            ),
+            available_at=available_at,
+            created_by="test-admin",
+            rationale="reviewed target synthesis profile",
+        )
+
+    def approve(resource_id, suffix, approved_at):
+        return profiles.add_approval(
+            SynthesisProfileApproval(
+                approval_id=f"profile-approval-{suffix}",
+                profile_revision_id=resource_id,
+                decision=ApprovalStatus.APPROVED,
+                rule_id="TGT-01", rule_version="2.0.0", evidence_level="C",
+                implementation_mode="project_operationalization",
+                project_operationalization=True, approved_by="test-admin",
+                rationale="reviewed TGT-01 profile", approved_at=approved_at,
+            ),
+            f"profile-approval-{suffix}", ingested_at=approved_at,
+        )
+
+    first = profiles.add_revision(
+        profile(1, "2026-07-01T08:00:00Z"),
+        "profile-1", ingested_at="2026-07-01T08:00:00Z",
+    )
+    first_approval = approve(first["id"], "1", "2026-07-01T08:01:00Z")
+    stored = snapshot_with_dependencies(
+        AnalysisSnapshotRepository(db_path),
+        [{
+            "section": "target_synthesis",
+            "resource_type": "synthesis_profile_revision",
+            "resource_id": first["id"],
+            "logical_resource_id": first["logical_profile_id"],
+            "revision_number": 1,
+            "available_at": first["available_at"],
+            "ingested_at": first["ingested_at"],
+            "approval_ids": [first_approval["approval_id"]],
+        }],
+        [first_approval["approval_id"]], "profile",
+    )
+    second = profiles.add_revision(
+        profile(2, "2026-07-03T08:00:00Z", first["id"]),
+        "profile-2", ingested_at="2026-07-03T08:00:00Z",
+    )
+    approve(second["id"], "2", "2026-07-03T08:01:00Z")
+    result = DataFreshnessService(db_path).snapshot_dependency_freshness(
+        stored["snapshot_id"], "2026-07-04T00:00:00Z"
+    )
+    assert result["freshness_status"] == "stale"
+    assert result["reasons"] == ["newer_eligible_synthesis_profile_revision"]

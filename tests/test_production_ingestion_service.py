@@ -70,6 +70,20 @@ def test_turnover_provider_failure_preserves_independent_partial(
     }
 
 
+def test_turnover_http_error_is_recorded_without_discarding_other_market(tmp_path):
+    def fetch(url, timeout):
+        return Response(status_code=503) if "twse.com.tw" in url else Response([TPEX_ROW])
+
+    result = ProductionIngestionService(
+        str(tmp_path / "http.db"), fetch
+    ).ingest_official_turnover("2026-08-11", observed_at=OBSERVED)
+    assert result["status"] == "partial"
+    failed = next(item for item in result["items"] if item["provider_id"] == "twse")
+    assert failed["status"] == "provider_error"
+    assert failed["http_status"] == 503
+    assert result["turnover"]["tpex_turnover_twd"] == 20_000
+
+
 def test_turnover_duplicate_is_idempotent_and_correction_is_append_only(tmp_path):
     db_path = str(tmp_path / "data.db")
     service = ProductionIngestionService(
@@ -136,6 +150,50 @@ def test_cbc_authoritative_release_map_enables_asof_record(tmp_path):
     assert LiquidityRepository(db_path).latest_m1b_as_of(
         "2026-08-11T02:01:00Z"
     )["period"] == "2026-05"
+
+
+def test_cbc_candidate_can_be_promoted_only_by_explicit_release_metadata(tmp_path):
+    with open("tests/fixtures/cbc_ef15m01_response.json", encoding="utf-8") as source:
+        payload = json.load(source)
+    db_path = str(tmp_path / "promotion.db")
+    service = ProductionIngestionService(db_path)
+    candidate = service.ingest_cbc_m1b(payload, {}, observed_at=OBSERVED)
+    promoted = service.ingest_cbc_m1b(
+        payload,
+        {"2026-05": "2026-06-25T16:00:00+08:00"},
+        observed_at="2026-08-11T10:05:00+08:00",
+    )
+    assert candidate["status"] == "blocked"
+    assert promoted["status"] == "succeeded"
+    assert promoted["records"][0]["period"] == "2026-05"
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT eligibility_status, supersedes_revision_id
+            FROM raw_resource_revisions ORDER BY ingested_at
+            """
+        ).fetchall()
+    assert rows[0] == ("awaiting_review", None)
+    assert rows[1][0] == "eligible"
+    assert rows[1][1] is not None
+
+
+def test_cbc_future_or_unknown_publication_metadata_is_rejected_before_writes(tmp_path):
+    with open("tests/fixtures/cbc_ef15m01_response.json", encoding="utf-8") as source:
+        payload = json.load(source)
+    for publication_map in (
+        {"2026-05": "2026-08-12T00:00:00Z"},
+        {"2026-06": "2026-08-01T00:00:00Z"},
+    ):
+        db_path = str(tmp_path / f"bad-{len(publication_map)}-{next(iter(publication_map))}.db")
+        result = ProductionIngestionService(db_path).ingest_cbc_m1b(
+            payload, publication_map, observed_at=OBSERVED
+        )
+        assert result["status"] == "failed"
+        assert result["items"][0]["status"] == "rejected"
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM raw_resource_revisions").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM cbc_m1b_monthly").fetchone()[0] == 0
 
 
 def test_official_calendar_uses_explicit_session_meaning_and_cutoff(tmp_path):
@@ -209,3 +267,41 @@ def test_provider_failure_and_overlap_are_visible_in_run_ledger(tmp_path):
     )
     assert blocked["status"] == "blocked"
     assert blocked["reason"] == "resource_ingestion_already_locked"
+
+
+def test_failed_run_retry_is_traceable_without_duplicate_accepted_revisions(tmp_path):
+    db_path = str(tmp_path / "retry.db")
+    service = ProductionIngestionService(
+        db_path,
+        turnover_fetcher(
+            requests.ConnectionError("twse down"),
+            requests.ConnectionError("tpex down"),
+        ),
+    )
+    failed = service.ingest_official_turnover(
+        "2026-08-11", observed_at="2026-08-11T01:00:00Z"
+    )
+    assert failed["status"] == "failed"
+    service.fetcher = turnover_fetcher([TWSE_ROW], [TPEX_ROW])
+    retried = service.ingest_official_turnover(
+        "2026-08-11",
+        observed_at="2026-08-11T02:00:00Z",
+        trigger_type=TriggerType.RETRY,
+        retry_of_run_id=failed["run_id"],
+    )
+    duplicate_retry = service.ingest_official_turnover(
+        "2026-08-11",
+        observed_at="2026-08-11T02:05:00Z",
+        trigger_type=TriggerType.RETRY,
+        retry_of_run_id=failed["run_id"],
+    )
+    assert retried["status"] == "succeeded"
+    assert duplicate_retry["turnover"]["id"] == retried["turnover"]["id"]
+    with sqlite3.connect(db_path) as conn:
+        retry_row = conn.execute(
+            "SELECT trigger_type, retry_of_run_id FROM ingestion_runs WHERE ingestion_run_id = ?",
+            (retried["run_id"],),
+        ).fetchone()
+        assert retry_row == ("retry", failed["run_id"])
+        assert conn.execute("SELECT COUNT(*) FROM raw_resource_revisions").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM market_turnover_daily").fetchone()[0] == 1

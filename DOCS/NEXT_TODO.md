@@ -49,7 +49,7 @@
 
 ### 尚未完成／不得誤解為已完成
 
-- [ ] CBC M1B 目前只有本地 SQLite 讀取與手動寫入，尚未實作官方遠端自動採集。
+- [x] CBC M1B 已有 Phase 10 官方 `EF15M01` 顯式 CLI 採集；缺歷史官方發布 timestamp 的 period 僅保存候選，不自動成為 eligible M1B。
 - [ ] EVA 因缺少完整 NOPAT、投入資本與流通股數資料契約，API 明確回傳 `unsupported`。
 - [ ] 融資模組目前只計算觀察期融資餘額成長率；若要實作「融資相對大盤報酬率」，仍需確認正式業務公式。
 - [ ] 長期資料、參數敏感度與行情分層已完成；目前只有一個熊市年度窗，熊市結論仍需更多歷史或其他標的驗證。
@@ -114,8 +114,11 @@
       session evaluator, immutable stored results, protected run API, and origin-separated descriptive
       historical summary.
 - [x] Phase 8 merged to `main` at `939573b`; immutable scenario evaluation and origin-separated descriptive summaries are closed with main CI evidence.
-- [x] Phase 9 implementation is active on `feature/evidence-model-v2-phase9-ui`: read-only v2 discovery contracts, status presentation hardening and the Evidence Workspace MVP are implemented for Draft PR review.
-- [ ] Phase 9 is not merged and Phase 10 has not started. Do not add current quote, admin writes, ranking, probability, PWA or broker integration during Phase 9 review.
+- [x] Phase 9 已合併至 `main`：read-only v2 discovery contracts、status presentation hardening 與 Evidence Workspace MVP 已完成。
+- [x] Phase 10 已在 `feature/evidence-model-v2-phase10-data-foundation` 完成五個可獨立審查的 implementation commits：provider/resource contracts、additive migration、official ingestion、freshness reads、recovery 與文件。
+- [ ] Phase 10 尚待 Draft PR 首輪 Code Review，不得標示 Ready、不得合併、不得開始 Phase 11。
+- [ ] CBC 歷史月份仍需官方 release timestamp mapping；沒有 mapping 時只保存 `awaiting_review` candidate，不進入 eligible M1B。
+- [ ] Phase 10 不含 current quote、admin frontend、browser writes、automatic approval、broker integration 或真實交易。
 
 ## Evidence Model V2 Phase 3 status (2026-08-01)
 

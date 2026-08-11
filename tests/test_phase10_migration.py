@@ -6,7 +6,7 @@ import src.repositories.migration_runner as migration_runner
 from src.repositories.migration_runner import apply_valuation_migration
 
 
-PHASE10_MIGRATION = "20260811_11_evidence_model_v2_data_foundation"
+PHASE10_MIGRATION = "20260811_12_raw_revision_metadata_identity"
 
 
 def test_phase10_migration_is_additive_rerunnable_and_fresh_parent_safe(tmp_path):
@@ -29,6 +29,51 @@ def test_phase10_migration_is_additive_rerunnable_and_fresh_parent_safe(tmp_path
         "ingestion_resource_locks",
     }.issubset(tables)
     assert "analysis_snapshots" in tables
+
+
+def test_raw_revision_metadata_identity_upgrade_preserves_foreign_keys(tmp_path):
+    db_path = tmp_path / "raw-upgrade.db"
+    with pytest.MonkeyPatch.context() as context:
+        context.setattr(migration_runner, "MIGRATION_IDS", migration_runner.MIGRATION_IDS[:-1])
+        context.setattr(migration_runner, "MIGRATION_FILES", migration_runner.MIGRATION_FILES[:-1])
+        context.setattr(migration_runner, "MIGRATION_ID", migration_runner.MIGRATION_IDS[-2])
+        migration_runner.apply_valuation_migration(str(db_path))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO data_providers VALUES (?,?,?,?,?,?,?,?)",
+            (
+                "test", "Test", "authoritative", "official", "test", 1,
+                "2026-08-11T00:00:00Z", "provider-fingerprint",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO data_resources VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "test.raw", "test", "TEST_RAW", "monetary_statistic", "TW", "daily",
+                "{}", "parser", "1", "1", "archive_normalized", 1,
+                "2026-08-11T00:00:00Z", "resource-fingerprint",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO raw_resource_revisions VALUES (
+                ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+            )
+            """,
+            (
+                "raw-1", "fingerprint-1", "test", "test.raw", "2026-08-11",
+                None, None, "2026-08-11T01:00:00Z", "2026-08-11T01:00:00Z",
+                "a" * 64, "1", "b" * 64, "archive_normalized", None,
+                "awaiting_review", "awaiting_review", None, "candidate",
+            ),
+        )
+    result = apply_valuation_migration(str(db_path))
+    assert result["applied_migration_ids"] == [PHASE10_MIGRATION]
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert conn.execute(
+            "SELECT eligibility_status FROM raw_resource_revisions WHERE raw_resource_revision_id='raw-1'"
+        ).fetchone()[0] == "awaiting_review"
 
 
 def test_phase10_migration_upgrades_current_main_schema_without_rewrite(

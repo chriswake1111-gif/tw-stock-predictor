@@ -151,6 +151,9 @@ def test_backup_restore_round_trip_preserves_irreplaceable_and_operational_state
         "ingestion_runs": 1,
         "ingestion_run_items": 0,
         "raw_resource_revisions": 1,
+        "data_quality_issues": 0,
+        "trading_calendar_revisions": 0,
+        "snapshot_dependency_checks": 0,
     }
     assert set(restore_result["irreplaceable_counts"]) >= {
         "forward_eps_observations", "valuation_approvals", "analysis_snapshots"

@@ -42,7 +42,7 @@ from src.domain.data_foundation import (
     sha256_text,
 )
 from src.domain.liquidity import M1BMonthlyObservation, MarketTurnoverObservation
-from src.domain.valuation import normalize_utc_timestamp
+from src.domain.valuation import normalize_utc_timestamp, parse_aware_timestamp
 from src.repositories.data_foundation_repository import DataFoundationRepository
 from src.repositories.liquidity_repository import LiquidityRepository
 
@@ -173,11 +173,13 @@ class ProductionIngestionService:
         started_at: str,
         trigger_type: TriggerType,
         actor_id: str,
+        retry_of_run_id: str | None = None,
     ) -> IngestionRun:
         run = IngestionRun(
             ingestion_run_id=_id("run"), started_at=started_at,
             trigger_type=trigger_type, runner_version=RUNNER_VERSION,
             requested_resources=resources, actor_id=actor_id,
+            retry_of_run_id=retry_of_run_id,
         )
         self.foundation.add_run(run)
         return run
@@ -252,6 +254,23 @@ class ProductionIngestionService:
         latest = self.foundation.latest_raw_revision(
             provider_id, resource_id, logical_key
         )
+        normalized_published = (
+            normalize_utc_timestamp(source_published_at, "source_published_at")
+            if source_published_at else None
+        )
+        normalized_available = (
+            normalize_utc_timestamp(available_at, "available_at")
+            if available_at else None
+        )
+        supersedes = bool(
+            latest and (
+                latest["raw_payload_sha256"] != payload_hash
+                or latest["source_published_at"] != normalized_published
+                or latest["available_at"] != normalized_available
+                or latest["quality_status"] != health.value
+                or latest["eligibility_status"] != eligibility.value
+            )
+        )
         return self.foundation.add_raw_revision(RawResourceRevision(
             raw_resource_revision_id=_id("raw"),
             provider_id=provider_id,
@@ -265,11 +284,11 @@ class ProductionIngestionService:
             storage_policy=StoragePolicy.ARCHIVE_NORMALIZED,
             quality_status=health,
             eligibility_status=eligibility,
-            source_published_at=source_published_at,
-            available_at=available_at,
+            source_published_at=normalized_published,
+            available_at=normalized_available,
             supersedes_revision_id=(
                 latest["raw_resource_revision_id"]
-                if latest and latest["raw_payload_sha256"] != payload_hash
+                if supersedes
                 else None
             ),
             reason=reason,
@@ -281,9 +300,12 @@ class ProductionIngestionService:
         observed_at: str,
         actor_id: str,
         error: Exception,
+        trigger_type: TriggerType = TriggerType.MANUAL,
+        retry_of_run_id: str | None = None,
     ) -> dict[str, Any]:
         run = self._start_run(
-            (source.resource_id,), observed_at, TriggerType.MANUAL, actor_id
+            (source.resource_id,), observed_at, trigger_type, actor_id,
+            retry_of_run_id,
         )
         try:
             self.foundation.acquire_resource_lock(
@@ -333,6 +355,7 @@ class ProductionIngestionService:
         observed_at: str | None = None,
         trigger_type: TriggerType = TriggerType.MANUAL,
         actor_id: str = "internal.cli",
+        retry_of_run_id: str | None = None,
     ) -> dict[str, Any]:
         datetime.strptime(trade_date, "%Y-%m-%d")
         observed = normalize_utc_timestamp(
@@ -340,7 +363,7 @@ class ProductionIngestionService:
         )
         run = self._start_run(
             tuple(source.resource_id for source in TURNOVER_SOURCES),
-            observed, trigger_type, actor_id,
+            observed, trigger_type, actor_id, retry_of_run_id,
         )
         successes: dict[str, dict[str, Any]] = {}
         items: list[dict[str, Any]] = []
@@ -525,10 +548,13 @@ class ProductionIngestionService:
         observed_at: str | None = None,
         trigger_type: TriggerType = TriggerType.MANUAL,
         actor_id: str = "internal.cli",
+        retry_of_run_id: str | None = None,
     ) -> dict[str, Any]:
         observed = normalize_utc_timestamp(observed_at or _utc_now(), "observed_at")
         resource_id = "cbc.m1b"
-        run = self._start_run((resource_id,), observed, trigger_type, actor_id)
+        run = self._start_run(
+            (resource_id,), observed, trigger_type, actor_id, retry_of_run_id
+        )
         try:
             self.foundation.acquire_resource_lock(
                 resource_id, run.ingestion_run_id, observed
@@ -564,16 +590,47 @@ class ProductionIngestionService:
                 return {"run_id": run.ingestion_run_id, "status": "failed", "items": [item]}
 
             schema_hash = schema_fingerprint(("period", "data_date", "value_raw", "raw_unit"))
+            normalized_releases: dict[str, str] = {}
+            try:
+                known_periods = {row["period"] for row in rows}
+                unknown_periods = set(available_at_by_period) - known_periods
+                if unknown_periods:
+                    raise ValueError("publication map contains an unknown CBC period")
+                for period, release in available_at_by_period.items():
+                    normalized = normalize_utc_timestamp(
+                        release, f"available_at[{period}]"
+                    )
+                    if parse_aware_timestamp(
+                        normalized, f"available_at[{period}]"
+                    ) > parse_aware_timestamp(observed, "observed_at"):
+                        raise ValueError(
+                            "CBC publication timestamp cannot be later than observed_at"
+                        )
+                    normalized_releases[period] = normalized
+            except (TypeError, ValueError) as exc:
+                item = self.foundation.add_run_item(IngestionRunItem(
+                    ingestion_run_item_id=_id("item"),
+                    ingestion_run_id=run.ingestion_run_id,
+                    provider_id="cbc", resource_id=resource_id,
+                    started_at=observed, completed_at=observed,
+                    status=IngestionItemStatus.REJECTED,
+                    quality_status=DataHealthStatus.REJECTED,
+                    parser_version="1", schema_fingerprint=schema_hash,
+                    record_count=len(rows), accepted_count=0,
+                    rejected_count=len(rows), reason=str(exc),
+                ))
+                self._finish_run(run, IngestionRunStatus.FAILED, observed)
+                return {
+                    "run_id": run.ingestion_run_id, "status": "failed",
+                    "records": [], "candidate_periods": [],
+                    "raw_revisions": [], "items": [item],
+                }
             records = []
             candidates = []
             raw_records = []
             for row in rows:
                 period = row["period"]
-                release = available_at_by_period.get(period)
-                normalized_release = (
-                    normalize_utc_timestamp(release, f"available_at[{period}]")
-                    if release else None
-                )
+                normalized_release = normalized_releases.get(period)
                 row_hash = _payload_hash(row)
                 raw = self._add_raw(
                     provider_id="cbc", resource_id=resource_id,
@@ -623,7 +680,10 @@ class ProductionIngestionService:
                 status=item_status, quality_status=health,
                 raw_payload_sha256=_payload_hash(payload),
                 parser_version="1", schema_fingerprint=schema_hash,
-                record_count=len(rows), accepted_count=len(records),
+                record_count=len(rows),
+                accepted_count=sum(
+                    1 for row in rows if row["period"] in normalized_releases
+                ),
                 rejected_count=0,
                 reason=(
                     "historical_official_release_timestamp_required"
@@ -674,10 +734,14 @@ class ProductionIngestionService:
         *,
         observed_at: str | None = None,
         actor_id: str = "internal.cli",
+        trigger_type: TriggerType = TriggerType.MANUAL,
+        retry_of_run_id: str | None = None,
     ) -> dict[str, Any]:
         observed = normalize_utc_timestamp(observed_at or _utc_now(), "observed_at")
         resource_id = "twse.trading-calendar"
-        run = self._start_run((resource_id,), observed, TriggerType.MANUAL, actor_id)
+        run = self._start_run(
+            (resource_id,), observed, trigger_type, actor_id, retry_of_run_id
+        )
         try:
             self.foundation.acquire_resource_lock(
                 resource_id, run.ingestion_run_id, observed
@@ -759,7 +823,12 @@ class ProductionIngestionService:
             self.foundation.release_resource_lock(resource_id, run.ingestion_run_id)
 
     def fetch_twse_calendar(
-        self, *, observed_at: str | None = None, actor_id: str = "internal.cli"
+        self,
+        *,
+        observed_at: str | None = None,
+        actor_id: str = "internal.cli",
+        trigger_type: TriggerType = TriggerType.MANUAL,
+        retry_of_run_id: str | None = None,
     ) -> dict[str, Any]:
         observed = normalize_utc_timestamp(observed_at or _utc_now(), "observed_at")
         source = _OfficialSource(
@@ -772,13 +841,16 @@ class ProductionIngestionService:
             response = self.fetcher(TWSE_CALENDAR_URL, timeout=15)
             response.raise_for_status()
         except requests.RequestException as exc:
-            return self._record_provider_failure(source, observed, actor_id, exc)
+            return self._record_provider_failure(
+                source, observed, actor_id, exc, trigger_type, retry_of_run_id
+            )
         try:
             payload = response.json()
         except (TypeError, ValueError, json.JSONDecodeError):
             payload = []
         return self.ingest_twse_calendar(
-            payload, observed_at=observed, actor_id=actor_id
+            payload, observed_at=observed, actor_id=actor_id,
+            trigger_type=trigger_type, retry_of_run_id=retry_of_run_id,
         )
 
     def fetch_cbc_m1b(
@@ -787,6 +859,8 @@ class ProductionIngestionService:
         *,
         observed_at: str | None = None,
         actor_id: str = "internal.cli",
+        trigger_type: TriggerType = TriggerType.MANUAL,
+        retry_of_run_id: str | None = None,
     ) -> dict[str, Any]:
         observed = normalize_utc_timestamp(observed_at or _utc_now(), "observed_at")
         source = _OfficialSource(
@@ -799,7 +873,9 @@ class ProductionIngestionService:
             response = self.fetcher(CBCCollector.OFFICIAL_M1B_URL, timeout=15)
             response.raise_for_status()
         except requests.RequestException as exc:
-            return self._record_provider_failure(source, observed, actor_id, exc)
+            return self._record_provider_failure(
+                source, observed, actor_id, exc, trigger_type, retry_of_run_id
+            )
         try:
             payload = response.json()
         except (TypeError, ValueError, json.JSONDecodeError):
@@ -807,4 +883,5 @@ class ProductionIngestionService:
         return self.ingest_cbc_m1b(
             payload, available_at_by_period,
             observed_at=observed, actor_id=actor_id,
+            trigger_type=trigger_type, retry_of_run_id=retry_of_run_id,
         )

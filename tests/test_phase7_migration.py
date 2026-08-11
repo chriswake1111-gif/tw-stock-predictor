@@ -16,7 +16,7 @@ def test_phase7_migration_is_additive_rerunnable_and_fresh_parent_safe(tmp_path)
     assert "20260809_08_evidence_model_v2_synthesis_snapshot" in MIGRATION_IDS
     assert "20260810_09_evidence_model_v2_performance_validation" in MIGRATION_IDS
     assert MIGRATION_ID == MIGRATION_IDS[-1]
-    assert MIGRATION_ID == "20260811_11_evidence_model_v2_data_foundation"
+    assert MIGRATION_ID == "20260811_12_raw_revision_metadata_identity"
     assert first["applied"] is True
     assert second["applied"] is False
     with sqlite3.connect(db_path) as conn:

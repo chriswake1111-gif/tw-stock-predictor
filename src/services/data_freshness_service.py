@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from src.domain.data_foundation import (
     SnapshotFreshnessResult,
@@ -26,41 +28,51 @@ class _DependencyConfig:
     approval_link_field: str | None = None
     approval_time_field: str | None = None
     approval_resource_type: str | None = None
+    approval_rule_ids: tuple[str, ...] = ()
+    revision_field: str = "revision_number"
 
 
 DEPENDENCIES = {
     "forward_eps_revision": _DependencyConfig(
         "forward_eps_observations", "logical_series_id", "status", "active",
         "valuation_approvals", "resource_id", "available_at", "forward_eps",
+        ("VAL-02",),
     ),
     "pe_scenario_revision": _DependencyConfig(
         "pe_scenarios", "logical_series_id", None, None,
         "valuation_approvals", "resource_id", "available_at", "pe_scenario",
+        ("VAL-04",),
     ),
     "anchor_revision": _DependencyConfig(
         "technical_anchor_revisions", "logical_anchor_set_id", "status", "available",
         "technical_anchor_approvals", "anchor_revision_id", "approved_at",
+        None, ("FB-03", "FB-04"),
     ),
     "deployment_plan_revision": _DependencyConfig(
         "deployment_plan_revisions", "logical_campaign_id", "status", "available",
         "deployment_plan_approvals", "plan_revision_id", "approved_at",
+        None, ("ENT-02",),
     ),
     "synthesis_profile_revision": _DependencyConfig(
         "synthesis_profile_revisions", "logical_profile_id", "status", "available",
         "synthesis_profile_approvals", "profile_revision_id", "approved_at",
+        None, ("TGT-01",),
     ),
     "screening_profile_revision": _DependencyConfig(
         "screening_profile_revisions", "logical_profile_id", "status", "available",
         "screening_profile_approvals", "profile_revision_id", "approved_at",
+        None, ("SEL-01",),
     ),
     "security_valuation_revision": _DependencyConfig(
         "security_valuation_observations", "logical_observation_id", "status", "available",
     ),
     "market_turnover_revision": _DependencyConfig(
         "market_turnover_daily", "trade_date", "status", "available",
+        revision_field="revision",
     ),
     "m1b_revision": _DependencyConfig(
         "cbc_m1b_monthly", "period", "status", "available",
+        revision_field="revision",
     ),
 }
 
@@ -90,6 +102,9 @@ class DataFreshnessService:
         rows = self.foundation.provider_health_as_of(
             cutoff, provider_id=provider_id, resource_id=resource_id
         )
+        cutoff_trade_date = datetime.fromisoformat(
+            cutoff.replace("Z", "+00:00")
+        ).astimezone(ZoneInfo("Asia/Taipei")).date().isoformat()
         results = []
         blocking = {
             "provider_error", "schema_changed", "rejected",
@@ -115,9 +130,12 @@ class DataFreshnessService:
                 elif not actual or actual < expected:
                     freshness = "stale"
                     freshness_reason = "newer_official_session_expected"
-                else:
+                elif actual == cutoff_trade_date or expected == cutoff_trade_date:
                     freshness = "current"
                     freshness_reason = None
+                else:
+                    freshness = "unknown"
+                    freshness_reason = "official_calendar_coverage_incomplete"
             else:
                 freshness = "current"
                 freshness_reason = None
@@ -173,8 +191,12 @@ class DataFreshnessService:
         return dict(row) if row else None
 
     @staticmethod
-    def _approval_is_eligible(approval: dict[str, Any] | None) -> bool:
+    def _approval_is_eligible(
+        approval: dict[str, Any] | None, config: _DependencyConfig
+    ) -> bool:
         if not approval or approval.get("decision") != "approved":
+            return False
+        if config.approval_rule_ids and approval.get("rule_id") not in config.approval_rule_ids:
             return False
         evidence = approval.get("evidence_level")
         return evidence != "U" and (
@@ -209,6 +231,12 @@ class DataFreshnessService:
             checked["status"] = "blocked"
             return checked, "snapshot_dependency_missing", True
         exact = dict(exact)
+        if (
+            config.status_field
+            and exact[config.status_field] != config.allowed_status
+        ):
+            checked["status"] = "blocked"
+            return checked, "dependency_revoked", True
         logical_value = exact[config.logical_field]
         checked["logical_resource_id"] = logical_value
         rows = conn.execute(
@@ -216,12 +244,21 @@ class DataFreshnessService:
             SELECT * FROM {config.table}
             WHERE {config.logical_field} = ?
               AND available_at <= ? AND ingested_at <= ?
-            ORDER BY revision_number DESC, available_at DESC, ingested_at DESC, id DESC
+            ORDER BY {config.revision_field} DESC, available_at DESC,
+                     ingested_at DESC, id DESC
             """,
             (logical_value, cutoff, cutoff),
         ).fetchall()
         visible = [dict(row) for row in rows]
         latest_visible = visible[0] if visible else None
+        if (
+            latest_visible
+            and config.status_field
+            and latest_visible[config.status_field] != config.allowed_status
+        ):
+            checked["status"] = "blocked"
+            checked["latest_visible_resource_id"] = latest_visible["id"]
+            return checked, "dependency_revoked", True
         exact_approval = self._approval_for(conn, config, resource_id, cutoff)
         if exact_approval and exact_approval["decision"] == "revoked":
             checked["status"] = "blocked"
@@ -239,20 +276,22 @@ class DataFreshnessService:
                     continue
             if config.approval_table:
                 if not self._approval_is_eligible(
-                    self._approval_for(conn, config, row["id"], cutoff)
+                    self._approval_for(conn, config, row["id"], cutoff), config
                 ):
                     continue
             eligible.append(row)
         latest_eligible = eligible[0] if eligible else None
         if latest_eligible:
             checked["latest_eligible_resource_id"] = latest_eligible["id"]
-            checked["latest_eligible_revision_number"] = latest_eligible["revision_number"]
+            checked["latest_eligible_revision_number"] = latest_eligible[
+                config.revision_field
+            ]
         checked["candidate_awaiting_review"] = bool(
             config.approval_table
             and latest_visible
             and (not latest_eligible or latest_visible["id"] != latest_eligible["id"])
             and not self._approval_is_eligible(
-                self._approval_for(conn, config, latest_visible["id"], cutoff)
+                self._approval_for(conn, config, latest_visible["id"], cutoff), config
             )
         )
         if latest_eligible is None:
