@@ -309,9 +309,9 @@ class DataFoundationRepository:
             ).fetchone()
             if (
                 latest
-                and latest["raw_resource_revision_id"] == raw_resource_revision_id
                 and latest["session_status"] == session_status
                 and latest["status"] == status
+                and latest["note"] == note
             ):
                 return {**dict(latest), "created": False}
             revision_number = int(latest["revision_number"]) + 1 if latest else 1
@@ -356,3 +356,82 @@ class DataFoundationRepository:
         if row is None or row["status"] == "revoked":
             return None
         return dict(row)
+
+    def provider_health_as_of(
+        self,
+        knowledge_cutoff_at: str,
+        *,
+        provider_id: str | None = None,
+        resource_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        cutoff = normalize_utc_timestamp(
+            knowledge_cutoff_at, "knowledge_cutoff_at"
+        )
+        clauses = []
+        parameters: list[Any] = [cutoff, cutoff, cutoff, cutoff, cutoff, cutoff]
+        if provider_id:
+            clauses.append("r.provider_id = ?")
+            parameters.append(provider_id.strip().lower())
+        if resource_id:
+            clauses.append("r.resource_id = ?")
+            parameters.append(resource_id.strip().lower())
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                WITH latest_item AS (
+                    SELECT i.*, ROW_NUMBER() OVER (
+                        PARTITION BY i.resource_id
+                        ORDER BY i.started_at DESC, i.ingestion_run_item_id DESC
+                    ) AS rank_no
+                    FROM ingestion_run_items i
+                    WHERE i.started_at <= ?
+                ), successes AS (
+                    SELECT resource_id, MAX(completed_at) AS last_success_at
+                    FROM ingestion_run_items
+                    WHERE completed_at <= ? AND status IN (
+                        'accepted','partial','awaiting_review','quality_warning'
+                    )
+                    GROUP BY resource_id
+                ), latest_eligible AS (
+                    SELECT raw.*, ROW_NUMBER() OVER (
+                        PARTITION BY raw.resource_id
+                        ORDER BY raw.available_at DESC, raw.ingested_at DESC,
+                                 raw.raw_resource_revision_id DESC
+                    ) AS rank_no
+                    FROM raw_resource_revisions raw
+                    WHERE raw.available_at <= ? AND raw.ingested_at <= ?
+                      AND raw.eligibility_status = 'eligible'
+                ), expected_session AS (
+                    SELECT trade_date, ROW_NUMBER() OVER (
+                        ORDER BY trade_date DESC, revision_number DESC,
+                                 available_at DESC, ingested_at DESC
+                    ) AS rank_no
+                    FROM trading_calendar_revisions
+                    WHERE market = 'TW' AND available_at <= ? AND ingested_at <= ?
+                      AND status = 'available'
+                      AND session_status IN ('trading','special')
+                )
+                SELECT r.*, p.display_name, p.authority_tier, p.provider_type,
+                       li.started_at AS last_attempt_at,
+                       s.last_success_at,
+                       le.available_at AS last_eligible_revision_at,
+                       le.logical_revision_key AS last_eligible_logical_key,
+                       li.status AS latest_item_status,
+                       li.quality_status AS operational_status,
+                       li.reason AS latest_error,
+                       (SELECT trade_date FROM expected_session WHERE rank_no = 1)
+                           AS latest_expected_trade_date
+                FROM data_resources r
+                JOIN data_providers p ON p.provider_id = r.provider_id
+                LEFT JOIN latest_item li
+                  ON li.resource_id = r.resource_id AND li.rank_no = 1
+                LEFT JOIN successes s ON s.resource_id = r.resource_id
+                LEFT JOIN latest_eligible le
+                  ON le.resource_id = r.resource_id AND le.rank_no = 1
+                {where}
+                ORDER BY r.provider_id, r.resource_id
+                """,
+                parameters,
+            ).fetchall()
+        return [dict(row) for row in rows]

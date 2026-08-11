@@ -8,6 +8,7 @@ import type {
   PerformanceSummaryResponse,
   RuleRegistryResponse,
   SnapshotDetailResponse,
+  SnapshotDependencyStatusResponse,
   SnapshotListResponse,
 } from "./types";
 
@@ -75,6 +76,12 @@ export const evidenceApi = {
   snapshot(snapshotId: string, signal?: AbortSignal) {
     return fetchJson<SnapshotDetailResponse>(
       `/api/v2/analysis/snapshots/${encodeURIComponent(snapshotId)}`,
+      signal,
+    );
+  },
+  snapshotDependencyStatus(snapshotId: string, signal?: AbortSignal) {
+    return fetchJson<SnapshotDependencyStatusResponse>(
+      `/api/v2/analysis/snapshots/${encodeURIComponent(snapshotId)}/dependency-status`,
       signal,
     );
   },

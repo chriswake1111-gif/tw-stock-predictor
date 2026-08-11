@@ -77,11 +77,35 @@ describe("Phase 9 route behavior", () => {
   });
 
   it("keeps historical reconstruction persistently labeled", async () => {
-    mockReadApi();
+    const fetchSpy = mockReadApi();
     renderWithProviders(<Routes><Route path="/snapshots/:snapshotId" element={<SnapshotDetailPage />} /></Routes>, "/snapshots/snapshot-1");
     expect(await screen.findByText("歷史重建")).toBeInTheDocument();
     expect(screen.getByText(/只呈現已保存輸出|保存的分析輸出/)).toBeInTheDocument();
     expect(screen.getAllByText("部分資料可用").length).toBeGreaterThan(0);
+    expect(await screen.findByText("已有較新可用資料")).toBeInTheDocument();
+    expect(screen.getByText(/仍是有效的歷史紀錄/)).toBeInTheDocument();
+    expect(screen.getByText("newer_eligible_forward_eps_revision")).toBeInTheDocument();
+    expect(screen.getByText("newer_eligible_pe_scenario_revision")).toBeInTheDocument();
+    expect(fetchSpy.mock.calls.every(([, init]) => !init || init.method === "GET")).toBe(true);
+  });
+
+  it("fails closed when snapshot freshness is unknown", async () => {
+    mockReadApi(undefined, {
+      status: "available",
+      dependency_status: {
+        snapshot_id: "snapshot-1",
+        comparison_cutoff: "2026-08-11T02:00:00Z",
+        checked_at: "2026-08-11T02:00:00Z",
+        freshness_status: "unknown",
+        reasons: ["snapshot_has_no_dependencies"],
+        checked_dependencies: [],
+        historical_snapshot_validity: "unchanged",
+      },
+      cutoff_policy: { mode: "request_received_at", timezone: "UTC" },
+    });
+    renderWithProviders(<Routes><Route path="/snapshots/:snapshotId" element={<SnapshotDetailPage />} /></Routes>, "/snapshots/snapshot-1");
+    expect(await screen.findByText("無法確認資料新鮮度")).toBeInTheDocument();
+    expect(screen.getByText(/不可視為目前最新分析/)).toBeInTheDocument();
   });
 
   it("shows numerator denominator sample n horizon and origin", async () => {

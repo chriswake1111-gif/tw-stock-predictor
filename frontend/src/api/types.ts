@@ -186,6 +186,24 @@ export interface SnapshotDetailResponse {
   snapshot: SnapshotDetail;
 }
 
+export type SnapshotFreshnessStatus = "current" | "stale" | "unknown" | "blocked";
+
+export interface SnapshotDependencyStatus extends UnknownRecord {
+  snapshot_id: string;
+  comparison_cutoff: string;
+  checked_at: string;
+  freshness_status: SnapshotFreshnessStatus;
+  reasons: string[];
+  checked_dependencies: UnknownRecord[];
+  historical_snapshot_validity: "unchanged";
+}
+
+export interface SnapshotDependencyStatusResponse {
+  status: "available";
+  dependency_status: SnapshotDependencyStatus;
+  cutoff_policy: UnknownRecord;
+}
+
 export interface EvaluationRunSummary extends UnknownRecord {
   evaluation_run_id: string;
   evaluation_profile_revision_id: string;

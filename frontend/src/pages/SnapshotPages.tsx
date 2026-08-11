@@ -20,11 +20,30 @@ export function SnapshotHistoryPage() {
   </div>;
 }
 
+const freshnessCopy = {
+  current: { label: "依賴資料目前一致", detail: "依伺服器比較時點，快照仍使用最新可用且符合資格的資料。" },
+  stale: { label: "已有較新可用資料", detail: "此快照仍是有效的歷史紀錄，但不代表目前最新分析狀態。" },
+  unknown: { label: "無法確認資料新鮮度", detail: "系統採保守處理；快照仍保留，但不可視為目前最新分析。" },
+  blocked: { label: "目前依賴資格已受阻", detail: "核准或依賴狀態已改變；歷史快照不會因此被改寫。" },
+} as const;
+
+function SnapshotFreshnessCard({ snapshotId }: { snapshotId: string }) {
+  const query = useQuery({
+    queryKey: ["snapshot-dependency-status", snapshotId],
+    queryFn: ({ signal }) => evidenceApi.snapshotDependencyStatus(snapshotId, signal),
+  });
+  if (query.isLoading) return <section className="evidence-card freshness-card"><h2>資料新鮮度</h2><p className="muted">由伺服器檢查保存快照的資料依賴…</p></section>;
+  if (query.isError || !query.data) return <section className="evidence-card freshness-card" data-freshness="unknown"><h2>資料新鮮度</h2><strong>{freshnessCopy.unknown.label}</strong><p className="muted">{freshnessCopy.unknown.detail}</p></section>;
+  const freshness = query.data.dependency_status;
+  const copy = freshnessCopy[freshness.freshness_status];
+  return <section className="evidence-card freshness-card" data-freshness={freshness.freshness_status}><header><div><h2>資料新鮮度</h2><p className="muted">比較截止時間 {freshness.comparison_cutoff}</p></div><span className={`freshness-badge freshness-badge--${freshness.freshness_status}`}>{copy.label}</span></header><p>{copy.detail}</p>{freshness.reasons.length ? <ul className="freshness-reasons">{freshness.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul> : null}</section>;
+}
+
 export function SnapshotDetailPage() {
   const { snapshotId = "" } = useParams();
   const query = useQuery({ queryKey: ["snapshot", snapshotId], queryFn: ({ signal }) => evidenceApi.snapshot(snapshotId, signal) });
   if (query.isLoading) return <div className="page loading-state">讀取保存快照…</div>;
   if (query.isError || !query.data) return <div className="page"><SectionState status="insufficient_data" reason="snapshot_not_found" /></div>;
   const snapshot = query.data.snapshot;
-  return <div className="page"><Link className="back-link" to="/snapshots">← 返回歷史快照</Link><header className="workspace-heading"><div><span className="eyebrow">Stored output · hash verified by server</span><div className="title-row"><h1>{snapshot.symbol}</h1><StatusBadge status={snapshot.output.status} /></div><AsOfTimestamp value={snapshot.knowledge_cutoff_at} /></div><OriginBadge origin={snapshot.capture_mode} /></header><section className="evidence-card snapshot-provenance"><h2>快照來源</h2><dl className="compact-dl"><div><dt>Snapshot ID</dt><dd>{snapshot.snapshot_id}</dd></div><div><dt>建立時間</dt><dd>{snapshot.created_at}</dd></div><div><dt>模型版本</dt><dd>{snapshot.model_version}</dd></div><div><dt>輸出 SHA-256</dt><dd>{snapshot.output_sha256}</dd></div></dl></section><section className="evidence-card"><h2>保存的分析輸出</h2><p className="muted">以下區段直接來自 immutable snapshot。</p><div className="snapshot-sections">{["valuation", "liquidity", "technical_support", "target_confluence", "deployment_plan", "screening"].map((name) => { const section = snapshot.output[name]; return <div key={name}><strong>{name}</strong><StatusBadge status={typeof section === "object" && section ? (section as { status?: unknown }).status : "unknown"} /></div>; })}</div></section></div>;
+  return <div className="page"><Link className="back-link" to="/snapshots">← 返回歷史快照</Link><header className="workspace-heading"><div><span className="eyebrow">Stored output · hash verified by server</span><div className="title-row"><h1>{snapshot.symbol}</h1><StatusBadge status={snapshot.output.status} /></div><AsOfTimestamp value={snapshot.knowledge_cutoff_at} /></div><OriginBadge origin={snapshot.capture_mode} /></header><SnapshotFreshnessCard snapshotId={snapshot.snapshot_id} /><section className="evidence-card snapshot-provenance"><h2>快照來源</h2><dl className="compact-dl"><div><dt>Snapshot ID</dt><dd>{snapshot.snapshot_id}</dd></div><div><dt>建立時間</dt><dd>{snapshot.created_at}</dd></div><div><dt>模型版本</dt><dd>{snapshot.model_version}</dd></div><div><dt>輸出 SHA-256</dt><dd>{snapshot.output_sha256}</dd></div></dl></section><section className="evidence-card"><h2>保存的分析輸出</h2><p className="muted">以下區段直接來自 immutable snapshot。</p><div className="snapshot-sections">{["valuation", "liquidity", "technical_support", "target_confluence", "deployment_plan", "screening"].map((name) => { const section = snapshot.output[name]; return <div key={name}><strong>{name}</strong><StatusBadge status={typeof section === "object" && section ? (section as { status?: unknown }).status : "unknown"} /></div>; })}</div></section></div>;
 }

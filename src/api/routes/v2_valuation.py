@@ -58,6 +58,7 @@ from src.services.security_screening_service import SecurityScreeningService
 from src.services.technical_scenario_service import TechnicalScenarioService
 from src.services.evidence_analysis_service import EvidenceAnalysisService
 from src.services.performance_validation_service import PerformanceValidationService
+from src.services.data_freshness_service import DataFreshnessService
 
 
 router = APIRouter(prefix="/api/v2", tags=["evidence-model-v2"])
@@ -279,6 +280,10 @@ def _evidence_analysis_service() -> EvidenceAnalysisService:
 
 def _performance_validation_service() -> PerformanceValidationService:
     return PerformanceValidationService(os.getenv("DATABASE_PATH", "data/cache.db"))
+
+
+def _data_freshness_service() -> DataFreshnessService:
+    return DataFreshnessService(os.getenv("DATABASE_PATH", "data/cache.db"))
 
 
 def _require_write_access(api_key: str | None) -> str:
@@ -866,6 +871,46 @@ def get_market_overview(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.get("/data-freshness")
+def get_data_freshness(
+    knowledge_cutoff_at: str | None = Query(default=None),
+    as_of_date: str | None = Query(default=None),
+    provider: str | None = Query(default=None),
+    resource: str | None = Query(default=None),
+):
+    try:
+        cutoff, cutoff_policy = resolve_knowledge_cutoff(
+            knowledge_cutoff_at, as_of_date
+        )
+        resources = _data_freshness_service().provider_health(
+            cutoff, provider_id=provider, resource_id=resource
+        )
+        return {
+            "status": "available",
+            "knowledge_cutoff_at": cutoff,
+            "cutoff_policy": cutoff_policy,
+            "resources": _public_dto(resources),
+        }
+    except (ValueError, RuntimeError, sqlite3.Error) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/providers/status")
+def get_provider_status(
+    knowledge_cutoff_at: str | None = Query(default=None),
+    as_of_date: str | None = Query(default=None),
+    provider: str | None = Query(default=None),
+):
+    result = get_data_freshness(
+        knowledge_cutoff_at=knowledge_cutoff_at,
+        as_of_date=as_of_date,
+        provider=provider,
+        resource=None,
+    )
+    resources = result.pop("resources")
+    return {**result, "providers": resources}
+
+
 @router.get("/analysis/snapshots")
 def list_v2_analysis_snapshots(
     symbol: str | None = Query(default=None),
@@ -1142,6 +1187,33 @@ def get_v2_analysis_snapshot(snapshot_id: str):
     if result is None:
         raise HTTPException(status_code=404, detail="analysis_snapshot_not_found")
     return {"status": "available", "snapshot": _public_dto(result)}
+
+
+@router.get("/analysis/snapshots/{snapshot_id}/dependency-status")
+def get_snapshot_dependency_status(
+    snapshot_id: str,
+    comparison_cutoff: str | None = Query(default=None),
+):
+    try:
+        cutoff = (
+            normalize_utc_timestamp(comparison_cutoff, "comparison_cutoff")
+            if comparison_cutoff else utc_now_timestamp()
+        )
+        result = _data_freshness_service().snapshot_dependency_freshness(
+            snapshot_id, cutoff
+        )
+    except (ValueError, RuntimeError, sqlite3.Error) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="analysis_snapshot_not_found")
+    return {
+        "status": "available",
+        "dependency_status": _public_dto(result),
+        "cutoff_policy": {
+            "mode": "explicit_timestamp" if comparison_cutoff else "request_received_at",
+            "timezone": "UTC",
+        },
+    }
 
 
 @router.post("/evaluations/runs")
