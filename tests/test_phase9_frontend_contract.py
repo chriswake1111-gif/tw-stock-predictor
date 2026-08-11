@@ -1,10 +1,13 @@
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src.api.main import app
+from src.domain.analysis_snapshot import SynthesisProfileRevision, SynthesisProfileScope
 from src.engine.target_confluence import TargetConfluenceEngine
+from src.services.rule_registry import RuleRegistry
 from tests.test_phase7_api import create_approved_inputs, headers
 
 
@@ -170,29 +173,52 @@ def test_checked_frontend_contract_matches_real_analysis_and_snapshot_api(
     assert snapshot["output"]["status"] == refresh.json()["snapshot"]["output"]["status"]
 
 
-def test_checked_multi_cluster_contract_is_backend_engine_output():
+def _canonical_phase7_profile(method_families=("VAL-01", "FB-03", "FB-04")):
+    profile = SynthesisProfileRevision(
+        logical_profile_id="phase9-production-contract",
+        revision_number=1,
+        scope=SynthesisProfileScope.GLOBAL,
+        allowed_method_families=method_families,
+        overlap_tolerance="0.01",
+        evidence_strength_policy=(
+            {"minimum_independent_target_components": 2, "label": "moderate"},
+            {"minimum_independent_target_components": 3, "label": "high"},
+        ),
+        available_at="2026-08-01T00:00:00Z",
+        created_by="phase9-contract-test",
+        rationale="canonical production contract profile",
+    ).canonical_payload()
+    return {
+        **profile,
+        "id": "profile-contract",
+        "verified_approval_id": "approval-profile",
+    }
+
+
+def test_checked_production_confluence_contract_uses_canonical_domain_profile():
     contract = _contract()
     candidates = [
         _candidate("a-val", "VAL-01", "790", "805"),
         _candidate("a-fb", "FB-03", "790", "805"),
-        _candidate("b-val", "VAL-01", "920", "950"),
-        _candidate("b-fb", "FB-03", "920", "950"),
-        _candidate("b-val03", "VAL-03", "920", "950"),
     ]
-    profile = {
-        "id": "profile-contract",
-        "allowed_method_families": ["VAL-01", "FB-03", "VAL-03"],
-        "overlap_tolerance": "0.01",
-        "calculation_quantum": "0.0001",
-        "evidence_strength_policy": [
-            {"minimum_independent_target_components": 2, "label": "moderate"},
-            {"minimum_independent_target_components": 3, "label": "high"},
-        ],
-        "verified_approval_id": "approval-profile",
+    profile = _canonical_phase7_profile()
+    rule = RuleRegistry().describe("TGT-01")
+    rule_contract = contract["target_confluence_rule"]
+    assert rule_contract == {
+        "rule_id": "TGT-01",
+        "rule_version": rule["version"],
+        "evidence_level": rule["evidence_level"],
+        "implementation_mode": rule["implementation_mode"],
+        "project_operationalization": rule["project_operationalization"],
+        "approval_id": "approval-tgt",
     }
     result = TargetConfluenceEngine().evaluate(
         candidates=candidates,
         profile=profile,
-        rule_trace={"rule_id": "TGT-01"},
+        rule_trace=rule_contract,
     )
     assert result["overlap_ranges"] == contract["target_confluence_clusters"]
+    assert {item["method_family"] for item in candidates} == {"VAL-01", "FB-03"}
+
+    with pytest.raises(ValueError, match="unsupported method family"):
+        _canonical_phase7_profile(("VAL-01", "FB-03", "VAL-03"))

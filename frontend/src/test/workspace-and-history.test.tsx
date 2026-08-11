@@ -5,6 +5,11 @@ import { StockWorkspacePage } from "../pages/StockWorkspacePage";
 import { SnapshotDetailPage } from "../pages/SnapshotPages";
 import { ValidationRunPage } from "../pages/ValidationPages";
 import { mockReadApi, renderWithProviders } from "./render";
+import { analysisFixture } from "./fixtures";
+import {
+  syntheticMultiClusterTargets,
+  syntheticTwelveValuationCells,
+} from "./syntheticFixtures";
 
 describe("Phase 9 route behavior", () => {
   it("renders backend valuation fields without frontend aliases", async () => {
@@ -14,6 +19,21 @@ describe("Phase 9 route behavior", () => {
     expect(within(table).getAllByText("20")).toHaveLength(3);
     expect(within(table).getAllByText("100")).toHaveLength(3);
     expect(within(table).getAllByText("5")).toHaveLength(3);
+  });
+
+  it("renders all 12 synthetic backend-shaped valuation scenarios without selection", async () => {
+    mockReadApi({
+      ...analysisFixture,
+      valuation: {
+        ...analysisFixture.valuation,
+        target_matrix: syntheticTwelveValuationCells,
+      },
+    });
+    renderWithProviders(<Routes><Route path="/stocks/:symbol" element={<StockWorkspacePage />} /></Routes>, "/stocks/2330.TW");
+    const table = await screen.findByRole("table");
+    expect(within(table).getAllByRole("row")).toHaveLength(13);
+    expect(within(table).getAllByText(/synthetic-source-/)).toHaveLength(12);
+    expect(screen.getByText("12")).toBeInTheDocument();
   });
 
   it("renders FB-03 as target and FB-04 as support from backend semantic roles", async () => {
@@ -32,8 +52,14 @@ describe("Phase 9 route behavior", () => {
     expect(screen.queryByText(/勝率|成功率|預測機率|Strong Buy|強力買進|最佳模型/)).not.toBeInTheDocument();
   });
 
-  it("keeps disjoint target cluster metrics isolated", async () => {
-    mockReadApi();
+  it("keeps explicitly synthetic disjoint target cluster metrics isolated", async () => {
+    mockReadApi({
+      ...analysisFixture,
+      target_confluence: {
+        ...analysisFixture.target_confluence,
+        overlap_ranges: syntheticMultiClusterTargets,
+      },
+    });
     renderWithProviders(<Routes><Route path="/stocks/:symbol" element={<StockWorkspacePage />} /></Routes>, "/stocks/2330.TW");
     const clusterOne = (await screen.findByText("交集區 1")).closest("article");
     const clusterTwo = screen.getByText("交集區 2").closest("article");

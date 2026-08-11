@@ -91,21 +91,16 @@
       "target_method_families": ["FB-03", "VAL-01"],
       "candidate_ids": ["a-fb", "a-val"],
       "shared_dependencies": []
-    },
-    {
-      "cluster_id": "target_cluster_f68481855f09821f8c6e",
-      "price_low": "920",
-      "price_high": "950",
-      "price_unit": "TWD_per_share",
-      "candidate_count": 3,
-      "support_count": 3,
-      "independent_method_count": 3,
-      "evidence_strength": "high",
-      "target_method_families": ["FB-03", "VAL-01", "VAL-03"],
-      "candidate_ids": ["b-fb", "b-val", "b-val03"],
-      "shared_dependencies": []
     }
   ],
+  "target_confluence_rule": {
+    "rule_id": "TGT-01",
+    "rule_version": "2.0.0",
+    "evidence_level": "C",
+    "implementation_mode": "project_operationalization",
+    "project_operationalization": true,
+    "approval_id": "approval-tgt"
+  },
   "snapshot_detail": {
     "analysis_status_present": false,
     "status_source": "output.status"

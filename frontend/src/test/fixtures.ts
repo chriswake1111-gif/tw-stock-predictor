@@ -5,6 +5,7 @@ import type {
   ForwardPeTargetCell,
   MarketOverviewResponse,
   PerformanceSummaryResponse,
+  RuleTrace,
   SnapshotDetailResponse,
   TargetConfluenceCluster,
   TechnicalScenario,
@@ -15,6 +16,7 @@ const contracts = phase9Contracts as unknown as {
   technical_scenarios: TechnicalScenario[];
   deployment_entries: DeploymentEntry[];
   target_confluence_clusters: TargetConfluenceCluster[];
+  target_confluence_rule: RuleTrace;
 };
 
 const emptySection = { status: "needs_human_input" as const, reason: "approval_required", rules_used: [], source_resource_versions: [] };
@@ -46,9 +48,9 @@ export const analysisFixture: AnalysisResponse = {
     source_resource_versions: [],
   },
   target_confluence: {
-    status: "available", reason: null, independent_method_count: 3, evidence_strength: "high", summary_policy: "maximum_cluster_strength",
+    status: "available", reason: null, independent_method_count: 2, evidence_strength: "moderate", summary_policy: "maximum_cluster_strength",
     overlap_ranges: contracts.target_confluence_clusters,
-    rules_used: [{ rule_id: "TGT-01", rule_version: "2.0.0", evidence_level: "A", implementation_mode: "verified_core", approval_id: "approval-tgt" }], source_resource_versions: [],
+    rules_used: [contracts.target_confluence_rule], source_resource_versions: [],
   },
   deployment_plan: {
     status: "available",

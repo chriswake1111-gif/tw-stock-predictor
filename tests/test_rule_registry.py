@@ -62,3 +62,11 @@ def test_all_c_level_rules_disclose_project_operationalization():
 
     assert rules
     assert all(rule.project_operationalization for rule in rules if rule.evidence_level.value == "C")
+
+
+def test_tgt01_remains_grade_c_project_operationalization():
+    rule = RuleRegistry().describe("TGT-01")
+
+    assert rule["evidence_level"] == "C"
+    assert rule["implementation_mode"] == "project_operationalization"
+    assert rule["project_operationalization"] is True

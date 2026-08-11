@@ -56,3 +56,40 @@ Reviewers and users must keep the following distinctions explicit:
   automatically recommended.
 - Snapshot Detail shows immutable stored output, not reconstructed current
   analysis.
+
+## Second Code Review remediation
+
+The second review findings were closed without changing Phase 7 production
+model semantics:
+
+1. Silent valuation truncation — **CLOSED**. The workspace renders every
+   backend `target_matrix` cell in the original response order. A deterministic
+   12-cell presentation test verifies that all 12 rows remain accessible and no
+   best, primary, or representative valuation is selected.
+2. Domain-invalid production contract states — **CLOSED**. Production contract
+   fixtures contain only states reachable through canonical Evidence Model
+   domain validation. `TGT-01` remains Evidence Grade C with
+   `implementation_mode=project_operationalization` and
+   `project_operationalization=true`. The canonical Phase 7 profile rejects
+   `VAL-03` as an allowed synthesis family.
+
+Production and presentation-only fixtures are now deliberately separate:
+
+```text
+Validated Evidence Model domain
+        ↓
+backend / API response
+        ↓
+production contract fixture
+        ↓
+React presentation
+
+Explicit synthetic fixture
+        ↓
+UI robustness tests only
+```
+
+The synthetic multi-cluster fixture exercises independent `2 / moderate` and
+`3 / high` cards, but is explicitly marked non-production. It is not consumed
+by backend contract tests, acceptance parity tests, or production DTO evidence,
+and it does not imply that Phase 7 supports three independent target families.

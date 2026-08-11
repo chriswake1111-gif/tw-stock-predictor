@@ -6,7 +6,7 @@ import { EvidenceLevelBadge, MethodStrengthIndicator, OriginBadge, StatusBadge }
 import { sectionStatusValues } from "../api/types";
 import { statusPresentation } from "../lib/status";
 import { renderWithProviders } from "./render";
-import { snapshotFixture } from "./fixtures";
+import { analysisFixture, snapshotFixture } from "./fixtures";
 
 describe("Phase 9 semantic guardrails", () => {
   it("renders every authoritative status and fails unknown closed", () => {
@@ -33,5 +33,16 @@ describe("Phase 9 semantic guardrails", () => {
   it("models exact snapshot detail without inventing list-only analysis_status", () => {
     expect(snapshotFixture.snapshot).not.toHaveProperty("analysis_status");
     expect(snapshotFixture.snapshot.output.status).toBe("partial");
+  });
+
+  it("keeps production TGT-01 metadata at grade C project operationalization", () => {
+    expect(analysisFixture.target_confluence.rules_used).toEqual([
+      expect.objectContaining({
+        rule_id: "TGT-01",
+        evidence_level: "C",
+        implementation_mode: "project_operationalization",
+        project_operationalization: true,
+      }),
+    ]);
   });
 });
