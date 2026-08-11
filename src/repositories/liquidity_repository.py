@@ -121,6 +121,32 @@ class LiquidityRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def latest_turnover_revision(self, trade_date: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM market_turnover_daily
+                WHERE trade_date = ?
+                ORDER BY revision DESC, available_at DESC, ingested_at DESC, id DESC
+                LIMIT 1
+                """,
+                (trade_date,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def latest_m1b_revision(self, period: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM cbc_m1b_monthly
+                WHERE period = ? AND source_dataset = 'CBC EF15M01'
+                ORDER BY revision DESC, available_at DESC, ingested_at DESC, id DESC
+                LIMIT 1
+                """,
+                (period,),
+            ).fetchone()
+        return dict(row) if row else None
+
     def m1b_for_turnover(self, turnover: dict, knowledge_cutoff_at: str) -> dict | None:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
         public_at = min(turnover["available_at"], cutoff)

@@ -266,3 +266,93 @@ class DataFoundationRepository:
                 "SELECT * FROM raw_resource_revisions WHERE raw_resource_revision_id = ?",
                 (revision_id,),
             ).fetchone())
+
+    def latest_raw_revision(
+        self, provider_id: str, resource_id: str, logical_revision_key: str
+    ) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            return self._row(conn.execute(
+                """
+                SELECT * FROM raw_resource_revisions
+                WHERE provider_id = ? AND resource_id = ? AND logical_revision_key = ?
+                ORDER BY ingested_at DESC, raw_resource_revision_id DESC
+                LIMIT 1
+                """,
+                (provider_id, resource_id, logical_revision_key),
+            ).fetchone())
+
+    def add_calendar_revision(
+        self,
+        *,
+        calendar_revision_id: str,
+        raw_resource_revision_id: str,
+        market: str,
+        trade_date: str,
+        session_status: str,
+        available_at: str,
+        ingested_at: str,
+        note: str | None = None,
+        status: str = "available",
+    ) -> dict[str, Any]:
+        available = normalize_utc_timestamp(available_at, "available_at")
+        ingested = normalize_utc_timestamp(ingested_at, "ingested_at")
+        with self._connect() as conn:
+            latest = conn.execute(
+                """
+                SELECT * FROM trading_calendar_revisions
+                WHERE market = ? AND trade_date = ?
+                ORDER BY revision_number DESC, available_at DESC,
+                         ingested_at DESC, calendar_revision_id DESC
+                LIMIT 1
+                """,
+                (market.upper(), trade_date),
+            ).fetchone()
+            if (
+                latest
+                and latest["raw_resource_revision_id"] == raw_resource_revision_id
+                and latest["session_status"] == session_status
+                and latest["status"] == status
+            ):
+                return {**dict(latest), "created": False}
+            revision_number = int(latest["revision_number"]) + 1 if latest else 1
+            conn.execute(
+                """
+                INSERT INTO trading_calendar_revisions (
+                    calendar_revision_id, raw_resource_revision_id, market,
+                    trade_date, session_status, available_at, ingested_at,
+                    revision_number, status, note
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    calendar_revision_id, raw_resource_revision_id, market.upper(),
+                    trade_date, session_status, available, ingested,
+                    revision_number, status, note,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM trading_calendar_revisions WHERE calendar_revision_id = ?",
+                (calendar_revision_id,),
+            ).fetchone()
+            return {**dict(row), "created": True}
+
+    def calendar_session_as_of(
+        self, market: str, trade_date: str, knowledge_cutoff_at: str
+    ) -> dict[str, Any] | None:
+        cutoff = normalize_utc_timestamp(
+            knowledge_cutoff_at, "knowledge_cutoff_at"
+        )
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM trading_calendar_revisions
+                WHERE market = ? AND trade_date = ?
+                  AND available_at <= ? AND ingested_at <= ?
+                ORDER BY revision_number DESC, available_at DESC,
+                         ingested_at DESC, calendar_revision_id DESC
+                LIMIT 1
+                """,
+                (market.upper(), trade_date, cutoff, cutoff),
+            ).fetchone()
+        if row is None or row["status"] == "revoked":
+            return None
+        return dict(row)
