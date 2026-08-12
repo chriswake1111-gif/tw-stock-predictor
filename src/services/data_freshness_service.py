@@ -254,6 +254,7 @@ class DataFreshnessService:
             "resource_type": resource_type,
             "snapshot_resource_id": resource_id,
             "snapshot_revision_number": dependency.get("revision_number"),
+            "logical_resource_id": dependency.get("logical_resource_id"),
             "latest_eligible_resource_id": None,
             "latest_eligible_revision_number": None,
             "candidate_awaiting_review": False,
@@ -268,6 +269,15 @@ class DataFreshnessService:
             checked["status"] = "blocked"
             return checked, "snapshot_dependency_missing", True
         exact = dict(exact)
+        logical_value = exact[config.logical_field]
+        stored_logical_value = dependency.get("logical_resource_id")
+        checked["logical_resource_id"] = logical_value
+        if (
+            stored_logical_value not in {None, ""}
+            and str(stored_logical_value) != str(logical_value)
+        ):
+            checked["status"] = "blocked"
+            return checked, "snapshot_dependency_logical_identity_mismatch", True
         if resource_type == "m1b_revision":
             binding = LiquidityRepository.publication_binding_state_as_of_with_connection(
                 conn, exact, cutoff
@@ -282,8 +292,6 @@ class DataFreshnessService:
         ):
             checked["status"] = "blocked"
             return checked, "dependency_revoked", True
-        logical_value = exact[config.logical_field]
-        checked["logical_resource_id"] = logical_value
         rows = conn.execute(
             f"""
             SELECT * FROM {config.table}

@@ -7,6 +7,7 @@ from collections import defaultdict
 from decimal import Decimal
 from typing import Any, Callable
 
+from src.domain.analysis_snapshot import CaptureMode
 from src.domain.snapshot_comparison import (
     MISSING,
     ChangeCategory,
@@ -71,6 +72,8 @@ def supports_snapshot_contract(snapshot: dict[str, Any]) -> bool:
         "used_rule_versions": dict,
     }
     if any(not isinstance(snapshot.get(field), kind) for field, kind in required_types.items()):
+        return False
+    if snapshot["capture_mode"] not in {mode.value for mode in CaptureMode}:
         return False
     output = snapshot["output"]
     model = output.get("model")

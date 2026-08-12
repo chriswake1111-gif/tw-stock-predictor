@@ -43,6 +43,11 @@ M1B context reuses the Phase 10 exact publication-evidence binding rule. A later
 corrected accepted evidence event cannot make an older M1B revision eligible; a
 new M1B revision must explicitly bind that evidence ID.
 
+Every resolved dependency context preserves its logical resource identity before
+any blocked or revoked early return. Missing physical resources retain the
+immutable snapshot provenance identity, while a provenance/DB logical-identity
+mismatch fails closed.
+
 ## Read-only API
 
 ```text

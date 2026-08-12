@@ -18,6 +18,7 @@ from src.repositories.liquidity_repository import LiquidityRepository
 from src.services.market_liquidity_service import MarketLiquidityService
 from src.services.data_freshness_service import DataFreshnessService
 from src.services.production_ingestion_service import ProductionIngestionService
+from src.services.snapshot_comparison_service import SnapshotComparisonService
 
 
 class Response:
@@ -366,6 +367,7 @@ def test_cbc_revocation_is_asof_safe_and_reaccept_requires_new_m1b(tmp_path):
     assert corrected_checked["latest_visible_publication_evidence_id"] == corrected_evidence[
         "publication_evidence_id"
     ]
+    assert corrected_checked["logical_resource_id"] == "2026-05"
 
     corrected = service.ingest_cbc_m1b(
         payload,
@@ -383,8 +385,29 @@ def test_cbc_revocation_is_asof_safe_and_reaccept_requires_new_m1b(tmp_path):
     assert m2_checked["bound_publication_evidence_id"] == corrected_evidence[
         "publication_evidence_id"
     ]
+    assert m2_checked["logical_resource_id"] == "2026-05"
     assert not m2_blocked
     assert m2_reason != "publication_evidence_binding_invalid"
+    comparison_service = object.__new__(SnapshotComparisonService)
+    base_context = {
+        "freshness_status": "blocked",
+        "checked_dependencies": [corrected_checked],
+    }
+    comparison_context = {
+        "freshness_status": "current",
+        "checked_dependencies": [m2_checked],
+    }
+    expected_identity = "liquidity|m1b_revision|2026-05"
+    assert comparison_service._context_identity(corrected_checked) == expected_identity
+    assert comparison_service._context_identity(m2_checked) == expected_identity
+    context_deltas = comparison_service._compare_contexts(
+        base_context, comparison_context
+    )
+    assert {
+        item["canonical_identity"]
+        for item in context_deltas
+        if item["resource_type"] == "m1b_revision"
+    } == {expected_identity}
     latest = liquidity.latest_m1b_as_of("2026-08-11T02:22:00Z")
     historical = liquidity.latest_m1b_as_of("2026-08-11T02:09:59Z")
     recovered = MarketLiquidityService(db_path).analyze("2026-08-11T02:22:00Z")

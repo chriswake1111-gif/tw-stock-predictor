@@ -1,7 +1,11 @@
 from copy import deepcopy
 
 from src.domain.snapshot_comparison import canonical_value
-from src.engine.snapshot_comparator import SnapshotComparator, compatibility_reason
+from src.engine.snapshot_comparator import (
+    SnapshotComparator,
+    compatibility_reason,
+    supports_snapshot_contract,
+)
 
 
 def snapshot(snapshot_id="base"):
@@ -208,3 +212,22 @@ def test_snapshot_contract_validation_is_fail_closed():
         assert compatibility_reason(
             base, malformed, "2026-08-01T00:00:00Z"
         ) == "unsupported_comparison_snapshot_contract"
+
+
+def test_snapshot_contract_accepts_authoritative_capture_modes_only():
+    historical = snapshot()
+    assert supports_snapshot_contract(historical)
+
+    live = deepcopy(historical)
+    live["capture_mode"] = "live_refresh"
+    assert supports_snapshot_contract(live)
+
+    unsupported_base = deepcopy(historical)
+    unsupported_comparison = deepcopy(historical)
+    unsupported_base["capture_mode"] = "legacy_mode"
+    unsupported_comparison["capture_mode"] = "legacy_mode"
+    assert compatibility_reason(
+        unsupported_base,
+        unsupported_comparison,
+        "2026-08-01T00:00:00Z",
+    ) == "unsupported_comparison_snapshot_contract"

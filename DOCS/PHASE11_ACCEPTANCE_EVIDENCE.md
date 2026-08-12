@@ -62,14 +62,20 @@ git diff --check
 
 ## Recorded local results
 
-- First-review focused backend: 22 passed.
-- Full Python regression: 423 passed, with one existing TestClient deprecation warning.
+- Second-review focused Phase 11 backend: 42 passed.
+- Full Python regression: 426 passed, with one existing TestClient deprecation warning.
 - v1 API golden snapshot: 2 passed, with the same existing warning.
 - Frontend unit suite: 19 passed.
 - Frontend lint, typecheck and production build: passed.
 - Playwright visual suite: 4 passed across desktop and mobile projects. Browser
   launch required execution outside the filesystem sandbox; no application or
   external state was modified.
+
+Second-review regression evidence additionally covers blocked and missing
+dependencies retaining stable logical identity, a fail-closed stored/DB logical
+identity mismatch, one M1B period transitioning from blocked M1 to explicitly
+bound M2 without physical remove/add identity artifacts, and authoritative
+`CaptureMode` enum validation.
 
 ## Runtime artifact gate
 
