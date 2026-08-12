@@ -138,17 +138,19 @@ class SnapshotComparisonService:
                 )
                 if delta:
                     deltas.append(delta)
-            publication_before = {
-                "publication_evidence_id": before.get("publication_evidence_id"),
-                "status": before.get("publication_evidence_status"),
-            }
-            publication_after = {
-                "publication_evidence_id": after.get("publication_evidence_id"),
-                "status": after.get("publication_evidence_status"),
-            }
+            publication_fields = (
+                "bound_publication_evidence_id",
+                "latest_visible_publication_evidence_id",
+                "bound_evidence_status",
+                "publication_binding_status",
+            )
+            publication_before = {field: before.get(field) for field in publication_fields}
+            publication_after = {field: after.get(field) for field in publication_fields}
             if publication_before != publication_after and (
-                publication_before["publication_evidence_id"]
-                or publication_after["publication_evidence_id"]
+                publication_before["bound_publication_evidence_id"]
+                or publication_after["bound_publication_evidence_id"]
+                or publication_before["latest_visible_publication_evidence_id"]
+                or publication_after["latest_visible_publication_evidence_id"]
             ):
                 delta = self._context_delta(
                     change_type=CurrentContextChangeType.PUBLICATION_EVIDENCE_CHANGED,
@@ -213,6 +215,8 @@ class SnapshotComparisonService:
                 comparison_context = self.freshness.snapshot_dependency_freshness_with_connection(
                     conn, comparison, cutoff, checked_at=cutoff
                 )
+                base_context.pop("snapshot_output_sha256", None)
+                comparison_context.pop("snapshot_output_sha256", None)
                 response["base_current_context"] = base_context
                 response["comparison_current_context"] = comparison_context
                 response["current_context_deltas"] = self._compare_contexts(

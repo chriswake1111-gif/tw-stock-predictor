@@ -32,7 +32,9 @@ def test_timestamp_requires_timezone_and_normalizes_to_utc():
 def test_missing_null_set_and_record_values_have_distinct_stable_forms():
     assert canonical_value(MISSING) == {"state": "missing"}
     assert canonical_value(None) is None
-    assert canonical_value(["B", "A", "A"], value_kind="set") == ["A", "A", "B"]
+    assert canonical_value(["B", "A", "A"], value_kind="set") == ["A", "B"]
+    nested = [{"b": [2, 1], "a": 1}, {"a": 1, "b": [2, 1]}]
+    assert canonical_value(nested, value_kind="set") == [{"a": 1, "b": [2, 1]}]
     assert canonical_value({"b": 2.0, "a": [2, 1]}) == {
         "a": [2, 1],
         "b": "2",

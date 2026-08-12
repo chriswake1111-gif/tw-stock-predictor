@@ -15,6 +15,7 @@ from src.domain.data_foundation import (
 from src.domain.valuation import normalize_utc_timestamp
 from src.repositories.analysis_snapshot_repository import AnalysisSnapshotRepository
 from src.repositories.data_foundation_repository import DataFoundationRepository
+from src.repositories.liquidity_repository import LiquidityRepository
 from src.repositories.migration_runner import apply_valuation_migration
 
 
@@ -268,15 +269,13 @@ class DataFreshnessService:
             return checked, "snapshot_dependency_missing", True
         exact = dict(exact)
         if resource_type == "m1b_revision":
-            publication = self.foundation.latest_publication_evidence_as_of_with_connection(
-                conn, "cbc.m1b", str(exact[config.logical_field]), cutoff
+            binding = LiquidityRepository.publication_binding_state_as_of_with_connection(
+                conn, exact, cutoff
             )
-            checked["publication_evidence_id"] = (
-                publication.get("publication_evidence_id") if publication else None
-            )
-            checked["publication_evidence_status"] = (
-                publication.get("status") if publication else "unknown"
-            )
+            checked.update({key: value for key, value in binding.items() if key != "eligible"})
+            if not binding["eligible"]:
+                checked["status"] = "blocked"
+                return checked, "publication_evidence_binding_invalid", True
         if (
             config.status_field
             and exact[config.status_field] != config.allowed_status
@@ -314,6 +313,12 @@ class DataFreshnessService:
         eligible = []
         for row in visible:
             if config.status_field and row[config.status_field] != config.allowed_status:
+                continue
+            if resource_type == "m1b_revision" and not (
+                LiquidityRepository.publication_binding_state_as_of_with_connection(
+                    conn, row, cutoff
+                )["eligible"]
+            ):
                 continue
             if config.table == "pe_scenarios":
                 if row["effective_from"] and row["effective_from"] > cutoff:

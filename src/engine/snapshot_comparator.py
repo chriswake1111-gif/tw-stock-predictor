@@ -8,12 +8,12 @@ from decimal import Decimal
 from typing import Any, Callable
 
 from src.domain.snapshot_comparison import (
-    COMPARISON_SNAPSHOT_CONTRACT,
     MISSING,
     ChangeCategory,
     SnapshotDelta,
     StoredChangeType,
     canonical_decimal,
+    canonical_timestamp,
     canonical_value,
     delta_sort_key,
 )
@@ -49,20 +49,68 @@ SCREENING_FIELDS = (
     "profile",
 )
 
+REQUIRED_OUTPUT_SECTIONS = SECTION_NAMES + ("data_quality",)
+COMPARISON_COLLECTIONS = (
+    ("valuation", "target_matrix"),
+    ("technical_support", "scenarios"),
+    ("target_confluence", "overlap_ranges"),
+    ("deployment_plan", "plans"),
+)
+
+
+def supports_snapshot_contract(snapshot: dict[str, Any]) -> bool:
+    """Validate the persisted Phase 7-10 snapshot envelope fail-closed."""
+    required_types = {
+        "snapshot_id": str,
+        "symbol": str,
+        "knowledge_cutoff_at": str,
+        "capture_mode": str,
+        "model_version": str,
+        "output": dict,
+        "source_resource_versions": list,
+        "used_rule_versions": dict,
+    }
+    if any(not isinstance(snapshot.get(field), kind) for field, kind in required_types.items()):
+        return False
+    output = snapshot["output"]
+    model = output.get("model")
+    if not isinstance(model, dict):
+        return False
+    try:
+        envelope_cutoff = canonical_timestamp(snapshot["knowledge_cutoff_at"])
+        output_cutoff = canonical_timestamp(output.get("knowledge_cutoff_at"))
+    except ValueError:
+        return False
+    if (
+        output.get("symbol") != snapshot["symbol"]
+        or model.get("version") != snapshot["model_version"]
+        or output_cutoff != envelope_cutoff
+    ):
+        return False
+    if "capture_mode" in output and output["capture_mode"] != snapshot["capture_mode"]:
+        return False
+    if any(not isinstance(output.get(section), dict) for section in REQUIRED_OUTPUT_SECTIONS):
+        return False
+    if any(not isinstance(item, dict) for item in snapshot["source_resource_versions"]):
+        return False
+    for section, collection in COMPARISON_COLLECTIONS:
+        value = output[section].get(collection, [])
+        if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+            return False
+    return True
+
 
 def compatibility_reason(
     base: dict[str, Any], comparison: dict[str, Any], comparison_cutoff: str
 ) -> str | None:
+    if not supports_snapshot_contract(base) or not supports_snapshot_contract(comparison):
+        return "unsupported_comparison_snapshot_contract"
     if base["symbol"] != comparison["symbol"]:
         return "different_symbol"
     if base["model_version"] != comparison["model_version"]:
         return "different_model_version"
     if base["capture_mode"] != comparison["capture_mode"]:
         return "different_capture_mode"
-    if base.get("comparison_snapshot_contract", COMPARISON_SNAPSHOT_CONTRACT) != COMPARISON_SNAPSHOT_CONTRACT:
-        return "unsupported_comparison_snapshot_contract"
-    if comparison.get("comparison_snapshot_contract", COMPARISON_SNAPSHOT_CONTRACT) != COMPARISON_SNAPSHOT_CONTRACT:
-        return "unsupported_comparison_snapshot_contract"
     if comparison_cutoff < max(base["knowledge_cutoff_at"], comparison["knowledge_cutoff_at"]):
         return "comparison_cutoff_precedes_snapshot_cutoff"
     return None
@@ -263,6 +311,112 @@ class SnapshotComparator:
                     result.append(delta)
         return result
 
+    def _technical_changes(
+        self, base_output: dict[str, Any], comparison_output: dict[str, Any]
+    ) -> list[SnapshotDelta]:
+        def identity(row: dict[str, Any]) -> str:
+            return _identity(
+                {
+                    "rule_id": _path(row, "rule_trace.rule_id"),
+                    "semantic_role": row.get("semantic_role"),
+                    "scenario_type": row.get("scenario_type"),
+                },
+                ("rule_id", "semantic_role", "scenario_type"),
+            )
+
+        def anchor_projection(row: dict[str, Any]) -> dict[str, Any]:
+            trace = row.get("rule_trace") if isinstance(row.get("rule_trace"), dict) else {}
+            return {
+                field: row[field]
+                for field in (
+                    "anchor_set_revision_id", "anchor_revision_number",
+                    "anchor_available_at", "anchor_ingested_at", "anchors", "anchor_ids",
+                )
+                if field in row
+            } | {
+                field: trace[field]
+                for field in ("approval_id", "anchor_revision_ids")
+                if field in trace
+            }
+
+        def range_projection(row: dict[str, Any]) -> dict[str, Any]:
+            return {
+                field: row[field]
+                for field in ("calculated_level", "price_low", "price_high", "price", "unit", "price_unit")
+                if field in row
+            }
+
+        def semantic_deltas(
+            before_records: list[dict[str, Any]],
+            after_records: list[dict[str, Any]],
+            *,
+            projection: Callable[[dict[str, Any]], dict[str, Any]],
+            change_type: StoredChangeType,
+            field_path: str,
+        ) -> list[SnapshotDelta]:
+            left: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            right: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for record in before_records:
+                left[identity(record)].append(projection(record))
+            for record in after_records:
+                right[identity(record)].append(projection(record))
+            result: list[SnapshotDelta] = []
+            for group_key in sorted(left.keys() | right.keys()):
+                left_group = sorted(left[group_key], key=_stable_text)
+                right_group = sorted(right[group_key], key=_stable_text)
+                if len(left_group) == len(right_group) == 1:
+                    pairs = [(group_key, left_group[0], right_group[0])]
+                else:
+                    left_texts = [_stable_text(item) for item in left_group]
+                    right_texts = [_stable_text(item) for item in right_group]
+                    for common in sorted(set(left_texts) & set(right_texts)):
+                        count = min(left_texts.count(common), right_texts.count(common))
+                        for _ in range(count):
+                            left_texts.remove(common)
+                            right_texts.remove(common)
+                    pairs = [
+                        (f"{group_key}|removed:{offset}", json.loads(text), MISSING)
+                        for offset, text in enumerate(sorted(left_texts))
+                    ] + [
+                        (f"{group_key}|added:{offset}", MISSING, json.loads(text))
+                        for offset, text in enumerate(sorted(right_texts))
+                    ]
+                for item_identity, before, after in pairs:
+                    delta = self._delta(
+                        change_type=change_type,
+                        section="technical_support",
+                        identity=item_identity,
+                        field_path=field_path,
+                        before=before,
+                        after=after,
+                    )
+                    if delta:
+                        result.append(delta)
+            return result
+
+        base_scenarios = _path(base_output, "technical_support.scenarios")
+        comparison_scenarios = _path(comparison_output, "technical_support.scenarios")
+        base_records = base_scenarios if isinstance(base_scenarios, list) else []
+        comparison_records = comparison_scenarios if isinstance(comparison_scenarios, list) else []
+        deltas = semantic_deltas(
+            base_records, comparison_records,
+            projection=anchor_projection,
+            change_type=StoredChangeType.TECHNICAL_ANCHOR_CHANGED,
+            field_path="technical_support.scenarios.anchor_provenance",
+        )
+        for semantic_role, change_type in (
+            ("target", StoredChangeType.TARGET_RANGE_CHANGED),
+            ("support", StoredChangeType.SUPPORT_RANGE_CHANGED),
+        ):
+            deltas.extend(semantic_deltas(
+                [item for item in base_records if item.get("semantic_role") == semantic_role],
+                [item for item in comparison_records if item.get("semantic_role") == semantic_role],
+                projection=range_projection,
+                change_type=change_type,
+                field_path="technical_support.scenarios.price_range",
+            ))
+        return deltas
+
     def compare(self, base: dict[str, Any], comparison: dict[str, Any]) -> list[dict[str, Any]]:
         deltas = self._dependencies(base, comparison)
         deltas.extend(self._map_changes(
@@ -305,33 +459,32 @@ class SnapshotComparator:
         if delta:
             deltas.append(delta)
 
+        valuation_fields = (
+            "observation_logical_series_id", "pe_logical_series_id", "eps_scenario",
+            "fiscal_year", "status", "eps_value", "pe_value", "target_price", "formula",
+            "rule_ids",
+        )
+        valuation_projection = lambda row: {
+            field: row[field] for field in valuation_fields if field in row
+        }
         deltas.extend(self._record_list(
-            base_records=_path(base_output, "valuation.target_matrix") if isinstance(_path(base_output, "valuation.target_matrix"), list) else [],
-            comparison_records=_path(comparison_output, "valuation.target_matrix") if isinstance(_path(comparison_output, "valuation.target_matrix"), list) else [],
-            identity=lambda row: _identity(row, ("observation_id", "pe_scenario_id", "eps_scenario")),
+            base_records=[
+                valuation_projection(row)
+                for row in (_path(base_output, "valuation.target_matrix") if isinstance(_path(base_output, "valuation.target_matrix"), list) else [])
+            ],
+            comparison_records=[
+                valuation_projection(row)
+                for row in (_path(comparison_output, "valuation.target_matrix") if isinstance(_path(comparison_output, "valuation.target_matrix"), list) else [])
+            ],
+            identity=lambda row: _identity(
+                row,
+                ("observation_logical_series_id", "pe_logical_series_id", "eps_scenario", "fiscal_year"),
+            ),
             change_type=StoredChangeType.VALUATION_RANGE_CHANGED,
             section="valuation", field_path="valuation.target_matrix",
         ))
 
-        technical_identity = lambda row: _identity(
-            {
-                "rule_id": _path(row, "rule_trace.rule_id"),
-                "semantic_role": row.get("semantic_role"),
-                "scenario_type": row.get("scenario_type"),
-            },
-            ("rule_id", "semantic_role", "scenario_type"),
-        )
-        for semantic_role, change_type in (
-            ("target", StoredChangeType.TARGET_RANGE_CHANGED),
-            ("support", StoredChangeType.SUPPORT_RANGE_CHANGED),
-        ):
-            base_scenarios = [item for item in (_path(base_output, "technical_support.scenarios") if isinstance(_path(base_output, "technical_support.scenarios"), list) else []) if item.get("semantic_role") == semantic_role]
-            comparison_scenarios = [item for item in (_path(comparison_output, "technical_support.scenarios") if isinstance(_path(comparison_output, "technical_support.scenarios"), list) else []) if item.get("semantic_role") == semantic_role]
-            deltas.extend(self._record_list(
-                base_records=base_scenarios, comparison_records=comparison_scenarios,
-                identity=technical_identity, change_type=change_type,
-                section="technical_support", field_path="technical_support.scenarios",
-            ))
+        deltas.extend(self._technical_changes(base_output, comparison_output))
 
         base_clusters = {str(row.get("cluster_id")): row for row in (_path(base_output, "target_confluence.overlap_ranges") if isinstance(_path(base_output, "target_confluence.overlap_ranges"), list) else [])}
         comparison_clusters = {str(row.get("cluster_id")): row for row in (_path(comparison_output, "target_confluence.overlap_ranges") if isinstance(_path(comparison_output, "target_confluence.overlap_ranges"), list) else [])}

@@ -102,13 +102,11 @@ export const snapshotComparisonFixture: SnapshotComparisonResponse = {
     snapshot_id: "snapshot-1", symbol: "2330.TW",
     knowledge_cutoff_at: "2026-08-01T00:00:00Z",
     capture_mode: "historical_reconstruction", model_version: "2.0.0",
-    output_sha256: "abc123",
   },
   comparison_snapshot: {
     snapshot_id: "snapshot-2", symbol: "2330.TW",
     knowledge_cutoff_at: "2026-08-02T00:00:00Z",
     capture_mode: "historical_reconstruction", model_version: "2.0.0",
-    output_sha256: "def456",
   },
   compatibility: { compatible: true, reasons: [] },
   stored_deltas: [{

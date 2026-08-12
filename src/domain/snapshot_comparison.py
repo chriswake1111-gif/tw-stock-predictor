@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from enum import Enum
+import json
 from typing import Any
 
 
@@ -105,8 +106,14 @@ def canonical_value(value: Any, *, value_kind: str = "scalar") -> Any:
     if value_kind == "set":
         if not isinstance(value, (list, tuple, set)):
             raise ValueError("set-semantic comparison value must be a list")
-        items = [canonical_value(item) for item in value]
-        return sorted(items, key=repr)
+        unique: dict[str, Any] = {}
+        for item in value:
+            canonical = canonical_value(item)
+            key = json.dumps(
+                canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+            unique[key] = canonical
+        return [unique[key] for key in sorted(unique)]
     if isinstance(value, dict):
         return {
             str(key): canonical_value(value[key])
@@ -128,7 +135,6 @@ class SnapshotReference:
     knowledge_cutoff_at: str
     capture_mode: str
     model_version: str
-    output_sha256: str
 
     @classmethod
     def from_snapshot(cls, snapshot: dict[str, Any]) -> "SnapshotReference":
@@ -138,7 +144,6 @@ class SnapshotReference:
             knowledge_cutoff_at=canonical_timestamp(snapshot["knowledge_cutoff_at"]),
             capture_mode=snapshot["capture_mode"],
             model_version=snapshot["model_version"],
-            output_sha256=snapshot["output_sha256"],
         )
 
     def canonical_payload(self) -> dict[str, Any]:
@@ -148,7 +153,6 @@ class SnapshotReference:
             "knowledge_cutoff_at": self.knowledge_cutoff_at,
             "capture_mode": self.capture_mode,
             "model_version": self.model_version,
-            "output_sha256": self.output_sha256,
         }
 
 

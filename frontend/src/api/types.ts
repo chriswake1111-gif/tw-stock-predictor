@@ -231,7 +231,6 @@ export interface SnapshotComparisonReference {
   knowledge_cutoff_at: string;
   capture_mode: CaptureMode;
   model_version: string;
-  output_sha256: string;
 }
 
 export interface SnapshotComparisonContext {

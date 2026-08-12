@@ -19,6 +19,9 @@ This phase does not add a database migration, collector, write API, automatic ap
 - Missing is represented by an explicit sentinel and is distinct from JSON `null`.
 - Decimal values and timezone-aware timestamps are canonicalized before comparison.
 - Unknown or incompatible snapshot contracts fail closed as `incomparable_contract`.
+- Read-time validation requires the persisted envelope, envelope/output identity,
+  Phase 7-10 section containers, and registered comparison collections to match
+  `analysis_snapshot_v1`. Malformed snapshots receive no best-effort or partial diff.
 
 The comparator uses an explicit semantic whitelist. It does not recursively diff arbitrary JSON and it does not infer whether a change is favorable, unfavorable, bullish, or bearish.
 
@@ -26,9 +29,19 @@ The comparator uses an explicit semantic whitelist. It does not recursively diff
 
 `stored_deltas` describe immutable facts captured in the two snapshots, including registered dependency revisions, rule traces, profiles, section status, valuation cells, technical ranges, confluence, deployment, liquidity, and screening records.
 
+Valuation cells use logical EPS series, logical PE series, EPS scenario and fiscal
+year as stable identity. Revision-specific IDs remain provenance only. Technical
+anchor/provenance changes are reported separately from calculated target/support
+range changes; ambiguous duplicate groups use deterministic exact-match/add-remove
+semantics and do not infer lineage.
+
 `current_context_deltas` describe dependency state resolved at the requested `comparison_cutoff`. They are not allowed to rewrite or invalidate historical snapshot facts. The API exposes the base and comparison current contexts separately.
 
 Both snapshots and both dependency contexts are read in one SQLite read transaction with `query_only=ON`. Existing repository methods gained connection-aware variants so the service does not open independent read views during one comparison.
+
+M1B context reuses the Phase 10 exact publication-evidence binding rule. A later
+corrected accepted evidence event cannot make an older M1B revision eligible; a
+new M1B revision must explicitly bind that evidence ID.
 
 ## Read-only API
 

@@ -16,6 +16,7 @@ from src.domain.liquidity import MarketTurnoverObservation
 from src.repositories.data_foundation_repository import DataFoundationRepository
 from src.repositories.liquidity_repository import LiquidityRepository
 from src.services.market_liquidity_service import MarketLiquidityService
+from src.services.data_freshness_service import DataFreshnessService
 from src.services.production_ingestion_service import ProductionIngestionService
 
 
@@ -271,6 +272,20 @@ def test_cbc_revocation_is_asof_safe_and_reaccept_requires_new_m1b(tmp_path):
         observed_at="2026-08-11T10:00:00+08:00",
     )
     m1 = accepted["records"][0]
+    m1_dependency = {
+        "section": "liquidity", "resource_type": "m1b_revision",
+        "resource_id": m1["id"], "logical_resource_id": m1["period"],
+        "revision_number": m1["revision"],
+    }
+    freshness = DataFreshnessService(db_path)
+    with freshness._connect() as conn:
+        checked, reason, blocked = freshness._dependency_state(
+            conn, m1_dependency, "2026-08-11T02:06:00Z"
+        )
+    assert checked["publication_binding_status"] == "exact_accepted_binding"
+    assert checked["bound_publication_evidence_id"] == m1["publication_evidence_id"]
+    assert not blocked
+    assert reason != "publication_evidence_binding_invalid"
     turnover = liquidity.add_turnover(
         MarketTurnoverObservation(
             trade_date="2026-08-11",
@@ -296,6 +311,13 @@ def test_cbc_revocation_is_asof_safe_and_reaccept_requires_new_m1b(tmp_path):
         {"2026-05": revoked_evidence},
         observed_at="2026-08-11T10:10:00+08:00",
     )
+    with freshness._connect() as conn:
+        revoked_checked, revoked_reason, revoked_blocked = freshness._dependency_state(
+            conn, m1_dependency, "2026-08-11T02:10:00Z"
+        )
+    assert revoked_blocked
+    assert revoked_reason == "publication_evidence_binding_invalid"
+    assert revoked_checked["publication_binding_status"] == "binding_mismatch"
 
     assert before_revoke["status"] == "available"
     assert before_revoke["turnover_m1b_ratio_pct"] == 3.0
@@ -335,6 +357,15 @@ def test_cbc_revocation_is_asof_safe_and_reaccept_requires_new_m1b(tmp_path):
         ingested_at="2026-08-11T02:20:00Z",
     )
     assert liquidity.latest_m1b_as_of("2026-08-11T02:20:00Z") is None
+    with freshness._connect() as conn:
+        corrected_checked, corrected_reason, corrected_blocked = freshness._dependency_state(
+            conn, m1_dependency, "2026-08-11T02:20:00Z"
+        )
+    assert corrected_blocked
+    assert corrected_reason == "publication_evidence_binding_invalid"
+    assert corrected_checked["latest_visible_publication_evidence_id"] == corrected_evidence[
+        "publication_evidence_id"
+    ]
 
     corrected = service.ingest_cbc_m1b(
         payload,
@@ -342,6 +373,18 @@ def test_cbc_revocation_is_asof_safe_and_reaccept_requires_new_m1b(tmp_path):
         observed_at="2026-08-11T10:21:00+08:00",
     )
     m2 = corrected["records"][0]
+    with freshness._connect() as conn:
+        m2_checked, m2_reason, m2_blocked = freshness._dependency_state(
+            conn,
+            {**m1_dependency, "resource_id": m2["id"], "revision_number": m2["revision"]},
+            "2026-08-11T02:22:00Z",
+        )
+    assert m2_checked["publication_binding_status"] == "exact_accepted_binding"
+    assert m2_checked["bound_publication_evidence_id"] == corrected_evidence[
+        "publication_evidence_id"
+    ]
+    assert not m2_blocked
+    assert m2_reason != "publication_evidence_binding_invalid"
     latest = liquidity.latest_m1b_as_of("2026-08-11T02:22:00Z")
     historical = liquidity.latest_m1b_as_of("2026-08-11T02:09:59Z")
     recovered = MarketLiquidityService(db_path).analyze("2026-08-11T02:22:00Z")

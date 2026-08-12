@@ -1,5 +1,6 @@
 from copy import deepcopy
 
+from src.domain.snapshot_comparison import canonical_value
 from src.engine.snapshot_comparator import SnapshotComparator, compatibility_reason
 
 
@@ -23,10 +24,15 @@ def snapshot(snapshot_id="base"):
             "approval_ids": ["eps-approval-1"],
         }],
         "output": {
+            "symbol": "2330.TW",
+            "knowledge_cutoff_at": "2026-08-01T00:00:00Z",
+            "model": {"version": "2.0.0"},
             "data_quality": {"status": "available"},
             "valuation": {"status": "available", "target_matrix": [{
                 "observation_id": "eps-r1", "pe_scenario_id": "pe-r1",
-                "eps_scenario": "base", "target_price": 150,
+                "observation_logical_series_id": "eps-series",
+                "pe_logical_series_id": "pe-series",
+                "eps_scenario": "base", "fiscal_year": 2026, "target_price": 150,
             }]},
             "liquidity": {"status": "available", "turnover_m1b_ratio_pct": 10.0},
             "technical_support": {"status": "available", "scenarios": [{
@@ -113,6 +119,50 @@ def test_duplicate_technical_identity_is_exact_and_does_not_invent_lineage():
     assert len([item for item in deltas if item["change_type"] == "target_range_changed"]) == 2
 
 
+def test_valuation_revision_ids_do_not_change_logical_cell():
+    base = snapshot()
+    after = deepcopy(base)
+    cell = after["output"]["valuation"]["target_matrix"][0]
+    cell.update({"observation_id": "eps-r2", "pe_scenario_id": "pe-r2"})
+    assert "valuation_range_changed" not in change_types(
+        SnapshotComparator().compare(base, after)
+    )
+    cell["target_price"] = 820
+    assert "valuation_range_changed" in change_types(
+        SnapshotComparator().compare(base, after)
+    )
+
+
+def test_technical_anchor_and_price_changes_have_separate_taxonomy():
+    base = snapshot()
+    anchor_only = deepcopy(base)
+    anchor_only["output"]["technical_support"]["scenarios"][0]["anchor_set_revision_id"] = "anchor-r2"
+    types = change_types(SnapshotComparator().compare(base, anchor_only))
+    assert "technical_anchor_changed" in types
+    assert "target_range_changed" not in types
+
+    price_only = deepcopy(base)
+    price_only["output"]["technical_support"]["scenarios"][0]["calculated_level"] = 190
+    types = change_types(SnapshotComparator().compare(base, price_only))
+    assert "technical_anchor_changed" not in types
+    assert "target_range_changed" in types
+
+    both = deepcopy(anchor_only)
+    both["output"]["technical_support"]["scenarios"][0]["calculated_level"] = 190
+    types = change_types(SnapshotComparator().compare(base, both))
+    assert "technical_anchor_changed" in types
+    assert "target_range_changed" in types
+
+
+def test_set_semantics_deduplicate_scalars_and_nested_values():
+    assert canonical_value(["B", "A", "A"], value_kind="set") == ["A", "B"]
+    nested = [{"b": [2, 1], "a": 1}, {"a": 1, "b": [2, 1]}]
+    assert canonical_value(nested, value_kind="set") == [{"a": 1, "b": [2, 1]}]
+    assert canonical_value(list(reversed(nested)), value_kind="set") == canonical_value(
+        nested, value_kind="set"
+    )
+
+
 def test_missing_and_null_are_distinct_and_input_order_does_not_change_output():
     base = snapshot()
     after = deepcopy(base)
@@ -136,9 +186,25 @@ def test_compatibility_gate_reasons_are_deterministic():
     other = deepcopy(base)
     assert compatibility_reason(base, other, "2026-08-01T00:00:00Z") is None
     other["symbol"] = "2317.TW"
+    other["output"]["symbol"] = "2317.TW"
     assert compatibility_reason(base, other, "2026-08-01T00:00:00Z") == "different_symbol"
-    other = deepcopy(base); other["model_version"] = "3.0.0"
+    other = deepcopy(base); other["model_version"] = "3.0.0"; other["output"]["model"]["version"] = "3.0.0"
     assert compatibility_reason(base, other, "2026-08-01T00:00:00Z") == "different_model_version"
     other = deepcopy(base); other["capture_mode"] = "live_refresh"
     assert compatibility_reason(base, other, "2026-08-01T00:00:00Z") == "different_capture_mode"
     assert compatibility_reason(base, base, "2026-07-31T23:59:59Z") == "comparison_cutoff_precedes_snapshot_cutoff"
+
+
+def test_snapshot_contract_validation_is_fail_closed():
+    base = snapshot()
+    for mutate in (
+        lambda item: item["output"].pop("model"),
+        lambda item: item["output"].update(symbol="2317.TW"),
+        lambda item: item["output"]["model"].update(version="3.0.0"),
+        lambda item: item["output"].update(technical_support=[]),
+    ):
+        malformed = deepcopy(base)
+        mutate(malformed)
+        assert compatibility_reason(
+            base, malformed, "2026-08-01T00:00:00Z"
+        ) == "unsupported_comparison_snapshot_contract"

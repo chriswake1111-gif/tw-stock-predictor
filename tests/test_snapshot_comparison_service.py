@@ -18,6 +18,9 @@ def add_snapshot(repo, *, suffix, symbol="2330.TW", status="partial"):
             manual_approval_ids=[],
             output={
                 "status": status,
+                "symbol": symbol,
+                "knowledge_cutoff_at": "2026-08-01T00:00:00Z",
+                "model": {"version": "2.0.0"},
                 "data_quality": {"status": status},
                 "valuation": {"status": status, "target_matrix": []},
                 "liquidity": {"status": "insufficient_data"},
@@ -70,6 +73,7 @@ def test_service_comparison_is_deterministic_read_only_and_has_no_public_hash(tm
     assert first["comparison_snapshot_contract"] == "analysis_snapshot_v1"
     assert first["direction"]["absolute_delta_formula"] == "comparison_minus_base"
     assert "comparison_result_sha256" not in str(first)
+    assert "output_sha256" not in str(first)
     assert table_counts(db_path) == before
 
 
@@ -100,6 +104,37 @@ def test_incompatible_contract_returns_no_deltas_or_current_context(tmp_path):
     assert result["compatibility"] == {"compatible": False, "reasons": ["different_symbol"]}
     assert result["stored_deltas"] == []
     assert result["base_current_context"] is None
+
+
+def test_malformed_snapshot_contract_returns_no_partial_comparison(tmp_path):
+    db_path = str(tmp_path / "malformed.db")
+    repo = AnalysisSnapshotRepository(db_path)
+    base = add_snapshot(repo, suffix="base")
+    malformed_output = dict(base["output"])
+    malformed_output.pop("model")
+    malformed = repo.add(
+        AnalysisSnapshot(
+            symbol="2330.TW",
+            knowledge_cutoff_at="2026-08-01T00:00:00Z",
+            capture_mode=CaptureMode.HISTORICAL_RECONSTRUCTION,
+            model_version="2.0.0",
+            used_rule_versions={}, source_resource_versions=[], manual_approval_ids=[],
+            output=malformed_output,
+            created_at="2026-08-01T00:03:00Z",
+        ),
+        "comparison-malformed",
+    )
+    result = SnapshotComparisonService(db_path).compare(
+        base_snapshot_id=base["snapshot_id"],
+        comparison_snapshot_id=malformed["snapshot_id"],
+        comparison_cutoff="2026-08-02T00:00:00Z",
+    )
+    assert result["status"] == "incomparable_contract"
+    assert result["reasons"] == ["unsupported_comparison_snapshot_contract"]
+    assert result["stored_deltas"] == []
+    assert result["base_current_context"] is None
+    assert result["comparison_current_context"] is None
+    assert result["current_context_deltas"] == []
 
 
 def test_current_context_taxonomy_is_neutral_and_explicit():
