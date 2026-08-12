@@ -434,21 +434,32 @@ class DataFoundationRepository:
         knowledge_cutoff_at: str,
     ) -> dict[str, Any] | None:
         """Resolve the latest visible immutable evidence event for one logical key."""
+        with self._connect() as conn:
+            return self.latest_publication_evidence_as_of_with_connection(
+                conn, resource_id, logical_revision_key, knowledge_cutoff_at
+            )
+
+    def latest_publication_evidence_as_of_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        resource_id: str,
+        logical_revision_key: str,
+        knowledge_cutoff_at: str,
+    ) -> dict[str, Any] | None:
         cutoff = normalize_utc_timestamp(
             knowledge_cutoff_at, "knowledge_cutoff_at"
         )
-        with self._connect() as conn:
-            return self._row(conn.execute(
-                """
-                SELECT * FROM resource_publication_evidence
-                WHERE resource_id = ? AND logical_revision_key = ?
-                  AND ingested_at <= ?
-                ORDER BY revision_number DESC, ingested_at DESC,
-                         publication_evidence_id DESC
-                LIMIT 1
-                """,
-                (resource_id, logical_revision_key, cutoff),
-            ).fetchone())
+        return self._row(conn.execute(
+            """
+            SELECT * FROM resource_publication_evidence
+            WHERE resource_id = ? AND logical_revision_key = ?
+              AND ingested_at <= ?
+            ORDER BY revision_number DESC, ingested_at DESC,
+                     publication_evidence_id DESC
+            LIMIT 1
+            """,
+            (resource_id, logical_revision_key, cutoff),
+        ).fetchone())
 
     def latest_raw_revision(
         self, provider_id: str, resource_id: str, logical_revision_key: str
@@ -547,6 +558,22 @@ class DataFoundationRepository:
         provider_id: str | None = None,
         resource_id: str | None = None,
     ) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            return self.provider_health_as_of_with_connection(
+                conn,
+                knowledge_cutoff_at,
+                provider_id=provider_id,
+                resource_id=resource_id,
+            )
+
+    def provider_health_as_of_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        knowledge_cutoff_at: str,
+        *,
+        provider_id: str | None = None,
+        resource_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         cutoff = normalize_utc_timestamp(
             knowledge_cutoff_at, "knowledge_cutoff_at"
         )
@@ -559,8 +586,7 @@ class DataFoundationRepository:
             clauses.append("r.resource_id = ?")
             parameters.append(resource_id.strip().lower())
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        with self._connect() as conn:
-            rows = conn.execute(
+        rows = conn.execute(
                 f"""
                 WITH latest_item AS (
                     SELECT i.*, ROW_NUMBER() OVER (
@@ -631,5 +657,5 @@ class DataFoundationRepository:
                 ORDER BY r.provider_id, r.resource_id
                 """,
                 parameters,
-            ).fetchall()
+        ).fetchall()
         return [dict(row) for row in rows]

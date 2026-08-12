@@ -5,6 +5,7 @@ import { StockWorkspacePage } from "./pages/StockWorkspacePage";
 import { MarketOverviewPage } from "./pages/MarketOverviewPage";
 import { RuleLibraryPage } from "./pages/RuleLibraryPage";
 import { SnapshotDetailPage, SnapshotHistoryPage } from "./pages/SnapshotPages";
+import { SnapshotComparisonPage } from "./pages/SnapshotComparisonPage";
 import { ValidationHistoryPage, ValidationRunPage } from "./pages/ValidationPages";
 
 export default function App() {
@@ -15,6 +16,7 @@ export default function App() {
         <Route path="/market" element={<MarketOverviewPage />} />
         <Route path="/stocks/:symbol" element={<StockWorkspacePage />} />
         <Route path="/snapshots" element={<SnapshotHistoryPage />} />
+        <Route path="/snapshots/compare" element={<SnapshotComparisonPage />} />
         <Route path="/snapshots/:snapshotId" element={<SnapshotDetailPage />} />
         <Route path="/validation" element={<ValidationHistoryPage />} />
         <Route path="/validation/runs/:runId" element={<ValidationRunPage />} />

@@ -15,6 +15,7 @@ from src.domain.data_foundation import (
 from src.domain.valuation import normalize_utc_timestamp
 from src.repositories.analysis_snapshot_repository import AnalysisSnapshotRepository
 from src.repositories.data_foundation_repository import DataFoundationRepository
+from src.repositories.liquidity_repository import LiquidityRepository
 from src.repositories.migration_runner import apply_valuation_migration
 
 
@@ -110,6 +111,28 @@ class DataFreshnessService:
         rows = self.foundation.provider_health_as_of(
             cutoff, provider_id=provider_id, resource_id=resource_id
         )
+        return self._provider_health_from_rows(rows, cutoff)
+
+    def provider_health_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        knowledge_cutoff_at: str,
+        *,
+        provider_id: str | None = None,
+        resource_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        cutoff = normalize_utc_timestamp(
+            knowledge_cutoff_at, "knowledge_cutoff_at"
+        )
+        rows = self.foundation.provider_health_as_of_with_connection(
+            conn, cutoff, provider_id=provider_id, resource_id=resource_id
+        )
+        return self._provider_health_from_rows(rows, cutoff)
+
+    @staticmethod
+    def _provider_health_from_rows(
+        rows: list[dict[str, Any]], cutoff: str
+    ) -> list[dict[str, Any]]:
         cutoff_trade_date = datetime.fromisoformat(
             cutoff.replace("Z", "+00:00")
         ).astimezone(ZoneInfo("Asia/Taipei")).date().isoformat()
@@ -231,6 +254,7 @@ class DataFreshnessService:
             "resource_type": resource_type,
             "snapshot_resource_id": resource_id,
             "snapshot_revision_number": dependency.get("revision_number"),
+            "logical_resource_id": dependency.get("logical_resource_id"),
             "latest_eligible_resource_id": None,
             "latest_eligible_revision_number": None,
             "candidate_awaiting_review": False,
@@ -245,14 +269,29 @@ class DataFreshnessService:
             checked["status"] = "blocked"
             return checked, "snapshot_dependency_missing", True
         exact = dict(exact)
+        logical_value = exact[config.logical_field]
+        stored_logical_value = dependency.get("logical_resource_id")
+        checked["logical_resource_id"] = logical_value
+        if (
+            stored_logical_value not in {None, ""}
+            and str(stored_logical_value) != str(logical_value)
+        ):
+            checked["status"] = "blocked"
+            return checked, "snapshot_dependency_logical_identity_mismatch", True
+        if resource_type == "m1b_revision":
+            binding = LiquidityRepository.publication_binding_state_as_of_with_connection(
+                conn, exact, cutoff
+            )
+            checked.update({key: value for key, value in binding.items() if key != "eligible"})
+            if not binding["eligible"]:
+                checked["status"] = "blocked"
+                return checked, "publication_evidence_binding_invalid", True
         if (
             config.status_field
             and exact[config.status_field] != config.allowed_status
         ):
             checked["status"] = "blocked"
             return checked, "dependency_revoked", True
-        logical_value = exact[config.logical_field]
-        checked["logical_resource_id"] = logical_value
         rows = conn.execute(
             f"""
             SELECT * FROM {config.table}
@@ -282,6 +321,12 @@ class DataFreshnessService:
         eligible = []
         for row in visible:
             if config.status_field and row[config.status_field] != config.allowed_status:
+                continue
+            if resource_type == "m1b_revision" and not (
+                LiquidityRepository.publication_binding_state_as_of_with_connection(
+                    conn, row, cutoff
+                )["eligible"]
+            ):
                 continue
             if config.table == "pe_scenarios":
                 if row["effective_from"] and row["effective_from"] > cutoff:
@@ -317,8 +362,8 @@ class DataFreshnessService:
         if production_resources:
             operational = []
             for production_resource in production_resources:
-                states = self.provider_health(
-                    cutoff, resource_id=production_resource
+                states = self.provider_health_with_connection(
+                    conn, cutoff, resource_id=production_resource
                 )
                 operational.extend(states)
             checked["operational_resources"] = [
@@ -366,23 +411,38 @@ class DataFreshnessService:
         cutoff = normalize_utc_timestamp(
             comparison_cutoff, "comparison_cutoff"
         )
-        snapshot = self.snapshots.get(snapshot_id)
-        if snapshot is None:
-            return None
+        with self._connect() as conn:
+            snapshot = self.snapshots.get_with_connection(conn, snapshot_id)
+            if snapshot is None:
+                return None
+            return self.snapshot_dependency_freshness_with_connection(
+                conn, snapshot, cutoff, checked_at=checked_at
+            )
+
+    def snapshot_dependency_freshness_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        snapshot: dict[str, Any],
+        comparison_cutoff: str,
+        *,
+        checked_at: str | None = None,
+    ) -> dict[str, Any]:
+        cutoff = normalize_utc_timestamp(
+            comparison_cutoff, "comparison_cutoff"
+        )
         checked_dependencies = []
         reasons = []
         blocked = False
         if not snapshot["source_resource_versions"]:
             reasons.append("snapshot_has_no_dependencies")
-        with self._connect() as conn:
-            for dependency in snapshot["source_resource_versions"]:
-                checked, reason, is_blocked = self._dependency_state(
-                    conn, dependency, cutoff
-                )
-                checked_dependencies.append(checked)
-                if reason:
-                    reasons.append(reason)
-                blocked = blocked or is_blocked
+        for dependency in snapshot["source_resource_versions"]:
+            checked, reason, is_blocked = self._dependency_state(
+                conn, dependency, cutoff
+            )
+            checked_dependencies.append(checked)
+            if reason:
+                reasons.append(reason)
+            blocked = blocked or is_blocked
         if blocked:
             status = SnapshotFreshnessStatus.BLOCKED
         elif any(item["status"] == "stale" for item in checked_dependencies):
@@ -394,7 +454,7 @@ class DataFreshnessService:
         else:
             status = SnapshotFreshnessStatus.CURRENT
         result = SnapshotFreshnessResult(
-            snapshot_id=snapshot_id,
+            snapshot_id=snapshot["snapshot_id"],
             comparison_cutoff=cutoff,
             checked_at=checked_at or cutoff,
             freshness_status=status,

@@ -7,6 +7,7 @@ import type {
   PerformanceSummaryResponse,
   RuleTrace,
   SnapshotDetailResponse,
+  SnapshotComparisonResponse,
   TargetConfluenceCluster,
   TechnicalScenario,
 } from "../api/types";
@@ -85,6 +86,57 @@ export const snapshotFixture: SnapshotDetailResponse = {
     model_version: "2.0.0", created_at: "2026-08-10T02:00:00Z", supersedes_snapshot_id: null,
     used_rule_versions: {}, source_resource_versions: [], manual_approval_ids: [], output: analysisFixture, output_sha256: "abc123",
   },
+};
+
+export const snapshotComparisonFixture: SnapshotComparisonResponse = {
+  status: "available",
+  comparison_policy_version: "1.0",
+  comparison_snapshot_contract: "analysis_snapshot_v1",
+  comparison_cutoff: "2026-08-12T04:00:00Z",
+  direction: {
+    base_snapshot_id: "snapshot-1",
+    comparison_snapshot_id: "snapshot-2",
+    absolute_delta_formula: "comparison_minus_base",
+  },
+  base_snapshot: {
+    snapshot_id: "snapshot-1", symbol: "2330.TW",
+    knowledge_cutoff_at: "2026-08-01T00:00:00Z",
+    capture_mode: "historical_reconstruction", model_version: "2.0.0",
+  },
+  comparison_snapshot: {
+    snapshot_id: "snapshot-2", symbol: "2330.TW",
+    knowledge_cutoff_at: "2026-08-02T00:00:00Z",
+    capture_mode: "historical_reconstruction", model_version: "2.0.0",
+  },
+  compatibility: { compatible: true, reasons: [] },
+  stored_deltas: [{
+    category: "stored_fact", change_type: "resource_revision_changed",
+    section: "valuation", resource_type: "forward_eps_revision",
+    canonical_identity: "valuation|forward_eps_revision|eps-series",
+    field_path: "source_resource_versions.revision",
+    before: { resource_id: "eps-r1", revision_number: 1 },
+    after: { resource_id: "eps-r2", revision_number: 2 },
+  }],
+  base_current_context: {
+    snapshot_id: "snapshot-1", comparison_cutoff: "2026-08-12T04:00:00Z",
+    checked_at: "2026-08-12T04:00:00Z", freshness_status: "blocked",
+    reasons: ["approval_revoked"], checked_dependencies: [],
+    historical_snapshot_validity: "unchanged",
+  },
+  comparison_current_context: {
+    snapshot_id: "snapshot-2", comparison_cutoff: "2026-08-12T04:00:00Z",
+    checked_at: "2026-08-12T04:00:00Z", freshness_status: "current",
+    reasons: [], checked_dependencies: [], historical_snapshot_validity: "unchanged",
+  },
+  current_context_deltas: [{
+    category: "current_context", change_type: "approval_revoked",
+    section: "valuation", resource_type: "forward_eps_revision",
+    canonical_identity: "valuation|forward_eps_revision|eps-series",
+    field_path: "checked_dependencies.effective_approval_status",
+    before: "approved", after: "revoked",
+  }],
+  warnings: ["current_dependency_context_requires_review"],
+  reasons: ["approval_revoked"],
 };
 
 export const performanceFixture: PerformanceSummaryResponse = {

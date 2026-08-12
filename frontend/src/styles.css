@@ -164,6 +164,32 @@ button, a, input { -webkit-tap-highlight-color: transparent; }
 .rule-library h2 { margin: 0; font-size: 18px; }
 .forbidden-box { display: flex; gap: 10px; margin-top: 14px; padding: 11px; border-left: 3px solid #a65a00; background: var(--attention-surface); }
 .forbidden-box p { margin: 4px 0 0; color: #6e470f; font-size: 12px; }
+.snapshot-compare-link { display: inline-flex; align-items: center; min-height: 40px; color: #174da9; font-weight: 750; text-decoration: none; }
+.comparison-form { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) minmax(260px, 1.4fr) auto; align-items: end; gap: 14px; margin: 22px 0 8px; padding: 18px; border: 1px solid var(--border); background: var(--surface); }
+.comparison-form label { display: grid; gap: 7px; color: var(--muted); font-size: 12px; font-weight: 750; }
+.comparison-form select, .comparison-form input { min-width: 0; width: 100%; height: 42px; padding: 0 10px; border: 1px solid var(--border); border-radius: 5px; background: #fff; color: var(--ink); }
+.comparison-form button { min-height: 42px; padding: 0 16px; border: 1px solid #174da9; border-radius: 5px; background: #174da9; color: #fff; cursor: pointer; font-weight: 750; }
+.comparison-timezone-note { margin: 0 0 22px; color: var(--muted); font-size: 12px; }
+.comparison-results { display: grid; gap: 16px; }
+.comparison-summary dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0; }
+.comparison-summary dl div { min-width: 0; padding: 12px; border: 1px solid var(--border); background: var(--surface); }
+.comparison-summary dt { color: var(--muted); font-size: 11px; }
+.comparison-summary dd { margin: 5px 0 0; overflow-wrap: anywhere; font-weight: 750; }
+.comparison-count { flex: 0 0 auto; color: var(--muted); font-size: 12px; font-weight: 750; }
+.comparison-empty { margin: 0; padding: 18px; border: 1px dashed var(--border); color: var(--muted); text-align: center; }
+.comparison-deltas { display: grid; gap: 10px; }
+.comparison-deltas article { min-width: 0; padding: 14px; border: 1px solid var(--border); background: var(--surface); }
+.comparison-deltas article > header { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.comparison-deltas article > header span, .comparison-deltas small { color: var(--muted); font-size: 11px; }
+.comparison-deltas code { display: block; overflow-wrap: anywhere; color: #174da9; font-size: 12px; }
+.comparison-deltas dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
+.comparison-deltas dl div { min-width: 0; padding: 9px; border-left: 2px solid #b8c7da; background: #fff; }
+.comparison-deltas dt { color: var(--muted); font-size: 10px; text-transform: uppercase; }
+.comparison-deltas dd { margin: 5px 0 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.comparison-context-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.comparison-context-grid article { min-width: 0; display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border); background: var(--surface); }
+.comparison-context-grid ul { margin: 0; padding-left: 20px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.comparison-incomparable ul { margin: 0; padding-left: 20px; }
 
 @media (max-width: 900px) {
   :root { --topbar-height: auto; }
@@ -196,6 +222,9 @@ button, a, input { -webkit-tap-highlight-color: transparent; }
   .record-meta { grid-column: 2 / -1; grid-row: 2; flex-wrap: wrap; }
   .snapshot-sections { grid-template-columns: 1fr; }
   .rule-library > article > header { flex-direction: column; }
+  .comparison-form { grid-template-columns: 1fr; }
+  .comparison-summary dl, .comparison-context-grid, .comparison-deltas dl { grid-template-columns: 1fr; }
+  .comparison-summary > header, .comparison-section > header { flex-direction: column; }
 }
 
 @media (prefers-reduced-motion: reduce) {

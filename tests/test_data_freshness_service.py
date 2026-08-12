@@ -123,6 +123,50 @@ def turnover(revision, *, status="available", available_at):
     )
 
 
+def test_missing_dependency_preserves_snapshot_logical_identity(tmp_path):
+    db_path = str(tmp_path / "missing-logical.db")
+    service = DataFreshnessService(db_path)
+    dependency = {
+        "section": "valuation",
+        "resource_type": "forward_eps_revision",
+        "resource_id": "missing-eps-revision",
+        "logical_resource_id": "2330-2027-broker-a",
+        "revision_number": 1,
+    }
+    with service._connect() as conn:
+        checked, reason, blocked = service._dependency_state(
+            conn, dependency, "2026-08-01T00:00:00Z"
+        )
+    assert checked["logical_resource_id"] == "2330-2027-broker-a"
+    assert checked["status"] == "blocked"
+    assert reason == "snapshot_dependency_missing"
+    assert blocked
+
+
+def test_dependency_logical_identity_mismatch_fails_closed(tmp_path):
+    db_path = str(tmp_path / "logical-mismatch.db")
+    repo = ForwardEPSRepository(db_path)
+    stored = repo.add_forward_eps(
+        eps(), "logical-mismatch", ingested_at="2026-07-01T08:00:00Z"
+    )
+    service = DataFreshnessService(db_path)
+    dependency = {
+        "section": "valuation",
+        "resource_type": "forward_eps_revision",
+        "resource_id": stored["id"],
+        "logical_resource_id": "different-logical-series",
+        "revision_number": stored["revision_number"],
+    }
+    with service._connect() as conn:
+        checked, reason, blocked = service._dependency_state(
+            conn, dependency, "2026-08-01T00:00:00Z"
+        )
+    assert checked["logical_resource_id"] == stored["logical_series_id"]
+    assert checked["status"] == "blocked"
+    assert reason == "snapshot_dependency_logical_identity_mismatch"
+    assert blocked
+
+
 def test_unapproved_candidate_does_not_make_snapshot_stale(tmp_path):
     db_path = str(tmp_path / "freshness.db")
     repo = ForwardEPSRepository(db_path)

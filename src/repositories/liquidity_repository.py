@@ -94,7 +94,7 @@ class LiquidityRepository:
     ) -> dict | None:
         """Return M1B only when its effective publication evidence remains valid."""
         with self._connect() as conn:
-            row = conn.execute(
+            rows = conn.execute(
                 """
                 WITH ranked_m1b AS (
                     SELECT m.*, ROW_NUMBER() OVER (
@@ -103,38 +103,78 @@ class LiquidityRepository:
                     ) AS rank_no
                     FROM cbc_m1b_monthly m
                     WHERE available_at <= ? AND ingested_at <= ?
-                ), ranked_evidence AS (
-                    SELECT e.*, ROW_NUMBER() OVER (
-                        PARTITION BY resource_id, logical_revision_key
-                        ORDER BY revision_number DESC, ingested_at DESC,
-                                 publication_evidence_id DESC
-                    ) AS evidence_rank_no
-                    FROM resource_publication_evidence e
-                    WHERE resource_id = 'cbc.m1b' AND ingested_at <= ?
                 )
                 SELECT m.* FROM ranked_m1b m
-                LEFT JOIN ranked_evidence e
-                  ON e.logical_revision_key = m.period
-                 AND e.evidence_rank_no = 1
                 WHERE m.rank_no = 1 AND m.status = 'available'
-                  AND (
-                    (e.publication_evidence_id IS NULL
-                     AND m.publication_evidence_id IS NULL)
-                    OR
-                    (e.status = 'accepted'
-                     AND m.publication_evidence_id = e.publication_evidence_id)
-                  )
                 ORDER BY m.available_at DESC, m.period DESC, m.revision DESC,
                          m.ingested_at DESC
-                LIMIT 1
                 """,
-                (
-                    m1b_available_cutoff,
-                    knowledge_cutoff_at,
-                    knowledge_cutoff_at,
-                ),
+                (m1b_available_cutoff, knowledge_cutoff_at),
+            ).fetchall()
+            for row in rows:
+                item = dict(row)
+                if self.publication_binding_state_as_of_with_connection(
+                    conn, item, knowledge_cutoff_at
+                )["eligible"]:
+                    return item
+        return None
+
+    @staticmethod
+    def publication_binding_state_as_of_with_connection(
+        conn: sqlite3.Connection,
+        m1b: dict[str, Any],
+        knowledge_cutoff_at: str,
+    ) -> dict[str, Any]:
+        """Resolve the exact Phase 10 M1B-to-publication-evidence binding."""
+        cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
+        bound_id = m1b.get("publication_evidence_id")
+        bound = None
+        if bound_id:
+            bound = conn.execute(
+                """
+                SELECT * FROM resource_publication_evidence
+                WHERE publication_evidence_id = ? AND ingested_at <= ?
+                """,
+                (bound_id, cutoff),
             ).fetchone()
-        return dict(row) if row else None
+        latest = conn.execute(
+            """
+            SELECT * FROM resource_publication_evidence
+            WHERE resource_id = 'cbc.m1b' AND logical_revision_key = ?
+              AND ingested_at <= ?
+            ORDER BY revision_number DESC, ingested_at DESC,
+                     publication_evidence_id DESC
+            LIMIT 1
+            """,
+            (str(m1b["period"]), cutoff),
+        ).fetchone()
+        bound_row = dict(bound) if bound else None
+        latest_row = dict(latest) if latest else None
+        if latest_row is None and bound_id is None:
+            eligible = True
+            binding_status = "unbound_no_publication_evidence"
+        elif (
+            latest_row is not None
+            and latest_row.get("status") == "accepted"
+            and bound_id == latest_row.get("publication_evidence_id")
+        ):
+            eligible = True
+            binding_status = "exact_accepted_binding"
+        elif latest_row is not None and bound_id != latest_row.get("publication_evidence_id"):
+            eligible = False
+            binding_status = "binding_mismatch"
+        else:
+            eligible = False
+            binding_status = "bound_evidence_not_accepted"
+        return {
+            "eligible": eligible,
+            "bound_publication_evidence_id": bound_id,
+            "latest_visible_publication_evidence_id": (
+                latest_row.get("publication_evidence_id") if latest_row else None
+            ),
+            "bound_evidence_status": bound_row.get("status") if bound_row else None,
+            "publication_binding_status": binding_status,
+        }
 
     def turnover_as_of(self, knowledge_cutoff_at: str) -> list[dict]:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")

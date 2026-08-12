@@ -10,6 +10,7 @@ import type {
   SnapshotDetailResponse,
   SnapshotDependencyStatusResponse,
   SnapshotListResponse,
+  SnapshotComparisonResponse,
 } from "./types";
 
 type QueryValue = string | number | null | undefined;
@@ -82,6 +83,21 @@ export const evidenceApi = {
   snapshotDependencyStatus(snapshotId: string, signal?: AbortSignal) {
     return fetchJson<SnapshotDependencyStatusResponse>(
       `/api/v2/analysis/snapshots/${encodeURIComponent(snapshotId)}/dependency-status`,
+      signal,
+    );
+  },
+  compareSnapshots(
+    baseSnapshotId: string,
+    comparisonSnapshotId: string,
+    comparisonCutoff: string,
+    signal?: AbortSignal,
+  ) {
+    return fetchJson<SnapshotComparisonResponse>(
+      withQuery("/api/v2/analysis/snapshots/compare", {
+        base_snapshot_id: baseSnapshotId,
+        comparison_snapshot_id: comparisonSnapshotId,
+        comparison_cutoff: comparisonCutoff,
+      }),
       signal,
     );
   },

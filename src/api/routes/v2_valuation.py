@@ -59,6 +59,11 @@ from src.services.technical_scenario_service import TechnicalScenarioService
 from src.services.evidence_analysis_service import EvidenceAnalysisService
 from src.services.performance_validation_service import PerformanceValidationService
 from src.services.data_freshness_service import DataFreshnessService
+from src.services.snapshot_comparison_service import (
+    SnapshotComparisonService,
+    SnapshotNotFoundError,
+)
+from src.repositories.analysis_snapshot_repository import SnapshotIntegrityError
 
 
 router = APIRouter(prefix="/api/v2", tags=["evidence-model-v2"])
@@ -284,6 +289,10 @@ def _performance_validation_service() -> PerformanceValidationService:
 
 def _data_freshness_service() -> DataFreshnessService:
     return DataFreshnessService(os.getenv("DATABASE_PATH", "data/cache.db"))
+
+
+def _snapshot_comparison_service() -> SnapshotComparisonService:
+    return SnapshotComparisonService(os.getenv("DATABASE_PATH", "data/cache.db"))
 
 
 def _require_write_access(api_key: str | None) -> str:
@@ -939,6 +948,35 @@ def list_v2_analysis_snapshots(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.get("/analysis/snapshots/compare")
+def compare_v2_analysis_snapshots(
+    base_snapshot_id: str = Query(...),
+    comparison_snapshot_id: str = Query(...),
+    comparison_cutoff: str | None = Query(default=None),
+):
+    if comparison_cutoff is None or not comparison_cutoff.strip():
+        raise HTTPException(status_code=422, detail="comparison_cutoff_required")
+    try:
+        return _public_dto(_snapshot_comparison_service().compare(
+            base_snapshot_id=base_snapshot_id,
+            comparison_snapshot_id=comparison_snapshot_id,
+            comparison_cutoff=comparison_cutoff,
+        ))
+    except SnapshotNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="snapshot_not_found") from exc
+    except SnapshotIntegrityError as exc:
+        raise HTTPException(status_code=500, detail="invalid_snapshot_integrity") from exc
+    except ValueError as exc:
+        detail = str(exc)
+        if "timestamp" in detail or "timezone" in detail:
+            detail = "comparison_cutoff_invalid"
+        elif detail != "comparison_request_invalid":
+            detail = "comparison_request_invalid"
+        raise HTTPException(status_code=422, detail=detail) from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=500, detail="snapshot_comparison_unavailable") from exc
+
+
 @router.get("/analysis/{symbol}")
 def get_v2_analysis(
     symbol: str,
@@ -1182,6 +1220,8 @@ def refresh_v2_analysis(
 def get_v2_analysis_snapshot(snapshot_id: str):
     try:
         result = _evidence_analysis_service().snapshot_repository.get(snapshot_id)
+    except SnapshotIntegrityError as exc:
+        raise HTTPException(status_code=500, detail="invalid_snapshot_integrity") from exc
     except (ValueError, RuntimeError, sqlite3.Error) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if result is None:

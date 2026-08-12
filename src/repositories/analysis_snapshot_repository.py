@@ -11,6 +11,10 @@ from src.domain.valuation import normalize_utc_timestamp, utc_now_timestamp
 from src.repositories.migration_runner import apply_valuation_migration
 
 
+class SnapshotIntegrityError(RuntimeError):
+    """Persisted snapshot output no longer matches its stored SHA-256."""
+
+
 class AnalysisSnapshotRepository:
     def __init__(self, db_path: str = "data/cache.db"):
         self.db_path = db_path
@@ -121,17 +125,24 @@ class AnalysisSnapshotRepository:
             assert row is not None
             return {**self._decode(row), "created": True}
 
-    def get(self, snapshot_id: str) -> dict[str, Any] | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM analysis_snapshots WHERE snapshot_id = ?", (snapshot_id,)
-            ).fetchone()
+    def get_with_connection(
+        self, conn: sqlite3.Connection, snapshot_id: str
+    ) -> dict[str, Any] | None:
+        row = conn.execute(
+            "SELECT * FROM analysis_snapshots WHERE snapshot_id = ?", (snapshot_id,)
+        ).fetchone()
         if row is None:
             return None
         result = self._decode(row)
         if sha256_json(result["output"]) != result["output_sha256"]:
-            raise RuntimeError("stored analysis snapshot output failed integrity verification")
+            raise SnapshotIntegrityError(
+                "stored analysis snapshot output failed integrity verification"
+            )
         return result
+
+    def get(self, snapshot_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            return self.get_with_connection(conn, snapshot_id)
 
     @staticmethod
     def _decode_before(before: str | None) -> tuple[str, str] | None:
@@ -188,7 +199,7 @@ class AnalysisSnapshotRepository:
         for row in visible:
             output = json.loads(row["output_json"])
             if sha256_json(output) != row["output_sha256"]:
-                raise RuntimeError(
+                raise SnapshotIntegrityError(
                     "stored analysis snapshot output failed integrity verification"
                 )
             summaries.append({
