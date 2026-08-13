@@ -33,6 +33,10 @@ class AcknowledgmentRequest(StrictResearchRequest):
     comparison_cutoff: str
 
 
+class EmptyResearchRequest(StrictResearchRequest):
+    pass
+
+
 def _service() -> ResearchReviewService:
     return ResearchReviewService(os.getenv("DATABASE_PATH", "data/cache.db"))
 
@@ -126,7 +130,7 @@ def add_membership(payload: AddMembershipRequest, response: Response):
 
 
 @router.post("/queue/{item_id}/archive")
-def archive_membership(item_id: str):
+def archive_membership(item_id: str, payload: EmptyResearchRequest):
     try:
         return _repository().archive(item_id)
     except Exception as exc:
@@ -134,7 +138,7 @@ def archive_membership(item_id: str):
 
 
 @router.post("/queue/{item_id}/unarchive")
-def unarchive_membership(item_id: str):
+def unarchive_membership(item_id: str, payload: EmptyResearchRequest):
     try:
         return _repository().unarchive(item_id)
     except Exception as exc:

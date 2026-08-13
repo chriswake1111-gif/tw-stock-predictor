@@ -43,10 +43,36 @@ def test_phase12_api_empty_queue_and_membership_lifecycle(monkeypatch, tmp_path)
         assert restored.status_code == 200 and restored.json()["restored"] is True
         assert restored.json()["watchlist_item_id"] == item_id
 
+        archive_extra = client.post(
+            f"/api/v2/research/queue/{item_id}/archive",
+            json={"extra": True}, headers=headers,
+        )
+        assert archive_extra.status_code == 422
+        detail = client.get(
+            f"/api/v2/research/queue/{item_id}", params={"comparison_cutoff": cutoff}
+        )
+        assert detail.json()["watchlist_item"]["membership_state"] == "active"
+        unarchive_extra = client.post(
+            f"/api/v2/research/queue/{item_id}/unarchive",
+            json={"extra": True}, headers=headers,
+        )
+        assert unarchive_extra.status_code == 422
+        assert client.get(
+            f"/api/v2/research/queue/{item_id}", params={"comparison_cutoff": cutoff}
+        ).json()["watchlist_item"]["membership_state"] == "active"
+
 
 def test_phase12_api_typed_cutoff_and_strict_schema_errors(monkeypatch, tmp_path):
     with _client(monkeypatch, tmp_path) as client:
         assert client.get("/api/v2/research/queue").json()["detail"] == "comparison_cutoff_required"
+        naive = client.get(
+            "/api/v2/research/queue", params={"comparison_cutoff": "2026-08-13T00:00:00"}
+        )
+        assert naive.status_code == 422
+        assert client.get(
+            "/api/v2/research/queue",
+            params={"comparison_cutoff": "2026-08-13T00:00:00Z", "limit": 51},
+        ).status_code == 422
         headers = _write_headers(client)
         response = client.post(
             "/api/v2/research/queue", json={"symbol": "2330", "extra": True}, headers=headers
@@ -101,3 +127,30 @@ def test_phase12_api_acknowledgment_idempotency_and_cutoff(monkeypatch, tmp_path
             headers={**headers, "idempotency-key": "future-key"},
         )
         assert future.status_code == 422
+        naive_review = client.post(
+            path,
+            json={**payload, "comparison_cutoff": "2026-08-03T00:00:00"},
+            headers={**headers, "idempotency-key": "naive-key"},
+        )
+        assert naive_review.status_code == 422
+        before_review = client.get(
+            f"/api/v2/research/queue/{item['watchlist_item_id']}",
+            params={"comparison_cutoff": "2026-08-02T00:00:00Z"},
+        )
+        assert before_review.status_code == 422
+
+
+def test_phase12_api_database_failure_is_not_an_empty_queue(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path))
+    monkeypatch.setenv("RESEARCH_APPLICATION_ORIGIN", ORIGIN)
+    config = ResearchSecurityConfig.from_environment()
+    app = FastAPI()
+    app.include_router(router)
+    app.add_middleware(ResearchBoundaryMiddleware, config=config)
+    with TestClient(app, base_url=ORIGIN, client=("127.0.0.1", 50000)) as client:
+        response = client.get(
+            "/api/v2/research/queue",
+            params={"comparison_cutoff": "2026-08-13T00:00:00Z"},
+        )
+    assert response.status_code == 500
+    assert response.json()["detail"] == "research_workflow_unavailable"

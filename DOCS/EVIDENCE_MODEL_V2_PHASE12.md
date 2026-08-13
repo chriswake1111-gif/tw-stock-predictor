@@ -9,7 +9,8 @@ This workflow metadata is not Evidence Model evidence. It is not a stock score, 
 ## Durable contracts
 
 - Workflow contract: `research_review_queue_v1`.
-- Migration: `20260813_14_evidence_model_v2_research_review_queue`.
+- Base migration: `20260813_14_evidence_model_v2_research_review_queue`.
+- First-review additive remediation: `20260813_15_phase12_first_review_remediation` enforces canonical symbols without rewriting the reviewed migration checksum.
 - Tables: `research_watchlist_items` and append-only `research_review_events`.
 - `2330` and `2330.TW` resolve to the same identity; `2330.TWO` remains independent.
 - Archive preserves the item ID and review history. Adding an archived symbol restores that same item.

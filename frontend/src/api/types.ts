@@ -398,6 +398,12 @@ export type ResearchReviewState =
   | "comparable_without_deltas" | "incomparable_contract" | "blocked"
   | "unknown" | "snapshot_integrity_error";
 
+export type ResearchComparisonStatus =
+  | "not_run"
+  | "comparable"
+  | "incomparable_contract"
+  | "unavailable";
+
 export interface ResearchWatchlistItem {
   watchlist_item_id: string;
   symbol: string;
@@ -412,7 +418,7 @@ export interface ResearchQueueItem {
   watchlist_item: ResearchWatchlistItem;
   analysis_status: string;
   freshness_status: SnapshotFreshnessStatus;
-  comparison_status: string;
+  comparison_status: ResearchComparisonStatus;
   review_state: ResearchReviewState;
   comparison_has_deltas: boolean | null;
   stored_delta_count: number;

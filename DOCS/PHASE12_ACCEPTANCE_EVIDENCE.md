@@ -1,67 +1,67 @@
 # Phase 12 Acceptance Evidence
 
-This matrix preserves the approved Phase 12 AC-01 through AC-57 namespace. `PASS` means the referenced automated test or direct contract gate was executed in this implementation branch; final command counts are recorded in the Draft PR after the complete regression.
+本表逐條保留已核准且唯一權威的 Phase 12 AC-01～AC-57 語意。`PASS` 只表示列出的自動化測試、schema gate 或可重現建置檢查已實際覆蓋該契約；不代表系統無其他限制。
 
-| AC | Approved requirement | Evidence | Status |
+| AC | Approved Requirement | Implementation / Test Evidence | Status |
 |---|---|---|---|
-| AC-01 | New canonical watchlist symbol creates one active item. | `test_add_duplicate_restore_and_unarchive_converge_without_losing_history` | PASS |
-| AC-02 | `2330` and `2330.TW` are one identity. | `test_canonical_research_symbol_contract`; repository lifecycle test | PASS |
-| AC-03 | `2330.TWO` remains independent; no OTC inference. | `test_canonical_research_symbol_contract` | PASS |
-| AC-04 | Active duplicate add returns the existing item. | Repository and API lifecycle tests | PASS |
-| AC-05 | Archived duplicate add restores the same item with `restored=true`. | Repository and API lifecycle tests | PASS |
-| AC-06 | Explicit unarchive converges on the same active state. | Repository lifecycle test | PASS |
-| AC-07 | Archive and unarchive transitions are idempotent. | Repository lifecycle test and state helpers | PASS |
-| AC-08 | Membership cannot be hard-deleted or have identity fields changed. | Migration trigger test | PASS |
-| AC-09 | Review events are append-only. | `test_review_event_is_append_only_and_idempotent` | PASS |
-| AC-10 | Acknowledgment binds an exact immutable snapshot ID. | Repository/API acknowledgment tests | PASS |
-| AC-11 | Acknowledged snapshot symbol must match membership. | Repository validation path | PASS |
-| AC-12 | Archived membership cannot receive a new acknowledgment. | Repository validation path | PASS |
-| AC-13 | Review comparison cutoff is explicit. | Domain/API cutoff tests | PASS |
-| AC-14 | Cutoffs must be timezone-aware and normalize to UTC. | Domain and service cutoff validators | PASS |
-| AC-15 | Cutoff after request receipt is rejected with zero event creation. | API acknowledgment cutoff test | PASS |
-| AC-16 | Cutoff before snapshot knowledge cutoff is rejected. | Service acknowledgment validation | PASS |
-| AC-17 | `reviewed_at` is the captured server request timestamp. | API/service acknowledgment path | PASS |
-| AC-18 | `reviewed_at` and `comparison_cutoff_at` remain separate fields. | Migration and backup round-trip tests | PASS |
-| AC-19 | Same idempotency key and semantic payload returns the original event. | Repository and API acknowledgment tests | PASS |
-| AC-20 | Same key with a different semantic payload returns conflict. | Repository and API acknowledgment tests | PASS |
-| AC-21 | Latest review event ordering is deterministic. | Repository ordering SQL and append-only ID tie-breaker | PASS |
-| AC-22 | Actual latest visible snapshot uses cutoff-safe deterministic ordering. | `test_actual_latest_ordering_and_future_cutoff_fail_closed` | PASS |
-| AC-23 | An incompatible actual latest snapshot cannot fall back to an older compatible row. | Shared service state machine and Phase 11 compatibility regression | PASS |
-| AC-24 | A corrupt actual latest snapshot cannot fall back to an older valid row. | `test_actual_latest_integrity_failure_does_not_fall_back` | PASS |
-| AC-25 | Queue/list detail uses one query-only SQLite read transaction. | Research service implementation and shared-connection tests | PASS |
-| AC-26 | Phase 11 comparison semantics are reused through `compare_with_connection`. | Research service and Phase 11 regression suite | PASS |
-| AC-27 | Comparison results are query-time only and are not persisted. | Two-table migration/schema test | PASS |
-| AC-28 | Review state is a dedicated typed state, separate from analysis/freshness/comparison. | Domain state tests and DTO tests | PASS |
-| AC-29 | No visible snapshot maps to `no_snapshot` and delta availability is null. | `test_queue_no_snapshot_and_baseline_not_set` | PASS |
-| AC-30 | Snapshot without review event maps to `baseline_not_set`. | `test_queue_no_snapshot_and_baseline_not_set` | PASS |
-| AC-31 | Missing acknowledged baseline fails closed as `blocked`. | Research service state precedence | PASS |
-| AC-32 | Baseline/latest integrity failure maps to `snapshot_integrity_error`. | Actual-latest integrity regression and Phase 11 integrity tests | PASS |
-| AC-33 | Contract incompatibility maps to `incomparable_contract`. | Phase 11 compatibility regression | PASS |
-| AC-34 | Blocked dependency state remains blocked. | Shared Phase 11 freshness mapping | PASS |
-| AC-35 | Unknown dependency state remains unknown. | Shared Phase 11 freshness mapping | PASS |
-| AC-36 | Comparable stored or current-context deltas map to `comparison_has_deltas=true`. | Domain tri-state test and Phase 11 delta regressions | PASS |
-| AC-37 | Comparable empty delta sets map to `comparison_has_deltas=false`. | Domain tri-state test and AC-57 regression | PASS |
-| AC-38 | Unavailable comparison is `null`, never false. | Domain tri-state test and queue-state tests | PASS |
-| AC-39 | Cross-origin Research GET is rejected. | `test_research_get_origin_host_and_loopback_contract` | PASS |
-| AC-40 | Origin-less GET is allowed only with loopback client and exact Host. | Research GET security test | PASS |
-| AC-41 | Loopback is derived from ASGI client; forwarded headers do not grant trust. | Research GET security test and middleware contract | PASS |
-| AC-42 | Host must exactly match a configured explicit-port authority. | Research GET security test | PASS |
-| AC-43 | Missing or malformed application origin disables all Research routes. | `test_research_configuration_fails_closed` | PASS |
-| AC-44 | Any malformed development origin fails the subsystem closed. | `test_research_configuration_fails_closed` | PASS |
-| AC-45 | Research writes are disabled by default. | Research write security test | PASS |
-| AC-46 | Writes require a present exact-allowlisted Origin. | Research write security test | PASS |
-| AC-47 | Writes require JSON and a body no larger than 16 KiB. | Research write security test | PASS |
-| AC-48 | CSRF uses a host-only HttpOnly Strict cookie and matching header token. | CSRF route and middleware tests | PASS |
-| AC-49 | CSRF validity is strict before 1,800 seconds; exact expiry rejects before mutation. | `test_csrf_expiry_is_exact_and_capacity_is_bounded`; `test_expired_csrf_rejects_before_mutation` | PASS |
-| AC-50 | CSRF capacity is bounded at 128 with fail-closed overflow. | Session-store bound and implementation gate | PASS |
-| AC-51 | Browser code contains no admin secret and expiry requires explicit user retry. | Frontend source guard and mutation client test | PASS |
-| AC-52 | Write DTOs reject extra fields and expose typed HTTP outcomes. | Phase 12 API tests | PASS |
-| AC-53 | Page load, GET, inspection, comparison, or scrolling never auto-acknowledges. | `does not acknowledge on render or row inspection` | PASS |
-| AC-54 | UI wording avoids ranking, recommendation, trade signal, and temporal-drift claims. | Frontend unit/Playwright wording guards | PASS |
-| AC-55 | Backup/restore preserves counts, IDs, snapshot references, cutoffs, and FK integrity. | `test_phase12_backup` | PASS |
-| AC-56 | v1 golden and Phase 8–11 behavior remain regression protected. | Full regression, v1 golden, Phase 8/10/11 focused commands | PASS |
-| AC-57 | Same baseline/latest snapshot at the same cutoff may be stale while deltas remain false, with no temporal claim. | `test_ac57_same_snapshot_stale_is_false_not_temporal_change`; Playwright | PASS |
+| AC-01 | 合法symbol可新增watchlist membership。 | `canonical_research_symbol`; repository/API lifecycle tests | PASS |
+| AC-02 | `2330`與`2330.TW`解析為相同canonical identity。 | `test_phase12_symbol_identity_is_canonical_and_otc_is_explicit`; duplicate API test | PASS |
+| AC-03 | 明確`.TWO`保留；系統不自行推測OTC。 | Domain canonical identity test; DB canonical constraint test | PASS |
+| AC-04 | 非法symbol fail closed。 | Domain invalid-symbol assertion; strict API DTO | PASS |
+| AC-05 | 重複add不建立duplicate membership。 | Repository/API duplicate lifecycle tests | PASS |
+| AC-06 | archive保留membership與review history。 | Repository lifecycle and backup/restore tests | PASS |
+| AC-07 | unarchive復用原watchlist item。 | Repository lifecycle test | PASS |
+| AC-08 | hard delete在application與database皆被拒絕。 | No delete repository surface; migration trigger test | PASS |
+| AC-09 | empty watchlist回`available`及`items=[]`。 | `test_phase12_api_empty_queue_and_membership_lifecycle` | PASS |
+| AC-10 | symbol沒有snapshot時回`review_state=no_snapshot`，且不自動refresh。 | `test_queue_no_snapshot_and_baseline_not_set`; no-auto-ack frontend test | PASS |
+| AC-11 | 沒有review event時回`baseline_not_set`及`comparison_has_deltas=null`。 | Queue state test; corrupt-latest precedence regression | PASS |
+| AC-12 | acknowledgment精確綁定指定snapshot ID。 | Repository/API acknowledgment tests | PASS |
+| AC-13 | cross-symbol acknowledgment被拒絕。 | `test_cross_symbol_acknowledgment_rejected_and_new_event_preserves_history` | PASS |
+| AC-14 | review event為append-only。 | DB update/delete trigger assertions | PASS |
+| AC-15 | 新acknowledgment不覆寫舊event。 | Two-event history-preservation regression | PASS |
+| AC-16 | `reviewed_at`由server產生。 | Service/API captured request-time path; backup round-trip assertion | PASS |
+| AC-17 | review comparison cutoff由request明確提供、normalize UTC並保存。 | Domain/API acknowledgment and backup tests | PASS |
+| AC-18 | `reviewed_at`與`comparison_cutoff_at`維持獨立欄位。 | Migration schema and backup round-trip test | PASS |
+| AC-19 | naive review/query timestamp、future review cutoff及future query cutoff均回HTTP 422。 | `test_phase12_api_typed_cutoff_and_strict_schema_errors`; acknowledgment cutoff regression | PASS |
+| AC-20 | query cutoff早於latest review event cutoff時回HTTP 422。 | API `comparison_cutoff_before_review_baseline` regression | PASS |
+| AC-21 | latest snapshot依symbol、query cutoff、created_at及snapshot_id deterministic選取。 | Latest ordering and same-time tie regressions | PASS |
+| AC-22 | incompatible actual latest snapshot不得退回compatible次新snapshot。 | `test_incompatible_latest_is_used_without_compatible_fallback` | PASS |
+| AC-23 | actual latest snapshot integrity failure不得退回次新snapshot。 | `test_actual_latest_integrity_failure_does_not_fall_back` | PASS |
+| AC-24 | acknowledged snapshot missing時回blocked，且不得替換baseline。 | Missing-baseline state regression | PASS |
+| AC-25 | baseline或latest snapshot integrity failure回`snapshot_integrity_error`。 | Baseline and actual-latest integrity regressions | PASS |
+| AC-26 | comparison只能重用Phase 11 `SnapshotComparisonService`。 | `compare_with_connection`; hidden-connection regression; Phase 11 compatibility suite | PASS |
+| AC-27 | comparison result、deltas、counts及`comparison_has_deltas`均不得持久化。 | Two-table migration schema; summary/detail query-time derivation test | PASS |
+| AC-28 | stored delta存在時`comparison_has_deltas=true`。 | Typed comparison state matrix regression | PASS |
+| AC-29 | current-context delta存在時`comparison_has_deltas=true`。 | Typed comparison state matrix regression | PASS |
+| AC-30 | comparable且兩類delta皆空時`comparison_has_deltas=false`。 | Domain tri-state and AC-57 regressions | PASS |
+| AC-31 | same snapshot、same query cutoff、comparable且無delta時`comparison_has_deltas=false`。 | `test_ac57_same_snapshot_stale_is_false_not_temporal_change` | PASS |
+| AC-32 | no snapshot、baseline not set、missing baseline、incomparable、blocked、unknown、integrity failure或comparison unavailable時`comparison_has_deltas=null`。 | Queue precedence, missing/incompatible/integrity and typed state matrix tests | PASS |
+| AC-33 | stale維持獨立freshness語意，不自動形成delta、blocked或temporal-change宣稱。 | AC-57 service, frontend wording and Playwright regressions | PASS |
+| AC-34 | dependency blocked形成`review_state=blocked`。 | Typed comparison state matrix regression | PASS |
+| AC-35 | dependency unknown形成`review_state=unknown`。 | Typed comparison state matrix regression | PASS |
+| AC-36 | page open、GET、scroll或comparison完成均不得自動acknowledge。 | Frontend no-auto-ack unit test; write-only mutation client | PASS |
+| AC-37 | workflow metadata不進Evidence Grade、Rule Trace、模型輸出、screening或historical performance。 | Governance product-boundary/static contract guard | PASS |
+| AC-38 | Research write API預設disabled並回HTTP 503。 | Research write security test | PASS |
+| AC-39 | 帶有non-allowlisted Origin的Research browser GET回HTTP 403。 | Research GET Origin security test | PASS |
+| AC-40 | 非loopback、invalid Host、non-allowlisted Origin、invalid CSRF、invalid content type或oversized body的Research write依typed contract拒絕。 | Research workflow security matrix | PASS |
+| AC-41 | frontend source及production bundle均不包含Evidence admin API key。 | Source guard; production `build` bundle scanner | PASS |
+| AC-42 | duplicate acknowledgment同key同semantic payload回原event。 | Repository/API idempotency tests | PASS |
+| AC-43 | 相同idempotency key搭配不同payload回HTTP 409。 | Repository/API conflict tests | PASS |
+| AC-44 | duplicate archive/unarchive為deterministic idempotent operation。 | `test_archive_and_unarchive_are_idempotent`; strict empty DTO API test | PASS |
+| AC-45 | backup/restore保留membership、archive state、review history及idempotency behavior。 | Phase 12 backup/restore round-trip test | PASS |
+| AC-46 | database failure不得偽裝成empty queue。 | `test_phase12_api_database_failure_is_not_an_empty_queue` | PASS |
+| AC-47 | list只回summary/count；detail才可回完整Phase 11 comparison。 | Summary/detail service regression | PASS |
+| AC-48 | list maximum 50，並使用同一SQLite read snapshot。 | API limit test; counted single read connection and hidden-connection guard | PASS |
+| AC-49 | frontend不得使用ranking、recommendation、temporal-change或directional investment語彙。 | Frontend wording unit/Playwright and governance guards | PASS |
+| AC-50 | desktop、mobile、keyboard及accessibility驗證通過。 | Playwright desktop/mobile; keyboard unit; axe accessibility tests | PASS |
+| AC-51 | v1 API golden維持不變。 | `tests/test_api_golden.py` | PASS |
+| AC-52 | Phase 8–11既有regression維持。 | Full pytest and Phase 11 focused compatibility suite | PASS |
+| AC-53 | 不新增Journal、price、notification、LLM、broker或trading功能。 | Product-boundary/governance test and scoped route inventory | PASS |
+| AC-54 | migration additive、transactional、rerunnable且rollback-safe。 | Phase 12 fresh/rerun and rollback tests | PASS |
+| AC-55 | CSRF session在1,800秒TTL到期後回HTTP 403 `csrf_session_expired`，mutation不得執行。 | Exact-expiry and zero-mutation security regression | PASS |
+| AC-56 | 無Origin的loopback＋valid Host request可讀；無Origin的non-loopback request回HTTP 403。 | Research GET loopback/no-Origin security test | PASS |
+| AC-57 | same snapshot在同一query cutoff下即使freshness為stale，無delta時仍回`comparison_has_deltas=false`及`freshness_status=stale`，且不得宣稱T1至T2沒有變化。 | Dedicated AC-57 service test and Playwright temporal-wording guard | PASS |
 
 ## Product boundary
 
-No broker API, real account connection, real order, automatic trading, stock ranking, recommendation, or Phase 13 feature was introduced.
+No Journal, current-price workflow, notification, LLM, broker API, real account connection, real order, automatic trading, ranking, recommendation, or Phase 13 feature was introduced.

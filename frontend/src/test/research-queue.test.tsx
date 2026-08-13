@@ -1,6 +1,10 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import { ResearchQueuePage } from "../pages/ResearchQueuePage";
+import { researchWorkflowApi } from "../api/researchClient";
 import { renderWithProviders } from "./render";
 
 
@@ -39,6 +43,58 @@ describe("Research Queue", () => {
     renderWithProviders(<ResearchQueuePage />, "/research");
     await waitFor(() => expect(fetchMock).not.toHaveBeenCalled());
   });
+
+  it("supports keyboard navigation through the primary workflow controls", async () => {
+    renderWithProviders(<ResearchQueuePage />, "/research");
+    const user = userEvent.setup();
+    await user.tab();
+    expect(screen.getByLabelText("比較截止時間（含時區）")).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "載入清單" })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByLabelText("顯示已封存")).toHaveFocus();
+    await user.tab();
+    expect(screen.getByLabelText("加入研究標的")).toHaveFocus();
+  });
+
+  it("refreshes expired CSRF but waits for explicit retry with the same acknowledgment key", async () => {
+    const calls: Array<{ url: string; method: string; key: string | null }> = [];
+    let bootstrapCount = 0;
+    let mutationCount = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const headers = new Headers(init?.headers);
+      calls.push({ url, method, key: headers.get("Idempotency-Key") });
+      if (url.endsWith("/csrf-token")) {
+        bootstrapCount += 1;
+        return new Response(JSON.stringify({ csrf_token: `token-${bootstrapCount}` }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        });
+      }
+      mutationCount += 1;
+      if (mutationCount === 1) {
+        return new Response(JSON.stringify({ detail: "csrf_session_expired" }), {
+          status: 403, headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ review_event_id: "review-1", created: true }), {
+        status: 201, headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await expect(researchWorkflowApi.acknowledgeSnapshot(
+      "item-1", "snapshot-1", "2026-08-13T00:00:00Z", "same-key",
+    )).rejects.toThrow("csrf_refresh_required");
+    expect(bootstrapCount).toBe(2);
+    expect(mutationCount).toBe(1);
+
+    await researchWorkflowApi.acknowledgeSnapshot(
+      "item-1", "snapshot-1", "2026-08-13T00:00:00Z", "same-key",
+    );
+    expect(mutationCount).toBe(2);
+    expect(calls.filter((call) => call.method === "POST").map((call) => call.key)).toEqual([
+      "same-key", "same-key",
+    ]);
+  });
 });
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";

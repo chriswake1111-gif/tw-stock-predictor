@@ -25,6 +25,7 @@ MIGRATION_IDS = (
     "20260811_12_raw_revision_metadata_identity",
     "20260811_13_phase10_first_review_remediation",
     "20260813_14_evidence_model_v2_research_review_queue",
+    "20260813_15_phase12_first_review_remediation",
 )
 MIGRATION_ID = MIGRATION_IDS[-1]
 MIGRATION_FILES = tuple(

@@ -33,6 +33,12 @@ async function researchMutation<T>(path: string, payload: unknown, idempotencyKe
     const error = await response.json().catch(() => ({})) as { detail?: string };
     if (response.status === 403 && ["csrf_session_expired", "csrf_session_invalid"].includes(error.detail ?? "")) {
       researchCsrfToken = null;
+      try {
+        await ensureResearchCsrf();
+      } catch {
+        researchCsrfToken = null;
+        throw new Error("csrf_refresh_failed");
+      }
       throw new Error("csrf_refresh_required");
     }
     throw new Error(error.detail ?? `research_write_error:${response.status}`);

@@ -30,6 +30,13 @@ class ReviewState(str, Enum):
     SNAPSHOT_INTEGRITY_ERROR = "snapshot_integrity_error"
 
 
+class ResearchComparisonStatus(str, Enum):
+    NOT_RUN = "not_run"
+    COMPARABLE = "comparable"
+    INCOMPARABLE_CONTRACT = "incomparable_contract"
+    UNAVAILABLE = "unavailable"
+
+
 def canonical_research_symbol(value: str) -> str:
     candidate = normalize_symbol(value)
     if not _STOCK_SYMBOL.fullmatch(candidate):
@@ -59,8 +66,14 @@ class ReviewAcknowledgment:
 
 
 def comparison_has_deltas(
-    *, comparison_status: str, stored_delta_count: int, current_context_delta_count: int
+    *, comparison_status: ResearchComparisonStatus | str,
+    stored_delta_count: int,
+    current_context_delta_count: int,
 ) -> bool | None:
-    if comparison_status != "comparable":
+    try:
+        status = ResearchComparisonStatus(comparison_status)
+    except ValueError as exc:
+        raise ValueError("research_comparison_status_invalid") from exc
+    if status is not ResearchComparisonStatus.COMPARABLE:
         return None
     return stored_delta_count > 0 or current_context_delta_count > 0

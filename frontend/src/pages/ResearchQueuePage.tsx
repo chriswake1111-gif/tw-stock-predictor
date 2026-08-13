@@ -39,7 +39,9 @@ export function ResearchQueuePage() {
     } catch (error) {
       setMessage(error instanceof Error && error.message === "csrf_refresh_required"
         ? "安全工作階段已更新，請確認內容後再次提交。"
-        : "操作未完成，資料未變更。請檢查本機服務設定。");
+        : error instanceof Error && error.message === "csrf_refresh_failed"
+          ? "安全工作階段更新失敗，資料未變更。請檢查本機服務後重試。"
+          : "操作未完成，資料未變更。請檢查本機服務設定。");
       return false;
     }
   }

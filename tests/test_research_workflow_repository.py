@@ -68,3 +68,44 @@ def test_review_event_is_append_only_and_idempotent(tmp_path):
             conn.execute("UPDATE research_review_events SET reviewed_at='x'")
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
             conn.execute("DELETE FROM research_review_events")
+
+
+def test_cross_symbol_acknowledgment_rejected_and_new_event_preserves_history(tmp_path):
+    db = str(tmp_path / "cross-symbol.db")
+    repo = ResearchWorkflowRepository(db)
+    first_item = repo.add_membership("2330")
+    second_item = repo.add_membership("2317")
+    first_snapshot = AnalysisSnapshotRepository(db).add(_snapshot("2330.TW"), "first")
+    second_snapshot = AnalysisSnapshotRepository(db).add(_snapshot("2317.TW"), "second")
+    with pytest.raises(ValueError, match="acknowledged_snapshot_symbol_mismatch"):
+        repo.append_review_event(ReviewAcknowledgment(
+            first_item["watchlist_item_id"], second_snapshot["snapshot_id"],
+            "2026-08-02T00:00:00Z", "cross-symbol",
+        ), reviewed_at="2026-08-03T00:00:00Z")
+    first = repo.append_review_event(ReviewAcknowledgment(
+        first_item["watchlist_item_id"], first_snapshot["snapshot_id"],
+        "2026-08-02T00:00:00Z", "event-one",
+    ), reviewed_at="2026-08-03T00:00:00Z")
+    later = repo.append_review_event(ReviewAcknowledgment(
+        first_item["watchlist_item_id"], first_snapshot["snapshot_id"],
+        "2026-08-04T00:00:00Z", "event-two",
+    ), reviewed_at="2026-08-05T00:00:00Z")
+    assert first["review_event_id"] != later["review_event_id"]
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        latest = repo.latest_review_events_with_connection(
+            conn, [first_item["watchlist_item_id"], second_item["watchlist_item_id"]]
+        )
+        assert latest[first_item["watchlist_item_id"]]["review_event_id"] == later["review_event_id"]
+        assert conn.execute("SELECT COUNT(*) FROM research_review_events").fetchone()[0] == 2
+
+
+def test_archive_and_unarchive_are_idempotent(tmp_path):
+    repo = ResearchWorkflowRepository(str(tmp_path / "membership-state.db"))
+    item = repo.add_membership("2330")
+    archived = repo.archive(item["watchlist_item_id"])
+    archived_again = repo.archive(item["watchlist_item_id"])
+    assert archived_again == archived
+    active = repo.unarchive(item["watchlist_item_id"])
+    active_again = repo.unarchive(item["watchlist_item_id"])
+    assert active_again == active

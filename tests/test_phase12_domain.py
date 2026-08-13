@@ -1,6 +1,7 @@
 import pytest
 
 from src.domain.research_workflow import (
+    ResearchComparisonStatus,
     canonical_research_symbol,
     comparison_has_deltas,
 )
@@ -24,6 +25,11 @@ def test_comparison_has_deltas_is_nullable_and_neutral():
         current_context_delta_count=0,
     ) is True
     assert comparison_has_deltas(
-        comparison_status="blocked", stored_delta_count=0,
+        comparison_status=ResearchComparisonStatus.UNAVAILABLE, stored_delta_count=0,
         current_context_delta_count=0,
     ) is None
+    with pytest.raises(ValueError, match="research_comparison_status_invalid"):
+        comparison_has_deltas(
+            comparison_status="blocked", stored_delta_count=0,
+            current_context_delta_count=0,
+        )

@@ -9,6 +9,7 @@ from typing import Any
 from src.domain.research_workflow import (
     ReviewAcknowledgment,
     ReviewState,
+    ResearchComparisonStatus,
     comparison_has_deltas,
 )
 from src.domain.snapshot_comparison import canonical_timestamp
@@ -84,7 +85,7 @@ class ResearchReviewService:
             "watchlist_item": membership,
             "analysis_status": "insufficient_data",
             "freshness_status": "unknown",
-            "comparison_status": "not_run",
+            "comparison_status": ResearchComparisonStatus.NOT_RUN.value,
             "review_state": ReviewState.NO_SNAPSHOT.value,
             "comparison_has_deltas": None,
             "stored_delta_count": 0,
@@ -104,10 +105,7 @@ class ResearchReviewService:
         if latest_event is None:
             common["review_state"] = ReviewState.BASELINE_NOT_SET.value
             common["reason_codes"] = ["review_baseline_not_set"]
-            if latest_result["integrity_error"]:
-                common["review_state"] = ReviewState.SNAPSHOT_INTEGRITY_ERROR.value
-                common["reason_codes"] = ["latest_snapshot_integrity_error"]
-            elif latest_result["snapshot"]:
+            if latest_result["snapshot"]:
                 common["analysis_status"] = latest_result["snapshot"]["output"].get("status")
             return common
         if cutoff < latest_event["comparison_cutoff_at"]:
@@ -130,7 +128,7 @@ class ResearchReviewService:
         if baseline is None:
             common["review_state"] = ReviewState.BLOCKED.value
             common["freshness_status"] = "blocked"
-            common["comparison_status"] = "unavailable"
+            common["comparison_status"] = ResearchComparisonStatus.UNAVAILABLE.value
             common["reason_codes"] = ["acknowledged_snapshot_missing"]
             return common
         try:
@@ -143,32 +141,32 @@ class ResearchReviewService:
         except SnapshotNotFoundError:
             common["review_state"] = ReviewState.BLOCKED.value
             common["freshness_status"] = "blocked"
-            common["comparison_status"] = "unavailable"
+            common["comparison_status"] = ResearchComparisonStatus.UNAVAILABLE.value
             common["reason_codes"] = ["snapshot_comparison_unavailable"]
             return common
         common["_comparison"] = comparison
         common["reason_codes"] = comparison.get("reasons", [])
         if comparison["status"] == "incomparable_contract":
             common["review_state"] = ReviewState.INCOMPARABLE_CONTRACT.value
-            common["comparison_status"] = "incomparable_contract"
+            common["comparison_status"] = ResearchComparisonStatus.INCOMPARABLE_CONTRACT.value
             return common
         freshness = self._freshness(comparison)
         common["freshness_status"] = freshness
         if freshness == "blocked":
             common["review_state"] = ReviewState.BLOCKED.value
-            common["comparison_status"] = "blocked"
+            common["comparison_status"] = ResearchComparisonStatus.UNAVAILABLE.value
             return common
         if freshness == "unknown":
             common["review_state"] = ReviewState.UNKNOWN.value
-            common["comparison_status"] = "unknown"
+            common["comparison_status"] = ResearchComparisonStatus.UNAVAILABLE.value
             return common
         stored_count = len(comparison["stored_deltas"])
         current_count = len(comparison["current_context_deltas"])
         common["stored_delta_count"] = stored_count
         common["current_context_delta_count"] = current_count
-        common["comparison_status"] = "comparable"
+        common["comparison_status"] = ResearchComparisonStatus.COMPARABLE.value
         common["comparison_has_deltas"] = comparison_has_deltas(
-            comparison_status="comparable", stored_delta_count=stored_count,
+            comparison_status=ResearchComparisonStatus.COMPARABLE, stored_delta_count=stored_count,
             current_context_delta_count=current_count,
         )
         common["review_state"] = (
