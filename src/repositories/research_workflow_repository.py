@@ -148,6 +148,16 @@ class ResearchWorkflowRepository:
         return [dict(row) for row in rows]
 
     @staticmethod
+    def membership_with_connection(
+        conn: sqlite3.Connection, item_id: str
+    ) -> dict[str, Any] | None:
+        row = conn.execute(
+            "SELECT * FROM research_watchlist_items WHERE watchlist_item_id=?",
+            (item_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    @staticmethod
     def latest_review_events_with_connection(
         conn: sqlite3.Connection, item_ids: list[str]
     ) -> dict[str, dict[str, Any]]:
@@ -200,6 +210,8 @@ class ResearchWorkflowRepository:
             ).fetchone()
             if item is None:
                 raise ResearchWorkflowNotFoundError(payload["watchlist_item_id"])
+            if item["membership_state"] != MembershipState.ACTIVE.value:
+                raise ValueError("research_watchlist_item_archived")
             snapshot = conn.execute(
                 "SELECT symbol FROM analysis_snapshots WHERE snapshot_id=?",
                 (payload["acknowledged_snapshot_id"],),
