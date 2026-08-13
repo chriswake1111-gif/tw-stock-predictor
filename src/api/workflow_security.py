@@ -130,10 +130,15 @@ def _json_response(status: int, detail: str) -> tuple[dict[str, Any], bytes]:
 
 
 class ResearchBoundaryMiddleware:
-    def __init__(self, app, config: ResearchSecurityConfig | None = None):
+    def __init__(
+        self,
+        app,
+        config: ResearchSecurityConfig | None = None,
+        sessions: CsrfSessionStore | None = None,
+    ):
         self.app = app
         self.config = config or ResearchSecurityConfig.from_environment()
-        self.sessions = CsrfSessionStore()
+        self.sessions = sessions or CsrfSessionStore()
 
     async def _reject(self, send, status: int, detail: str) -> None:
         start, body = _json_response(status, detail)

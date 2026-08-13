@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import datetime, timezone
 
 from src.domain.analysis_snapshot import AnalysisSnapshot, CaptureMode
@@ -68,3 +69,24 @@ def test_actual_latest_ordering_and_future_cutoff_fail_closed(tmp_path):
         assert str(exc) == "comparison_cutoff_in_future"
     else:
         raise AssertionError("future cutoff must fail closed")
+
+
+def test_actual_latest_integrity_failure_does_not_fall_back(tmp_path):
+    service = ResearchReviewService(str(tmp_path / "integrity.db"))
+    service.workflow.add_membership("2330")
+    repo = AnalysisSnapshotRepository(service.db_path)
+    older = repo.add(_snapshot(marker="old"), "old")
+    newer = repo.add(_snapshot(created_at="2026-08-04T00:00:00Z", marker="new"), "new")
+    with sqlite3.connect(service.db_path) as conn:
+        conn.execute("DROP TRIGGER analysis_snapshots_no_update")
+        conn.execute(
+            "UPDATE analysis_snapshots SET output_json=? WHERE snapshot_id=?",
+            ('{"status":"available","symbol":"2330.TW","tampered":true}', newer["snapshot_id"]),
+        )
+    item = service.queue(
+        comparison_cutoff="2026-08-05T00:00:00Z", request_received_at=NOW
+    )["items"][0]
+    assert item["latest_snapshot_reference"]["snapshot_id"] == newer["snapshot_id"]
+    assert item["latest_snapshot_reference"]["snapshot_id"] != older["snapshot_id"]
+    assert item["review_state"] == "snapshot_integrity_error"
+    assert item["comparison_has_deltas"] is None

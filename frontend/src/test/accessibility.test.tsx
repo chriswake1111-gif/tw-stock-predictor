@@ -7,7 +7,7 @@ import { mockReadApi, renderWithProviders } from "./render";
 describe("Phase 9 accessibility smoke", () => {
   afterEach(() => document.querySelectorAll("#axe-audit-root").forEach((node) => node.remove()));
 
-  for (const route of ["/stocks/2330.TW", "/market", "/snapshots/snapshot-1", "/validation/runs/run-1"]) {
+  for (const route of ["/stocks/2330.TW", "/market", "/snapshots/snapshot-1", "/validation/runs/run-1", "/research"]) {
     it(`has no automated structural violations at ${route}`, async () => {
       mockReadApi();
       const { container } = renderWithProviders(<App />, route);

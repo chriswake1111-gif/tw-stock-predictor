@@ -3,6 +3,8 @@ from fastapi.testclient import TestClient
 
 from src.api.routes.research_workflow import router
 from src.api.workflow_security import ResearchBoundaryMiddleware, ResearchSecurityConfig
+from src.domain.analysis_snapshot import AnalysisSnapshot, CaptureMode
+from src.repositories.analysis_snapshot_repository import AnalysisSnapshotRepository
 
 
 ORIGIN = "http://127.0.0.1:8000"
@@ -50,3 +52,52 @@ def test_phase12_api_typed_cutoff_and_strict_schema_errors(monkeypatch, tmp_path
             "/api/v2/research/queue", json={"symbol": "2330", "extra": True}, headers=headers
         )
         assert response.status_code == 422
+
+
+def test_phase12_api_acknowledgment_idempotency_and_cutoff(monkeypatch, tmp_path):
+    db_path = str(tmp_path / "api.db")
+    with _client(monkeypatch, tmp_path) as client:
+        headers = _write_headers(client)
+        item = client.post(
+            "/api/v2/research/queue", json={"symbol": "2330"}, headers=headers
+        ).json()
+        snapshot = AnalysisSnapshotRepository(db_path).add(
+            AnalysisSnapshot(
+                symbol="2330.TW",
+                knowledge_cutoff_at="2026-08-01T00:00:00Z",
+                capture_mode=CaptureMode.HISTORICAL_RECONSTRUCTION,
+                model_version="2.0.0",
+                used_rule_versions={},
+                source_resource_versions=[],
+                manual_approval_ids=[],
+                output={"status": "available", "symbol": "2330.TW"},
+                created_at="2026-08-02T00:00:00Z",
+            ),
+            "phase12-api-snapshot",
+        )
+        path = f"/api/v2/research/queue/{item['watchlist_item_id']}/acknowledgments"
+        payload = {
+            "acknowledged_snapshot_id": snapshot["snapshot_id"],
+            "comparison_cutoff": "2026-08-03T00:00:00Z",
+        }
+        first = client.post(
+            path, json=payload, headers={**headers, "idempotency-key": "ack-key"}
+        )
+        retry = client.post(
+            path, json=payload, headers={**headers, "idempotency-key": "ack-key"}
+        )
+        assert first.status_code == 201
+        assert retry.status_code == 200
+        assert retry.json()["review_event_id"] == first.json()["review_event_id"]
+        conflict = client.post(
+            path,
+            json={**payload, "comparison_cutoff": "2026-08-04T00:00:00Z"},
+            headers={**headers, "idempotency-key": "ack-key"},
+        )
+        assert conflict.status_code == 409
+        future = client.post(
+            path,
+            json={**payload, "comparison_cutoff": "2999-01-01T00:00:00Z"},
+            headers={**headers, "idempotency-key": "future-key"},
+        )
+        assert future.status_code == 422

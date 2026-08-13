@@ -14,7 +14,30 @@ const runFixture = {
 async function mockApi(page: Page) {
   await page.route("**/api/v2/**", async (route) => {
     const url = route.request().url();
-    const body = url.includes("analysis/snapshots/compare")
+    const body = url.includes("research/queue")
+      ? {
+          status: "available",
+          comparison_cutoff: "2026-08-13T00:00:00Z",
+          items: [{
+            watchlist_item: {
+              watchlist_item_id: "research-watchlist-1", symbol: "2330.TW",
+              membership_state: "active", created_at: "2026-08-12T00:00:00Z",
+              updated_at: "2026-08-12T00:00:00Z", archived_at: null,
+              workflow_contract_version: "research_review_queue_v1",
+            },
+            analysis_status: "available", freshness_status: "stale",
+            comparison_status: "comparable", review_state: "comparable_without_deltas",
+            comparison_has_deltas: false, stored_delta_count: 0,
+            current_context_delta_count: 0,
+            latest_snapshot_reference: { snapshot_id: "snapshot-1", symbol: "2330.TW" },
+            latest_review_event_reference: {
+              review_event_id: "review-1", acknowledged_snapshot_id: "snapshot-1",
+              reviewed_at: "2026-08-12T00:00:00Z",
+            },
+            reason_codes: [],
+          }],
+        }
+      : url.includes("analysis/snapshots/compare")
       ? snapshotComparisonFixture
       : url.includes("dependency-status")
       ? {
@@ -79,4 +102,19 @@ test("captures the Phase 11 read-only snapshot comparison", async ({ page }, tes
   const noHorizontalOverflow = await page.locator("main").evaluate((element) => element.scrollWidth <= element.clientWidth);
   expect(noHorizontalOverflow).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("snapshot-comparison.png"), fullPage: true });
+});
+
+test("captures the Phase 12 research review queue without temporal claims", async ({ page }, testInfo) => {
+  await mockApi(page);
+  await page.goto("/research");
+  await page.getByLabel("比較截止時間（含時區）").fill("2026-08-13T00:00:00Z");
+  await page.getByRole("button", { name: "載入清單" }).click();
+  await expect(page.getByText("與上次複核快照相比無差異")).toBeVisible();
+  await expect(page.getByText("stale")).toBeVisible();
+  await expect(page.getByText(/自上次複核後/)).toHaveCount(0);
+  const noHorizontalOverflow = await page.locator("main").evaluate(
+    (element) => element.scrollWidth <= element.clientWidth,
+  );
+  expect(noHorizontalOverflow).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("research-review-queue.png"), fullPage: true });
 });

@@ -11,14 +11,16 @@ from src.api.workflow_security import (
 )
 
 
-def _app(config=None):
+def _app(config=None, sessions=None, mutations=None):
     app = FastAPI()
-    app.add_middleware(ResearchBoundaryMiddleware, config=config)
+    app.add_middleware(ResearchBoundaryMiddleware, config=config, sessions=sessions)
     @app.get("/api/v2/research/queue")
     def queue():
         return {"status": "available"}
     @app.post("/api/v2/research/queue")
     def add():
+        if mutations is not None:
+            mutations.append("write")
         return {"created": True}
     @app.get("/api/v2/research/csrf-token")
     def csrf(request: Request, response: Response):
@@ -50,6 +52,16 @@ def test_research_configuration_fails_closed(monkeypatch):
             response = client.get("/api/v2/research/queue", headers={"host": "127.0.0.1:8000"})
             assert response.status_code == 503
             assert response.json()["detail"] == "research_security_configuration_invalid"
+
+    monkeypatch.setenv("RESEARCH_APPLICATION_ORIGIN", "http://127.0.0.1:8000")
+    monkeypatch.setenv("RESEARCH_ALLOWED_DEV_ORIGINS", "http://localhost:9000,bad")
+    with _client(_app(ResearchSecurityConfig.from_environment())) as client:
+        response = client.get(
+            "/api/v2/research/queue",
+            headers={"host": "127.0.0.1:8000", "origin": "http://127.0.0.1:8000"},
+        )
+        assert response.status_code == 503
+        assert response.json()["detail"] == "research_security_configuration_invalid"
 
 
 def test_research_get_origin_host_and_loopback_contract(monkeypatch):
@@ -83,3 +95,25 @@ def test_csrf_expiry_is_exact_and_capacity_is_bounded():
     session, token, expires = store.issue(now)
     assert store.validate(session, token, expires - timedelta(microseconds=1)) is None
     assert store.validate(session, token, expires) == "csrf_session_expired"
+
+
+def test_expired_csrf_rejects_before_mutation(monkeypatch):
+    config = _valid(monkeypatch)
+    monkeypatch.setenv("RESEARCH_WORKFLOW_WRITES_ENABLED", "true")
+    store = CsrfSessionStore()
+    issued_at = datetime.now(timezone.utc) - timedelta(seconds=1800)
+    session, token, _ = store.issue(issued_at)
+    mutations = []
+    with _client(_app(config, sessions=store, mutations=mutations)) as client:
+        client.cookies.set(CSRF_COOKIE_NAME, session, path="/api/v2/research")
+        response = client.post(
+            "/api/v2/research/queue",
+            json={},
+            headers={
+                "origin": "http://127.0.0.1:8000",
+                "x-csrf-token": token,
+            },
+        )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "csrf_session_expired"
+    assert mutations == []
