@@ -85,6 +85,31 @@ class EvidenceBackupService:
                 )
                 if table in table_names
             }
+            workflow = {}
+            if "research_watchlist_items" in table_names:
+                workflow = {
+                    "membership_total": conn.execute(
+                        "SELECT COUNT(*) FROM research_watchlist_items"
+                    ).fetchone()[0],
+                    "active_count": conn.execute(
+                        "SELECT COUNT(*) FROM research_watchlist_items WHERE membership_state='active'"
+                    ).fetchone()[0],
+                    "archived_count": conn.execute(
+                        "SELECT COUNT(*) FROM research_watchlist_items WHERE membership_state='archived'"
+                    ).fetchone()[0],
+                    "review_event_count": conn.execute(
+                        "SELECT COUNT(*) FROM research_review_events"
+                    ).fetchone()[0],
+                }
+                workflow_violations = [
+                    row
+                    for table in ("research_watchlist_items", "research_review_events")
+                    for row in conn.execute(f"PRAGMA foreign_key_check({table})").fetchall()
+                ]
+                if workflow_violations:
+                    raise RuntimeError(
+                        f"workflow foreign key check failed: {workflow_violations[:3]}"
+                    )
         if integrity != "ok":
             raise RuntimeError(f"SQLite integrity check failed: {integrity}")
         return {
@@ -92,4 +117,5 @@ class EvidenceBackupService:
             "integrity_check": integrity,
             "irreplaceable_counts": counts,
             "operational_provenance_counts": operational,
+            "research_workflow_counts": workflow,
         }

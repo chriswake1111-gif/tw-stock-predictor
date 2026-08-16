@@ -6,6 +6,7 @@ import {
   FileSearch,
   Menu,
   Search,
+  ListChecks,
 } from "lucide-react";
 import { NavLink, useNavigate } from "react-router-dom";
 
@@ -15,6 +16,7 @@ const navigation = [
   { to: "/snapshots", label: "歷史快照", icon: CalendarDays },
   { to: "/validation", label: "歷史觀察", icon: BarChart3 },
   { to: "/rules", label: "模型說明", icon: BookOpen },
+  { to: "/research", label: "研究清單", icon: ListChecks },
 ] as const;
 
 export function AppShell({ children }: { children: ReactNode }) {

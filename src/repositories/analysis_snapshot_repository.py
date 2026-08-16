@@ -144,6 +144,43 @@ class AnalysisSnapshotRepository:
         with self._connect() as conn:
             return self.get_with_connection(conn, snapshot_id)
 
+    def latest_for_symbols_as_of_with_connection(
+        self, conn: sqlite3.Connection, symbols: list[str], cutoff: str
+    ) -> dict[str, dict[str, Any]]:
+        """Return each actual latest visible row, preserving per-item integrity failure."""
+        if not symbols:
+            return {}
+        normalized_cutoff = normalize_utc_timestamp(cutoff, "comparison_cutoff")
+        unique_symbols = sorted(set(symbols))
+        placeholders = ",".join("?" for _ in unique_symbols)
+        rows = conn.execute(
+            f"""
+            WITH ranked AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY symbol ORDER BY created_at DESC, snapshot_id DESC
+                ) AS position
+                FROM analysis_snapshots
+                WHERE symbol IN ({placeholders}) AND created_at <= ?
+            )
+            SELECT * FROM ranked WHERE position=1
+            """,
+            [*unique_symbols, normalized_cutoff],
+        ).fetchall()
+        results: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            decoded = self._decode(row)
+            if sha256_json(decoded["output"]) != decoded["output_sha256"]:
+                results[row["symbol"]] = {
+                    "snapshot": None, "integrity_error": True,
+                    "snapshot_id": row["snapshot_id"],
+                }
+            else:
+                results[row["symbol"]] = {
+                    "snapshot": decoded, "integrity_error": False,
+                    "snapshot_id": row["snapshot_id"],
+                }
+        return results
+
     @staticmethod
     def _decode_before(before: str | None) -> tuple[str, str] | None:
         if before is None:

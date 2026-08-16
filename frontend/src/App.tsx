@@ -7,6 +7,7 @@ import { RuleLibraryPage } from "./pages/RuleLibraryPage";
 import { SnapshotDetailPage, SnapshotHistoryPage } from "./pages/SnapshotPages";
 import { SnapshotComparisonPage } from "./pages/SnapshotComparisonPage";
 import { ValidationHistoryPage, ValidationRunPage } from "./pages/ValidationPages";
+import { ResearchQueuePage } from "./pages/ResearchQueuePage";
 
 export default function App() {
   return (
@@ -21,6 +22,7 @@ export default function App() {
         <Route path="/validation" element={<ValidationHistoryPage />} />
         <Route path="/validation/runs/:runId" element={<ValidationRunPage />} />
         <Route path="/rules" element={<RuleLibraryPage />} />
+        <Route path="/research" element={<ResearchQueuePage />} />
         <Route path="*" element={<PlaceholderPage title="找不到頁面" description="請使用主要導覽返回研究工作區。" />} />
       </Routes>
     </AppShell>

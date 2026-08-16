@@ -7,14 +7,17 @@ from src.repositories.migration_runner import apply_valuation_migration
 
 
 PHASE10_MIGRATION = "20260811_13_phase10_first_review_remediation"
+PHASE12_BASE_MIGRATION = "20260813_14_evidence_model_v2_research_review_queue"
+PHASE12_MIGRATION = "20260813_15_phase12_first_review_remediation"
 
 
 def test_phase10_migration_is_additive_rerunnable_and_fresh_parent_safe(tmp_path):
     db_path = tmp_path / "missing" / "phase10.db"
     first = apply_valuation_migration(str(db_path))
     second = apply_valuation_migration(str(db_path))
-    assert migration_runner.MIGRATION_ID == PHASE10_MIGRATION
-    assert first["applied_migration_ids"][-1] == PHASE10_MIGRATION
+    assert migration_runner.MIGRATION_ID == PHASE12_MIGRATION
+    assert PHASE10_MIGRATION in first["applied_migration_ids"]
+    assert first["applied_migration_ids"][-1] == PHASE12_MIGRATION
     assert second["applied"] is False
     with sqlite3.connect(db_path) as conn:
         tables = {
@@ -45,9 +48,10 @@ def test_phase10_migration_is_additive_rerunnable_and_fresh_parent_safe(tmp_path
 def test_raw_revision_metadata_identity_upgrade_preserves_foreign_keys(tmp_path):
     db_path = tmp_path / "raw-upgrade.db"
     with pytest.MonkeyPatch.context() as context:
-        context.setattr(migration_runner, "MIGRATION_IDS", migration_runner.MIGRATION_IDS[:-1])
-        context.setattr(migration_runner, "MIGRATION_FILES", migration_runner.MIGRATION_FILES[:-1])
-        context.setattr(migration_runner, "MIGRATION_ID", migration_runner.MIGRATION_IDS[-2])
+        phase10_index = migration_runner.MIGRATION_IDS.index(PHASE10_MIGRATION)
+        context.setattr(migration_runner, "MIGRATION_IDS", migration_runner.MIGRATION_IDS[:phase10_index])
+        context.setattr(migration_runner, "MIGRATION_FILES", migration_runner.MIGRATION_FILES[:phase10_index])
+        context.setattr(migration_runner, "MIGRATION_ID", migration_runner.MIGRATION_IDS[phase10_index - 1])
         migration_runner.apply_valuation_migration(str(db_path))
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -90,7 +94,9 @@ def test_raw_revision_metadata_identity_upgrade_preserves_foreign_keys(tmp_path)
             ("test.raw", "run-legacy-lock", "2026-08-11T00:00:00Z"),
         )
     result = apply_valuation_migration(str(db_path))
-    assert result["applied_migration_ids"] == [PHASE10_MIGRATION]
+    assert result["applied_migration_ids"] == [
+        PHASE10_MIGRATION, PHASE12_BASE_MIGRATION, PHASE12_MIGRATION,
+    ]
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         assert conn.execute(
@@ -106,9 +112,10 @@ def test_phase10_migration_upgrades_current_main_schema_without_rewrite(
 ):
     db_path = tmp_path / "upgrade.db"
     with monkeypatch.context() as context:
-        context.setattr(migration_runner, "MIGRATION_IDS", migration_runner.MIGRATION_IDS[:-1])
-        context.setattr(migration_runner, "MIGRATION_FILES", migration_runner.MIGRATION_FILES[:-1])
-        context.setattr(migration_runner, "MIGRATION_ID", migration_runner.MIGRATION_IDS[-2])
+        phase10_index = migration_runner.MIGRATION_IDS.index(PHASE10_MIGRATION)
+        context.setattr(migration_runner, "MIGRATION_IDS", migration_runner.MIGRATION_IDS[:phase10_index])
+        context.setattr(migration_runner, "MIGRATION_FILES", migration_runner.MIGRATION_FILES[:phase10_index])
+        context.setattr(migration_runner, "MIGRATION_ID", migration_runner.MIGRATION_IDS[phase10_index - 1])
         migration_runner.apply_valuation_migration(str(db_path))
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -116,7 +123,9 @@ def test_phase10_migration_upgrades_current_main_schema_without_rewrite(
             ("keep", "fp", "missing-parent-allowed-before-fk-check", "2026-01-01T00:00:00Z"),
         )
     result = apply_valuation_migration(str(db_path))
-    assert result["applied_migration_ids"] == [PHASE10_MIGRATION]
+    assert result["applied_migration_ids"] == [
+        PHASE10_MIGRATION, PHASE12_BASE_MIGRATION, PHASE12_MIGRATION,
+    ]
     with sqlite3.connect(db_path) as conn:
         assert conn.execute(
             "SELECT payload_fingerprint FROM analysis_snapshot_idempotency_keys WHERE idempotency_key='keep'"

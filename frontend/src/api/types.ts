@@ -392,3 +392,58 @@ export interface RuleRegistryResponse {
   official_affiliation: false;
   rules: EvidenceRule[];
 }
+
+export type ResearchReviewState =
+  | "no_snapshot" | "baseline_not_set" | "comparable_with_deltas"
+  | "comparable_without_deltas" | "incomparable_contract" | "blocked"
+  | "unknown" | "snapshot_integrity_error";
+
+export type ResearchComparisonStatus =
+  | "not_run"
+  | "comparable"
+  | "incomparable_contract"
+  | "unavailable";
+
+export interface ResearchWatchlistItem {
+  watchlist_item_id: string;
+  symbol: string;
+  membership_state: "active" | "archived";
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+  workflow_contract_version: "research_review_queue_v1";
+}
+
+export type ResearchMembershipMutationResponse = ResearchWatchlistItem & {
+  changed: boolean;
+};
+
+export interface ResearchQueueItem {
+  watchlist_item: ResearchWatchlistItem;
+  analysis_status: string;
+  freshness_status: SnapshotFreshnessStatus;
+  comparison_status: ResearchComparisonStatus;
+  review_state: ResearchReviewState;
+  comparison_has_deltas: boolean | null;
+  stored_delta_count: number;
+  current_context_delta_count: number;
+  latest_snapshot_reference: { snapshot_id: string; symbol: string } | null;
+  latest_review_event_reference: {
+    review_event_id: string;
+    acknowledged_snapshot_id: string;
+    comparison_cutoff_at: string;
+    reviewed_at: string;
+  } | null;
+  reason_codes: string[];
+}
+
+export interface ResearchQueueResponse {
+  status: "available";
+  workflow_contract_version: "research_review_queue_v1";
+  comparison_cutoff: string;
+  items: ResearchQueueItem[];
+}
+
+export interface ResearchQueueDetail extends ResearchQueueItem {
+  comparison: SnapshotComparisonResponse | null;
+}

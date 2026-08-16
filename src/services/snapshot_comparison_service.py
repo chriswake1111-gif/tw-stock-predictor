@@ -176,57 +176,12 @@ class SnapshotComparisonService:
         conn = self._connect()
         try:
             conn.execute("BEGIN")
-            base = self.snapshots.get_with_connection(conn, base_snapshot_id)
-            comparison = self.snapshots.get_with_connection(conn, comparison_snapshot_id)
-            missing = [
-                snapshot_id for snapshot_id, value in (
-                    (base_snapshot_id, base), (comparison_snapshot_id, comparison)
-                ) if value is None
-            ]
-            if missing:
-                raise SnapshotNotFoundError(",".join(missing))
-            assert base is not None and comparison is not None
-            reason = compatibility_reason(base, comparison, cutoff)
-            response: dict[str, Any] = {
-                "status": "incomparable_contract" if reason else "available",
-                "comparison_policy_version": COMPARISON_POLICY_VERSION,
-                "comparison_snapshot_contract": COMPARISON_SNAPSHOT_CONTRACT,
-                "comparison_cutoff": cutoff,
-                "direction": {
-                    "base_snapshot_id": base_snapshot_id,
-                    "comparison_snapshot_id": comparison_snapshot_id,
-                    "absolute_delta_formula": "comparison_minus_base",
-                },
-                "base_snapshot": SnapshotReference.from_snapshot(base).canonical_payload(),
-                "comparison_snapshot": SnapshotReference.from_snapshot(comparison).canonical_payload(),
-                "compatibility": {"compatible": reason is None, "reasons": [reason] if reason else []},
-                "stored_deltas": [],
-                "base_current_context": None,
-                "comparison_current_context": None,
-                "current_context_deltas": [],
-                "warnings": [],
-                "reasons": [reason] if reason else [],
-            }
-            if reason is None:
-                response["stored_deltas"] = self.comparator.compare(base, comparison)
-                base_context = self.freshness.snapshot_dependency_freshness_with_connection(
-                    conn, base, cutoff, checked_at=cutoff
-                )
-                comparison_context = self.freshness.snapshot_dependency_freshness_with_connection(
-                    conn, comparison, cutoff, checked_at=cutoff
-                )
-                base_context.pop("snapshot_output_sha256", None)
-                comparison_context.pop("snapshot_output_sha256", None)
-                response["base_current_context"] = base_context
-                response["comparison_current_context"] = comparison_context
-                response["current_context_deltas"] = self._compare_contexts(
-                    base_context, comparison_context
-                )
-                response["reasons"] = sorted(set(
-                    base_context.get("reasons", []) + comparison_context.get("reasons", [])
-                ))
-                if base_context["freshness_status"] in {"unknown", "blocked"} or comparison_context["freshness_status"] in {"unknown", "blocked"}:
-                    response["warnings"].append("current_dependency_context_requires_review")
+            response = self.compare_with_connection(
+                conn,
+                base_snapshot_id=base_snapshot_id,
+                comparison_snapshot_id=comparison_snapshot_id,
+                comparison_cutoff=cutoff,
+            )
             conn.execute("COMMIT")
             return response
         except Exception:
@@ -235,3 +190,68 @@ class SnapshotComparisonService:
             raise
         finally:
             conn.close()
+
+    def compare_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        base_snapshot_id: str,
+        comparison_snapshot_id: str,
+        comparison_cutoff: str,
+    ) -> dict[str, Any]:
+        """Compare inside a caller-owned read transaction and SQLite snapshot."""
+        if not base_snapshot_id.strip() or not comparison_snapshot_id.strip():
+            raise ValueError("comparison_request_invalid")
+        cutoff = canonical_timestamp(comparison_cutoff)
+        base = self.snapshots.get_with_connection(conn, base_snapshot_id)
+        comparison = self.snapshots.get_with_connection(conn, comparison_snapshot_id)
+        missing = [
+            snapshot_id for snapshot_id, value in (
+                (base_snapshot_id, base), (comparison_snapshot_id, comparison)
+            ) if value is None
+        ]
+        if missing:
+            raise SnapshotNotFoundError(",".join(missing))
+        assert base is not None and comparison is not None
+        reason = compatibility_reason(base, comparison, cutoff)
+        response: dict[str, Any] = {
+            "status": "incomparable_contract" if reason else "available",
+            "comparison_policy_version": COMPARISON_POLICY_VERSION,
+            "comparison_snapshot_contract": COMPARISON_SNAPSHOT_CONTRACT,
+            "comparison_cutoff": cutoff,
+            "direction": {
+                "base_snapshot_id": base_snapshot_id,
+                "comparison_snapshot_id": comparison_snapshot_id,
+                "absolute_delta_formula": "comparison_minus_base",
+            },
+            "base_snapshot": SnapshotReference.from_snapshot(base).canonical_payload(),
+            "comparison_snapshot": SnapshotReference.from_snapshot(comparison).canonical_payload(),
+            "compatibility": {"compatible": reason is None, "reasons": [reason] if reason else []},
+            "stored_deltas": [],
+            "base_current_context": None,
+            "comparison_current_context": None,
+            "current_context_deltas": [],
+            "warnings": [],
+            "reasons": [reason] if reason else [],
+        }
+        if reason is None:
+            response["stored_deltas"] = self.comparator.compare(base, comparison)
+            base_context = self.freshness.snapshot_dependency_freshness_with_connection(
+                conn, base, cutoff, checked_at=cutoff
+            )
+            comparison_context = self.freshness.snapshot_dependency_freshness_with_connection(
+                conn, comparison, cutoff, checked_at=cutoff
+            )
+            base_context.pop("snapshot_output_sha256", None)
+            comparison_context.pop("snapshot_output_sha256", None)
+            response["base_current_context"] = base_context
+            response["comparison_current_context"] = comparison_context
+            response["current_context_deltas"] = self._compare_contexts(
+                base_context, comparison_context
+            )
+            response["reasons"] = sorted(set(
+                base_context.get("reasons", []) + comparison_context.get("reasons", [])
+            ))
+            if base_context["freshness_status"] in {"unknown", "blocked"} or comparison_context["freshness_status"] in {"unknown", "blocked"}:
+                response["warnings"].append("current_dependency_context_requires_review")
+        return response

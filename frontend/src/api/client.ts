@@ -11,9 +11,11 @@ import type {
   SnapshotDependencyStatusResponse,
   SnapshotListResponse,
   SnapshotComparisonResponse,
+  ResearchQueueDetail,
+  ResearchQueueResponse,
 } from "./types";
 
-type QueryValue = string | number | null | undefined;
+type QueryValue = string | number | boolean | null | undefined;
 
 function withQuery(path: string, query: Record<string, QueryValue> = {}): string {
   const params = new URLSearchParams();
@@ -127,5 +129,16 @@ export const evidenceApi = {
   },
   rules(signal?: AbortSignal) {
     return fetchJson<RuleRegistryResponse>("/api/v2/model-rules", signal);
+  },
+  researchQueue(comparisonCutoff: string, includeArchived = false, signal?: AbortSignal) {
+    return fetchJson<ResearchQueueResponse>(withQuery("/api/v2/research/queue", {
+      comparison_cutoff: comparisonCutoff, include_archived: includeArchived, order: "symbol",
+    }), signal);
+  },
+  researchQueueDetail(itemId: string, comparisonCutoff: string, signal?: AbortSignal) {
+    return fetchJson<ResearchQueueDetail>(withQuery(
+      `/api/v2/research/queue/${encodeURIComponent(itemId)}`,
+      { comparison_cutoff: comparisonCutoff },
+    ), signal);
   },
 };

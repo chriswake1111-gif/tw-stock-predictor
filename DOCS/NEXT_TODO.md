@@ -128,8 +128,16 @@
 - [x] Shared SQLite read transaction and connection-aware repository reads implemented.
 - [x] GET-only v2 comparison API and read-only Evidence Workspace page implemented.
 - [x] Focused backend, frontend unit, responsive Playwright, and governance coverage added.
-- [ ] Draft PR review and main CI closure remain pending.
-- [ ] Phase 12 has not started and requires a separate explicit authorization.
+- [x] Phase 11 Draft PR review and main CI closure completed before Phase 12 started.
+
+## Evidence Model V2 Phase 12 status (2026-08-13)
+
+- [x] Research watchlist membership, archive/restore, and append-only exact snapshot acknowledgment implemented on the dedicated Phase 12 branch.
+- [x] Actual-latest no-fallback selection, one shared cutoff/read transaction, and Phase 11 query-time comparison integrated.
+- [x] Local/loopback exact-Origin/Host boundary, writes-disabled default, 1,800-second CSRF, strict DTO/body limits, and browser no-admin-secret guard implemented.
+- [x] Backup/restore validation and `/research` desktop/mobile workspace added.
+- [ ] Phase 12 remains in Draft PR review state and is not merged to `main`.
+- [ ] Phase 13 has not started and requires separate explicit authorization after Phase 12 closure.
 
 ## Evidence Model V2 Phase 3 status (2026-08-01)
 

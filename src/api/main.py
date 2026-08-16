@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 from src.analysis_service import analyze_symbol, normalize_symbol
 from src.api.routes.v2_valuation import router as v2_valuation_router
+from src.api.routes.research_workflow import router as research_workflow_router
+from src.api.workflow_security import ResearchBoundaryMiddleware
 from src.domain.model_status import LEGACY_V1_MODEL_METADATA
 from src.scheduler import AutoScheduler
 from src.services.rule_registry import RuleRegistry
@@ -56,7 +58,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Added after legacy CORS so this route-local boundary is the outer middleware.
+app.add_middleware(ResearchBoundaryMiddleware)
+
 app.include_router(v2_valuation_router)
+app.include_router(research_workflow_router)
 
 @app.get("/api/health")
 def health_check():
