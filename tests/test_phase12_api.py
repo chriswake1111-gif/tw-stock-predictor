@@ -1,5 +1,6 @@
 import json
 import logging
+import sqlite3
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -42,7 +43,17 @@ def test_phase12_api_empty_queue_and_membership_lifecycle(monkeypatch, tmp_path)
         item_id = created.json()["watchlist_item_id"]
         duplicate = client.post("/api/v2/research/queue", json={"symbol": "2330.TW"}, headers=headers)
         assert duplicate.status_code == 200 and duplicate.json()["created"] is False
-        assert client.post(f"/api/v2/research/queue/{item_id}/archive", json={}, headers=headers).status_code == 200
+        archive_path = f"/api/v2/research/queue/{item_id}/archive"
+        unarchive_path = f"/api/v2/research/queue/{item_id}/unarchive"
+        archived = client.post(archive_path, json={}, headers=headers)
+        archived_again = client.post(archive_path, json={}, headers=headers)
+        assert archived.status_code == 200 and archived.json()["changed"] is True
+        assert archived_again.status_code == 200 and archived_again.json()["changed"] is False
+        unarchived = client.post(unarchive_path, json={}, headers=headers)
+        unarchived_again = client.post(unarchive_path, json={}, headers=headers)
+        assert unarchived.json()["changed"] is True
+        assert unarchived_again.json()["changed"] is False
+        assert client.post(archive_path, json={}, headers=headers).json()["changed"] is True
         restored = client.post("/api/v2/research/queue", json={"symbol": "2330"}, headers=headers)
         assert restored.status_code == 200 and restored.json()["restored"] is True
         assert restored.json()["watchlist_item_id"] == item_id
@@ -124,6 +135,24 @@ def test_phase12_api_acknowledgment_idempotency_and_cutoff(monkeypatch, tmp_path
         assert first.status_code == 201
         assert retry.status_code == 200
         assert retry.json()["review_event_id"] == first.json()["review_event_id"]
+        assert "idempotency_key" not in first.json()
+        assert "idempotency_key" not in retry.json()
+        detail = client.get(
+            f"/api/v2/research/queue/{item['watchlist_item_id']}",
+            params={"comparison_cutoff": "2026-08-03T00:00:00Z"},
+        )
+        queue = client.get(
+            "/api/v2/research/queue",
+            params={"comparison_cutoff": "2026-08-03T00:00:00Z"},
+        )
+        assert "idempotency_key" not in detail.json()["latest_review_event_reference"]
+        assert "idempotency_key" not in queue.json()["items"][0]["latest_review_event_reference"]
+        with sqlite3.connect(db_path) as conn:
+            stored_key = conn.execute(
+                "SELECT idempotency_key FROM research_review_events WHERE review_event_id=?",
+                (first.json()["review_event_id"],),
+            ).fetchone()[0]
+        assert stored_key == "ack-key"
         conflict = client.post(
             path,
             json={**payload, "comparison_cutoff": "2026-08-04T00:00:00Z"},

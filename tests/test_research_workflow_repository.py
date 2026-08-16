@@ -105,10 +105,14 @@ def test_archive_and_unarchive_are_idempotent(tmp_path):
     item = repo.add_membership("2330")
     archived = repo.archive(item["watchlist_item_id"])
     archived_again = repo.archive(item["watchlist_item_id"])
-    assert archived_again == archived
+    assert archived["changed"] is True
+    assert archived_again["changed"] is False
+    assert archived_again["updated_at"] == archived["updated_at"]
     active = repo.unarchive(item["watchlist_item_id"])
     active_again = repo.unarchive(item["watchlist_item_id"])
-    assert active_again == active
+    assert active["changed"] is True
+    assert active_again["changed"] is False
+    assert active_again["updated_at"] == active["updated_at"]
 
 
 def test_membership_ordering_is_neutral_deterministic_and_fail_closed(tmp_path):

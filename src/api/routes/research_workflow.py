@@ -177,7 +177,8 @@ def archive_membership(item_id: str, payload: EmptyResearchRequest, request: Req
         item = _repository().archive(item_id)
         _audit(
             request, command_type="archive_membership", item_id=item_id,
-            symbol=item["symbol"], outcome="success", reason="archived",
+            symbol=item["symbol"], outcome="success",
+            reason="archived" if item["changed"] else "already_archived",
         )
         return item
     except Exception as exc:
@@ -192,7 +193,8 @@ def unarchive_membership(item_id: str, payload: EmptyResearchRequest, request: R
         item = _repository().unarchive(item_id)
         _audit(
             request, command_type="unarchive_membership", item_id=item_id,
-            symbol=item["symbol"], outcome="success", reason="unarchived",
+            symbol=item["symbol"], outcome="success",
+            reason="unarchived" if item["changed"] else "already_active",
         )
         return item
     except Exception as exc:

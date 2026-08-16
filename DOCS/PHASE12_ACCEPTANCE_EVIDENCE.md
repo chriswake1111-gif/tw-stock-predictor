@@ -43,11 +43,11 @@
 | AC-37 | workflow metadata不進Evidence Grade、Rule Trace、模型輸出、screening或historical performance。 | Governance product-boundary/static contract guard | PASS |
 | AC-38 | Research write API預設disabled並回HTTP 503。 | Research write security test | PASS |
 | AC-39 | 帶有non-allowlisted Origin的Research browser GET回HTTP 403。 | Research GET Origin security test | PASS |
-| AC-40 | 非loopback、invalid Host、non-allowlisted Origin、invalid CSRF、invalid content type或oversized body的Research write依typed contract拒絕。 | Research workflow security matrix | PASS |
+| AC-40 | 非loopback、invalid Host、non-allowlisted Origin、invalid CSRF、invalid content type或oversized body的Research write依typed contract拒絕。 | Research workflow security matrix；partial body後`http.disconnect`直接終止且不呼叫downstream | PASS |
 | AC-41 | frontend source及production bundle均不包含Evidence admin API key。 | Source guard; production `build` bundle scanner | PASS |
-| AC-42 | duplicate acknowledgment同key同semantic payload回原event。 | Repository/API idempotency tests | PASS |
+| AC-42 | duplicate acknowledgment同key同semantic payload回原event。 | Repository/API idempotency tests；公開ack/queue/detail DTO不含raw key，DB仍保留key | PASS |
 | AC-43 | 相同idempotency key搭配不同payload回HTTP 409。 | Repository/API conflict tests | PASS |
-| AC-44 | duplicate archive/unarchive為deterministic idempotent operation。 | `test_archive_and_unarchive_are_idempotent`; strict empty DTO API test | PASS |
+| AC-44 | duplicate archive/unarchive為deterministic idempotent operation。 | Repository/API tests驗證首次transition為`changed=true`、重試no-op為`changed=false`且timestamp/history不變 | PASS |
 | AC-45 | backup/restore保留membership、archive state、review history及idempotency behavior。 | Phase 12 backup/restore round-trip test | PASS |
 | AC-46 | database failure不得偽裝成empty queue。 | `test_phase12_api_database_failure_is_not_an_empty_queue` | PASS |
 | AC-47 | list只回summary/count；detail才可回完整Phase 11 comparison。 | Summary/detail service regression | PASS |

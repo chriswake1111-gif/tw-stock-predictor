@@ -1,4 +1,4 @@
-import type { ResearchWatchlistItem } from "./types";
+import type { ResearchMembershipMutationResponse, ResearchWatchlistItem } from "./types";
 
 let researchCsrfToken: string | null = null;
 
@@ -54,13 +54,13 @@ export const researchWorkflowApi = {
     );
   },
   archiveItem(itemId: string) {
-    return researchMutation<ResearchWatchlistItem>(
+    return researchMutation<ResearchMembershipMutationResponse>(
       `/api/v2/research/queue/${encodeURIComponent(itemId)}/archive`,
       {},
     );
   },
   unarchiveItem(itemId: string) {
-    return researchMutation<ResearchWatchlistItem>(
+    return researchMutation<ResearchMembershipMutationResponse>(
       `/api/v2/research/queue/${encodeURIComponent(itemId)}/unarchive`,
       {},
     );

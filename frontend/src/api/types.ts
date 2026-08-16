@@ -414,6 +414,10 @@ export interface ResearchWatchlistItem {
   workflow_contract_version: "research_review_queue_v1";
 }
 
+export type ResearchMembershipMutationResponse = ResearchWatchlistItem & {
+  changed: boolean;
+};
+
 export interface ResearchQueueItem {
   watchlist_item: ResearchWatchlistItem;
   analysis_status: string;

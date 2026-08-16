@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 from src.analysis_service import normalize_symbol
 from src.domain.valuation import normalize_utc_timestamp
@@ -82,3 +83,22 @@ def comparison_has_deltas(
     if status is not ResearchComparisonStatus.COMPARABLE:
         return None
     return stored_delta_count > 0 or current_context_delta_count > 0
+
+
+def public_review_event(event: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Project one persisted review event onto the public Research API contract."""
+    if event is None:
+        return None
+    fields = (
+        "review_event_id",
+        "watchlist_item_id",
+        "acknowledged_snapshot_id",
+        "comparison_cutoff_at",
+        "reviewed_at",
+        "created_at",
+        "workflow_contract_version",
+    )
+    projected = {field: event[field] for field in fields if field in event}
+    if "created" in event:
+        projected["created"] = bool(event["created"])
+    return projected

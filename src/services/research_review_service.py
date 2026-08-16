@@ -13,6 +13,7 @@ from src.domain.research_workflow import (
     ResearchQueueOrder,
     WORKFLOW_CONTRACT_VERSION,
     comparison_has_deltas,
+    public_review_event,
 )
 from src.domain.snapshot_comparison import canonical_timestamp
 from src.repositories.analysis_snapshot_repository import (
@@ -93,7 +94,7 @@ class ResearchReviewService:
             "stored_delta_count": 0,
             "current_context_delta_count": 0,
             "latest_snapshot_reference": None,
-            "latest_review_event_reference": latest_event,
+            "latest_review_event_reference": public_review_event(latest_event),
             "reason_codes": [],
             "_comparison": None,
         }
@@ -258,7 +259,9 @@ class ResearchReviewService:
             raise ValueError("acknowledged_snapshot_not_found")
         if cutoff < snapshot["knowledge_cutoff_at"]:
             raise ValueError("comparison_cutoff_before_snapshot")
-        return self.workflow.append_review_event(
+        event = self.workflow.append_review_event(
             ReviewAcknowledgment(item_id, snapshot_id, cutoff, idempotency_key),
             reviewed_at=received,
         )
+        assert event is not None
+        return public_review_event(event)

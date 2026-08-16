@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, Request, Response
@@ -117,3 +118,42 @@ def test_expired_csrf_rejects_before_mutation(monkeypatch):
     assert response.status_code == 403
     assert response.json()["detail"] == "csrf_session_expired"
     assert mutations == []
+
+
+def test_partial_request_followed_by_disconnect_terminates_without_downstream(monkeypatch):
+    config = _valid(monkeypatch)
+    monkeypatch.setenv("RESEARCH_WORKFLOW_WRITES_ENABLED", "true")
+    app_called = False
+    sent = []
+    messages = iter([
+        {"type": "http.request", "body": b"{", "more_body": True},
+        {"type": "http.disconnect"},
+    ])
+
+    async def downstream(scope, receive, send):
+        nonlocal app_called
+        app_called = True
+
+    async def receive():
+        return next(messages)
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v2/research/queue",
+        "scheme": "http",
+        "client": ("127.0.0.1", 50000),
+        "headers": [
+            (b"host", b"127.0.0.1:8000"),
+            (b"origin", b"http://127.0.0.1:8000"),
+            (b"content-type", b"application/json"),
+        ],
+    }
+    middleware = ResearchBoundaryMiddleware(downstream, config=config)
+    asyncio.run(asyncio.wait_for(middleware(scope, receive, send), timeout=1.0))
+
+    assert app_called is False
+    assert sent == []

@@ -212,8 +212,10 @@ class ResearchBoundaryMiddleware:
         more = True
         while more:
             message = await receive()
+            if message["type"] == "http.disconnect":
+                return
             if message["type"] != "http.request":
-                continue
+                return
             body.extend(message.get("body", b""))
             if len(body) > MAX_RESEARCH_BODY_BYTES:
                 await self._reject(send, 413, "research_request_body_too_large")

@@ -102,6 +102,7 @@ class ResearchWorkflowRepository:
             ).fetchone()
             if row is None:
                 raise ResearchWorkflowNotFoundError(item_id)
+            changed = row["membership_state"] != state.value
             if state is MembershipState.ACTIVE:
                 row = self._activate_membership(conn, row, changed_at)
             elif row["membership_state"] != "archived":
@@ -119,7 +120,7 @@ class ResearchWorkflowRepository:
                 ).fetchone()
             conn.commit()
             assert row is not None
-            return self._item(row)
+            return {**self._item(row), "changed": changed}
         except Exception:
             conn.rollback()
             raise
