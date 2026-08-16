@@ -4,7 +4,6 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { ResearchQueuePage } from "../pages/ResearchQueuePage";
-import { researchWorkflowApi } from "../api/researchClient";
 import { renderWithProviders } from "./render";
 
 
@@ -19,7 +18,8 @@ describe("Research Queue", () => {
 
   it("renders null and stale as separate neutral workflow facts", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
-      status: "available", comparison_cutoff: "2026-08-13T00:00:00Z", items: [{
+      status: "available", workflow_contract_version: "research_review_queue_v1",
+      comparison_cutoff: "2026-08-13T00:00:00Z", items: [{
         watchlist_item: { watchlist_item_id: "item-1", symbol: "2330.TW", membership_state: "active", created_at: "x", updated_at: "x", archived_at: null, workflow_contract_version: "research_review_queue_v1" },
         analysis_status: "available", freshness_status: "stale", comparison_status: "not_run",
         review_state: "baseline_not_set", comparison_has_deltas: null,
@@ -37,11 +37,61 @@ describe("Research Queue", () => {
   });
 
   it("does not acknowledge on render or row inspection", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
-      status: "available", comparison_cutoff: "2026-08-13T00:00:00Z", items: [],
-    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const queueItem = {
+      watchlist_item: {
+        watchlist_item_id: "item-1", symbol: "2330.TW", membership_state: "active",
+        created_at: "2026-08-12T00:00:00Z", updated_at: "2026-08-12T00:00:00Z",
+        archived_at: null, workflow_contract_version: "research_review_queue_v1",
+      },
+      analysis_status: "available", freshness_status: "current", comparison_status: "not_run",
+      review_state: "baseline_not_set", comparison_has_deltas: null,
+      stored_delta_count: 0, current_context_delta_count: 0,
+      latest_snapshot_reference: { snapshot_id: "snapshot-1", symbol: "2330.TW" },
+      latest_review_event_reference: null, reason_codes: ["review_baseline_not_set"],
+    };
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      calls.push({ url, method });
+      if (url.endsWith("/csrf-token")) {
+        return new Response(JSON.stringify({ csrf_token: "csrf-token" }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (method === "POST") {
+        return new Response(JSON.stringify({ review_event_id: "review-1", created: true }), {
+          status: 201, headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/queue/item-1")) {
+        return new Response(JSON.stringify({ ...queueItem, comparison: null }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({
+        status: "available", workflow_contract_version: "research_review_queue_v1",
+        comparison_cutoff: "2026-08-13T00:00:00Z", items: [queueItem],
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
     renderWithProviders(<ResearchQueuePage />, "/research");
-    await waitFor(() => expect(fetchMock).not.toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("比較截止時間（含時區）"), {
+      target: { value: "2026-08-13T00:00:00Z" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "載入清單" }));
+    expect(await screen.findByText("尚未設定複核基準")).toBeInTheDocument();
+    expect(calls.some((call) => call.url.includes("order=symbol"))).toBe(true);
+    fireEvent.scroll(window, { target: { scrollY: 200 } });
+    fireEvent.click(screen.getByRole("button", { name: "查看比較內容" }));
+    expect(await screen.findByRole("heading", { name: "比較內容" })).toBeInTheDocument();
+    expect(calls.filter((call) => (
+      call.method === "POST" && call.url.includes("/acknowledgments")
+    ))).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "設為已複核基準" }));
+    await waitFor(() => expect(calls.filter((call) => (
+      call.method === "POST" && call.url.includes("/acknowledgments")
+    ))).toHaveLength(1));
   });
 
   it("supports keyboard navigation through the primary workflow controls", async () => {
@@ -58,6 +108,8 @@ describe("Research Queue", () => {
   });
 
   it("refreshes expired CSRF but waits for explicit retry with the same acknowledgment key", async () => {
+    vi.resetModules();
+    const { researchWorkflowApi } = await import("../api/researchClient");
     const calls: Array<{ url: string; method: string; key: string | null }> = [];
     let bootstrapCount = 0;
     let mutationCount = 0;

@@ -435,6 +435,7 @@ export interface ResearchQueueItem {
 
 export interface ResearchQueueResponse {
   status: "available";
+  workflow_contract_version: "research_review_queue_v1";
   comparison_cutoff: string;
   items: ResearchQueueItem[];
 }

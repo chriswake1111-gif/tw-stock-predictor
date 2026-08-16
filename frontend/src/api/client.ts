@@ -132,7 +132,7 @@ export const evidenceApi = {
   },
   researchQueue(comparisonCutoff: string, includeArchived = false, signal?: AbortSignal) {
     return fetchJson<ResearchQueueResponse>(withQuery("/api/v2/research/queue", {
-      comparison_cutoff: comparisonCutoff, include_archived: includeArchived,
+      comparison_cutoff: comparisonCutoff, include_archived: includeArchived, order: "symbol",
     }), signal);
   },
   researchQueueDetail(itemId: string, comparisonCutoff: string, signal?: AbortSignal) {

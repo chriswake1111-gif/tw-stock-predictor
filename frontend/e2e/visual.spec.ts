@@ -17,6 +17,7 @@ async function mockApi(page: Page) {
     const body = url.includes("research/queue")
       ? {
           status: "available",
+          workflow_contract_version: "research_review_queue_v1",
           comparison_cutoff: "2026-08-13T00:00:00Z",
           items: [{
             watchlist_item: {

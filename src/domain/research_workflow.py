@@ -37,6 +37,11 @@ class ResearchComparisonStatus(str, Enum):
     UNAVAILABLE = "unavailable"
 
 
+class ResearchQueueOrder(str, Enum):
+    SYMBOL = "symbol"
+    UPDATED_AT = "updated_at"
+
+
 def canonical_research_symbol(value: str) -> str:
     candidate = normalize_symbol(value)
     if not _STOCK_SYMBOL.fullmatch(candidate):

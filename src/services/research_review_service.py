@@ -10,6 +10,8 @@ from src.domain.research_workflow import (
     ReviewAcknowledgment,
     ReviewState,
     ResearchComparisonStatus,
+    ResearchQueueOrder,
+    WORKFLOW_CONTRACT_VERSION,
     comparison_has_deltas,
 )
 from src.domain.snapshot_comparison import canonical_timestamp
@@ -179,13 +181,14 @@ class ResearchReviewService:
     def queue(
         self, *, comparison_cutoff: str, request_received_at: datetime | str,
         include_archived: bool = False, limit: int = 25,
+        order: ResearchQueueOrder | str = ResearchQueueOrder.SYMBOL,
     ) -> dict[str, Any]:
         cutoff = self.validate_query_cutoff(comparison_cutoff, request_received_at)
         conn = self._connect()
         try:
             conn.execute("BEGIN")
             memberships = self.workflow.list_memberships_with_connection(
-                conn, include_archived=include_archived, limit=limit
+                conn, include_archived=include_archived, limit=limit, order=order
             )
             events = self.workflow.latest_review_events_with_connection(
                 conn, [item["watchlist_item_id"] for item in memberships]
@@ -200,7 +203,12 @@ class ResearchReviewService:
             conn.execute("COMMIT")
             for item in items:
                 item.pop("_comparison", None)
-            return {"status": "available", "comparison_cutoff": cutoff, "items": items}
+            return {
+                "status": "available",
+                "workflow_contract_version": WORKFLOW_CONTRACT_VERSION,
+                "comparison_cutoff": cutoff,
+                "items": items,
+            }
         except Exception:
             if conn.in_transaction:
                 conn.execute("ROLLBACK")

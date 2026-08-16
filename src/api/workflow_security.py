@@ -9,6 +9,7 @@ import json
 import os
 import secrets
 import threading
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
@@ -156,6 +157,7 @@ class ResearchBoundaryMiddleware:
         received_at = datetime.now(timezone.utc)
         state = scope.setdefault("state", {})
         state["research_request_received_at"] = received_at
+        state["research_correlation_id"] = uuid.uuid4().hex
         state["research_csrf_sessions"] = self.sessions
         if not self.config.valid:
             await self._reject(send, 503, "research_security_configuration_invalid")

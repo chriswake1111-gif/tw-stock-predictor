@@ -28,7 +28,7 @@
 | AC-22 | incompatible actual latest snapshot不得退回compatible次新snapshot。 | `test_incompatible_latest_is_used_without_compatible_fallback` | PASS |
 | AC-23 | actual latest snapshot integrity failure不得退回次新snapshot。 | `test_actual_latest_integrity_failure_does_not_fall_back` | PASS |
 | AC-24 | acknowledged snapshot missing時回blocked，且不得替換baseline。 | Missing-baseline state regression | PASS |
-| AC-25 | baseline或latest snapshot integrity failure回`snapshot_integrity_error`。 | Baseline and actual-latest integrity regressions | PASS |
+| AC-25 | baseline或latest snapshot integrity failure回`snapshot_integrity_error`。 | `test_baseline_integrity_failure_and_missing_baseline_fail_closed` baseline-only path with a newer valid latest; `test_actual_latest_integrity_failure_does_not_fall_back` actual-latest path | PASS |
 | AC-26 | comparison只能重用Phase 11 `SnapshotComparisonService`。 | `compare_with_connection`; hidden-connection regression; Phase 11 compatibility suite | PASS |
 | AC-27 | comparison result、deltas、counts及`comparison_has_deltas`均不得持久化。 | Two-table migration schema; summary/detail query-time derivation test | PASS |
 | AC-28 | stored delta存在時`comparison_has_deltas=true`。 | Typed comparison state matrix regression | PASS |
@@ -39,7 +39,7 @@
 | AC-33 | stale維持獨立freshness語意，不自動形成delta、blocked或temporal-change宣稱。 | AC-57 service, frontend wording and Playwright regressions | PASS |
 | AC-34 | dependency blocked形成`review_state=blocked`。 | Typed comparison state matrix regression | PASS |
 | AC-35 | dependency unknown形成`review_state=unknown`。 | Typed comparison state matrix regression | PASS |
-| AC-36 | page open、GET、scroll或comparison完成均不得自動acknowledge。 | Frontend no-auto-ack unit test; write-only mutation client | PASS |
+| AC-36 | page open、GET、scroll或comparison完成均不得自動acknowledge。 | `does not acknowledge on render or row inspection`: real queue row, detail GET, scroll, zero acknowledgment POST, then one explicit-click positive control | PASS |
 | AC-37 | workflow metadata不進Evidence Grade、Rule Trace、模型輸出、screening或historical performance。 | Governance product-boundary/static contract guard | PASS |
 | AC-38 | Research write API預設disabled並回HTTP 503。 | Research write security test | PASS |
 | AC-39 | 帶有non-allowlisted Origin的Research browser GET回HTTP 403。 | Research GET Origin security test | PASS |

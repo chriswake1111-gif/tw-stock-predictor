@@ -37,7 +37,7 @@ Writes are disabled by default. When explicitly enabled, a write additionally re
 
 ```text
 GET  /api/v2/research/csrf-token
-GET  /api/v2/research/queue?comparison_cutoff=<timezone-aware timestamp>
+GET  /api/v2/research/queue?comparison_cutoff=<timezone-aware timestamp>&order=<symbol|updated_at>
 GET  /api/v2/research/queue/{item_id}?comparison_cutoff=<timezone-aware timestamp>
 POST /api/v2/research/queue
 POST /api/v2/research/queue/{item_id}/archive
@@ -46,6 +46,17 @@ POST /api/v2/research/queue/{item_id}/acknowledgments
 ```
 
 Acknowledgment writes require `Idempotency-Key`. The same key and semantic payload return the original event; reuse with a different semantic payload returns `409 review_idempotency_conflict`.
+
+Queue responses expose `workflow_contract_version=research_review_queue_v1`. The default
+neutral order is `symbol ASC, watchlist_item_id ASC`; `order=updated_at` uses
+`updated_at DESC, symbol ASC, watchlist_item_id ASC`. This is operational ordering only and
+does not express priority, importance, attractiveness, or recommendation.
+
+Each Research mutation emits a Phase-12-local structured audit record with a server-generated
+correlation ID, command type, item/event identity where available, canonical symbol,
+outcome/reason, and server timestamp. Audit records never include CSRF/session material,
+admin credentials, raw idempotency keys, headers, cookies, authorization data, or request bodies.
+The audit is not persisted to a database and does not change migrations 14 or 15.
 
 ## Explicit non-goals
 

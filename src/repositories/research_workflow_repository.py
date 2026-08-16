@@ -8,6 +8,7 @@ from typing import Any
 
 from src.domain.research_workflow import (
     MembershipState,
+    ResearchQueueOrder,
     ReviewAcknowledgment,
     WORKFLOW_CONTRACT_VERSION,
     canonical_research_symbol,
@@ -133,15 +134,26 @@ class ResearchWorkflowRepository:
 
     @staticmethod
     def list_memberships_with_connection(
-        conn: sqlite3.Connection, *, include_archived: bool = False, limit: int = 25
+        conn: sqlite3.Connection, *, include_archived: bool = False, limit: int = 25,
+        order: ResearchQueueOrder | str = ResearchQueueOrder.SYMBOL,
     ) -> list[dict[str, Any]]:
         if not 1 <= limit <= 50:
             raise ValueError("research_queue_limit_invalid")
+        try:
+            queue_order = ResearchQueueOrder(order)
+        except ValueError as exc:
+            raise ValueError("research_queue_order_invalid") from exc
+        if queue_order is ResearchQueueOrder.SYMBOL:
+            order_by = "symbol ASC, watchlist_item_id ASC"
+        elif queue_order is ResearchQueueOrder.UPDATED_AT:
+            order_by = "updated_at DESC, symbol ASC, watchlist_item_id ASC"
+        else:  # pragma: no cover - enum exhaustiveness guard
+            raise ValueError("research_queue_order_invalid")
         where = "" if include_archived else "WHERE membership_state='active'"
         rows = conn.execute(
             f"""
             SELECT * FROM research_watchlist_items {where}
-            ORDER BY symbol ASC, watchlist_item_id ASC LIMIT ?
+            ORDER BY {order_by} LIMIT ?
             """,
             (limit,),
         ).fetchall()

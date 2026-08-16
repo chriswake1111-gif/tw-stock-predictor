@@ -161,7 +161,11 @@ def test_baseline_integrity_failure_and_missing_baseline_fail_closed(tmp_path):
     service = ResearchReviewService(str(tmp_path / "baseline.db"))
     membership = service.workflow.add_membership("2330")
     repo = AnalysisSnapshotRepository(service.db_path)
-    baseline = repo.add(_snapshot(), "baseline")
+    baseline = repo.add(_snapshot(marker="baseline"), "baseline")
+    latest = repo.add(
+        _snapshot(created_at="2026-08-04T00:00:00Z", marker="valid-latest"),
+        "valid-latest",
+    )
     service.acknowledge(
         membership["watchlist_item_id"], snapshot_id=baseline["snapshot_id"],
         comparison_cutoff="2026-08-03T00:00:00Z", idempotency_key="review",
@@ -173,9 +177,11 @@ def test_baseline_integrity_failure_and_missing_baseline_fail_closed(tmp_path):
             "UPDATE analysis_snapshots SET output_json=? WHERE snapshot_id=?",
             ('{"status":"available","tampered":true}', baseline["snapshot_id"]),
         )
+    assert repo.get(latest["snapshot_id"])["output"]["marker"] == "valid-latest"
     integrity = service.queue(
         comparison_cutoff="2026-08-05T00:00:00Z", request_received_at=NOW
     )["items"][0]
+    assert integrity["latest_snapshot_reference"]["snapshot_id"] == latest["snapshot_id"]
     assert integrity["review_state"] == "snapshot_integrity_error"
     assert integrity["comparison_has_deltas"] is None
 

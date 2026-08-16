@@ -109,3 +109,34 @@ def test_archive_and_unarchive_are_idempotent(tmp_path):
     active = repo.unarchive(item["watchlist_item_id"])
     active_again = repo.unarchive(item["watchlist_item_id"])
     assert active_again == active
+
+
+def test_membership_ordering_is_neutral_deterministic_and_fail_closed(tmp_path):
+    db = str(tmp_path / "ordering.db")
+    repo = ResearchWorkflowRepository(db)
+    items = [repo.add_membership(symbol) for symbol in ("3008", "1000", "2000")]
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        by_symbol = [item["symbol"] for item in repo.list_memberships_with_connection(conn)]
+        assert by_symbol == ["1000.TW", "2000.TW", "3008.TW"]
+        conn.execute(
+            "UPDATE research_watchlist_items SET updated_at=? WHERE symbol=?",
+            ("2026-08-17T03:00:00Z", "3008.TW"),
+        )
+        conn.execute(
+            "UPDATE research_watchlist_items SET updated_at=? WHERE symbol IN (?,?)",
+            ("2026-08-17T02:00:00Z", "1000.TW", "2000.TW"),
+        )
+        explicit_symbol = repo.list_memberships_with_connection(conn, order="symbol")
+        updated = repo.list_memberships_with_connection(conn, order="updated_at")
+        assert [item["watchlist_item_id"] for item in explicit_symbol] == [
+            item["watchlist_item_id"] for item in sorted(items, key=lambda item: (
+                item["symbol"], item["watchlist_item_id"]
+            ))
+        ]
+        assert [item["symbol"] for item in updated] == [
+            "3008.TW", "1000.TW", "2000.TW"
+        ]
+        for invalid in ("best", "priority", "opportunity"):
+            with pytest.raises(ValueError, match="research_queue_order_invalid"):
+                repo.list_memberships_with_connection(conn, order=invalid)
