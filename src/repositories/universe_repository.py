@@ -294,6 +294,89 @@ class UniverseRepository:
         # _compose_result marks it needs_human_input and never current_complete.
         return rows[0]
 
+    @staticmethod
+    def _sql_placeholders(values: list[str]) -> str:
+        return ",".join("?" for _ in values)
+
+    def _select_historical_references_batch(
+        self, conn: sqlite3.Connection, *, instrument_ids: list[str], cutoff: str
+    ) -> dict[str, dict[str, Any] | None]:
+        """Select historical references for a page with bounded set queries.
+
+        The single-item helper above remains for exact/resolve compatibility.
+        List/search uses this batch form so reference, revoke and partial
+        fallback reads are constant-query operations rather than N+1 lookups.
+        """
+        ids = list(dict.fromkeys(str(value) for value in instrument_ids))
+        if not ids:
+            return {}
+        placeholders = self._sql_placeholders(ids)
+        accepted_rows = [dict(row) for row in conn.execute(
+            f"""
+            SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
+                   i.first_observed_at AS anchor_first_observed_at,
+                   ur.logical_revision_key
+            FROM universe_instrument_revisions r
+            JOIN universe_instruments i ON i.instrument_id = r.instrument_id
+            JOIN universe_revisions ur ON ur.universe_revision_id = r.universe_revision_id
+            WHERE r.instrument_id IN ({placeholders})
+              AND r.status = 'accepted' AND {self._cutoff_where('r')}
+            ORDER BY r.instrument_id, COALESCE(r.available_at,'') DESC,
+                     r.ingested_at DESC, r.revision_number DESC,
+                     r.instrument_revision_id DESC
+            """, ids + [cutoff, cutoff, cutoff, cutoff]
+        ).fetchall()]
+        accepted_by_id: dict[str, list[dict[str, Any]]] = {}
+        for row in accepted_rows:
+            accepted_by_id.setdefault(str(row["instrument_id"]), []).append(row)
+
+        revoke_rows = [dict(row) for row in conn.execute(
+            f"""
+            SELECT r.instrument_id, r.supersedes_revision_id
+            FROM universe_instrument_revisions r
+            WHERE r.instrument_id IN ({placeholders})
+              AND r.status = 'revoked' AND {self._cutoff_where('r')}
+            """, ids + [cutoff, cutoff, cutoff, cutoff]
+        ).fetchall()]
+        revoked_by_id: dict[str, set[str]] = {}
+        for row in revoke_rows:
+            superseded = row.get("supersedes_revision_id")
+            if superseded:
+                revoked_by_id.setdefault(str(row["instrument_id"]), set()).add(str(superseded))
+
+        partial_rows = [dict(row) for row in conn.execute(
+            f"""
+            SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
+                   i.first_observed_at AS anchor_first_observed_at,
+                   ur.logical_revision_key
+            FROM universe_instrument_revisions r
+            JOIN universe_instruments i ON i.instrument_id = r.instrument_id
+            JOIN universe_revisions ur ON ur.universe_revision_id = r.universe_revision_id
+            WHERE r.instrument_id IN ({placeholders})
+              AND r.status = 'partial' AND r.canonical_symbol IS NOT NULL
+              AND {self._cutoff_where('r')}
+            ORDER BY r.instrument_id, r.ingested_at DESC,
+                     COALESCE(r.available_at,'') DESC, r.revision_number DESC,
+                     r.instrument_revision_id DESC
+            """, ids + [cutoff, cutoff, cutoff, cutoff]
+        ).fetchall()]
+        partial_by_id: dict[str, dict[str, Any]] = {}
+        for row in partial_rows:
+            partial_by_id.setdefault(str(row["instrument_id"]), row)
+
+        result: dict[str, dict[str, Any] | None] = {}
+        for instrument_id in ids:
+            accepted = accepted_by_id.get(instrument_id, [])
+            if accepted:
+                revoked = revoked_by_id.get(instrument_id, set())
+                result[instrument_id] = next(
+                    (row for row in accepted if row.get("universe_revision_id") not in revoked),
+                    accepted[0],
+                )
+            else:
+                result[instrument_id] = partial_by_id.get(instrument_id)
+        return result
+
     def _select_operational_state(self, conn: sqlite3.Connection, *, instrument_id: str,
                                   cutoff: str, reference: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Select the actual latest operational/resource state at the same cutoff."""
@@ -335,6 +418,76 @@ class UniverseRepository:
                 )
                 rows.append(row)
         return self._select_latest(rows)
+
+    def _select_operational_states_batch(
+        self, conn: sqlite3.Connection, *, instrument_ids: list[str],
+        references: dict[str, dict[str, Any] | None], cutoff: str,
+    ) -> dict[str, dict[str, Any] | None]:
+        """Select operational state for a page using set-based reads."""
+        ids = list(dict.fromkeys(str(value) for value in instrument_ids))
+        if not ids:
+            return {}
+        placeholders = self._sql_placeholders(ids)
+        states: dict[str, list[dict[str, Any]]] = {instrument_id: [] for instrument_id in ids}
+        instrument_rows = [dict(row) for row in conn.execute(
+            f"""
+            SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
+                   i.first_observed_at AS anchor_first_observed_at
+            FROM universe_instrument_revisions r
+            JOIN universe_instruments i ON i.instrument_id = r.instrument_id
+            WHERE r.instrument_id IN ({placeholders}) AND {self._operational_where('r')}
+            ORDER BY r.instrument_id, r.ingested_at DESC,
+                     COALESCE(r.available_at,'') DESC, r.revision_number DESC,
+                     r.instrument_revision_id DESC
+            """, ids + [cutoff]
+        ).fetchall()]
+        for row in instrument_rows:
+            states.setdefault(str(row["instrument_id"]), []).append(row)
+
+        pair_to_ids: dict[tuple[str, str], list[str]] = {}
+        for instrument_id in ids:
+            reference = references.get(instrument_id)
+            if not reference or not reference.get("resource_id") or not reference.get("logical_revision_key"):
+                continue
+            pair = (str(reference["resource_id"]), str(reference["logical_revision_key"]))
+            pair_to_ids.setdefault(pair, []).append(instrument_id)
+        if pair_to_ids:
+            pair_predicates = " OR ".join("(ur.resource_id = ? AND ur.logical_revision_key = ?)" for _ in pair_to_ids)
+            pair_params = [value for pair in pair_to_ids for value in pair]
+            resource_rows = [dict(row) for row in conn.execute(
+                f"""
+                SELECT ur.*, p.availability_mode AS policy_availability_mode,
+                       p.freshness_mode AS policy_freshness_mode,
+                       p.resource_role, dr.market AS resource_market
+                FROM universe_revisions ur
+                JOIN universe_resource_policies p ON p.resource_id = ur.resource_id
+                JOIN data_resources dr ON dr.resource_id = ur.resource_id
+                WHERE ({pair_predicates}) AND {self._operational_where('ur')}
+                ORDER BY ur.resource_id, ur.logical_revision_key, ur.ingested_at DESC,
+                         COALESCE(ur.available_at,'') DESC, ur.revision_number DESC,
+                         ur.universe_revision_id DESC
+                """, pair_params + [cutoff]
+            ).fetchall()]
+            for row in resource_rows:
+                pair = (str(row["resource_id"]), str(row["logical_revision_key"]))
+                for instrument_id in pair_to_ids.get(pair, []):
+                    reference = references.get(instrument_id) or {}
+                    value = dict(row)
+                    value["instrument_id"] = instrument_id
+                    value["venue"] = row.get("resource_market") or reference.get("venue")
+                    value["official_code"] = reference.get("official_code")
+                    value["canonical_symbol"] = reference.get("canonical_symbol")
+                    value["identity_epoch"] = reference.get("identity_epoch")
+                    value["identity_binding_fingerprint"] = reference.get("identity_binding_fingerprint")
+                    value["availability_mode"] = row.get("policy_availability_mode")
+                    value["freshness_mode"] = row.get("policy_freshness_mode")
+                    value["freshness_status"] = row.get("freshness_status") or (
+                        FreshnessStatus.CURRENT.value
+                        if row.get("status") == "accepted" and row.get("current_complete")
+                        else FreshnessStatus.BLOCKED.value
+                    )
+                    states.setdefault(instrument_id, []).append(value)
+        return {instrument_id: self._select_latest(states.get(instrument_id, [])) for instrument_id in ids}
 
     def _compose_result(self, reference: dict[str, Any] | None, operational: dict[str, Any] | None,
                         *, cutoff: str, missing_reason: str = "instrument_not_found") -> dict[str, Any]:
@@ -470,6 +623,23 @@ class UniverseRepository:
             raise ValueError("limit must be between 1 and 100")
         venue_value = coerce_venue(venue).value if venue else None
         listing_value = ListingStatus(str(listing_status).lower()).value if listing_status else None
+        cursor_token: dict[str, Any] | None = None
+        if cursor:
+            try:
+                token = json.loads(cursor)
+                if (
+                    not isinstance(token, dict)
+                    or token.get("cutoff") != cutoff
+                    or token.get("venue") != venue_value
+                    or token.get("query") != (query or "")
+                    or token.get("security_type") != (security_type or "")
+                    or token.get("listing_status") != (listing_value or "")
+                    or token.get("order") != "venue ASC, canonical_symbol ASC, instrument_id ASC"
+                ):
+                    raise ValueError("cursor_query_mismatch")
+                cursor_token = token
+            except (json.JSONDecodeError, TypeError, KeyError):
+                raise ValueError("cursor_query_mismatch")
         with self.read_transaction() as conn:
             clauses = [f"{self._cutoff_where('r')}", "r.status = 'accepted'"]
             params: list[Any] = [cutoff, cutoff, cutoff, cutoff]
@@ -482,37 +652,51 @@ class UniverseRepository:
             if query:
                 clauses.append("(r.official_code LIKE ? OR COALESCE(r.canonical_symbol,'') LIKE ? OR COALESCE(r.display_name,'') LIKE ?)")
                 term = f"%{query.strip().upper()}%"; params += [term, term, term]
+            cursor_clause = ""
+            cursor_params: list[Any] = []
+            if cursor_token is not None:
+                cursor_clause = " AND (anchor_venue > ? OR (anchor_venue = ? AND canonical_key > ?) OR (anchor_venue = ? AND canonical_key = ? AND instrument_id > ?))"
+                cursor_params = [
+                    cursor_token.get("venue_key"), cursor_token.get("venue_key"), cursor_token.get("canonical_key") or "",
+                    cursor_token.get("venue_key"), cursor_token.get("canonical_key") or "", cursor_token.get("instrument_id"),
+                ]
             base_rows = [dict(row) for row in conn.execute(
                 f"""
-                SELECT r.*, i.venue AS anchor_venue, i.official_code AS anchor_code,
-                       i.identity_epoch, i.identity_binding_fingerprint,
-                       ROW_NUMBER() OVER (PARTITION BY r.instrument_id ORDER BY COALESCE(r.available_at,'') DESC, r.ingested_at DESC, r.revision_number DESC) AS rn
-                FROM universe_instrument_revisions r
-                JOIN universe_instruments i ON i.instrument_id = r.instrument_id
-                WHERE {' AND '.join(clauses)}
-                """, params
+                WITH ranked AS (
+                    SELECT r.*, i.venue AS anchor_venue, i.official_code AS anchor_code,
+                           i.identity_epoch, i.identity_binding_fingerprint,
+                           COALESCE(r.canonical_symbol,'') AS canonical_key,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY r.instrument_id
+                               ORDER BY COALESCE(r.available_at,'') DESC, r.ingested_at DESC,
+                                        r.revision_number DESC, r.instrument_revision_id DESC
+                           ) AS rn
+                    FROM universe_instrument_revisions r
+                    JOIN universe_instruments i ON i.instrument_id = r.instrument_id
+                    WHERE {' AND '.join(clauses)}
+                )
+                SELECT * FROM ranked
+                WHERE rn = 1{cursor_clause}
+                ORDER BY anchor_venue ASC, canonical_key ASC, instrument_id ASC
+                LIMIT ?
+                """, params + cursor_params + [int(limit) + 1]
             ).fetchall()]
-            rows = [row for row in base_rows if int(row.get("rn") or 0) == 1]
-            rows.sort(key=lambda row: (row.get("anchor_venue") or "", row.get("canonical_symbol") or "", row.get("instrument_id") or ""))
-            if cursor:
-                try:
-                    token = json.loads(cursor)
-                    if not isinstance(token, dict) or token.get("cutoff") != cutoff or token.get("venue") != venue_value or token.get("query") != (query or "") or token.get("security_type") != (security_type or "") or token.get("listing_status") != (listing_value or "") or token.get("order") != "venue ASC, canonical_symbol ASC, instrument_id ASC":
-                        raise ValueError("cursor_query_mismatch")
-                    rows = [row for row in rows if (row.get("anchor_venue") or "", row.get("canonical_symbol") or "", row.get("instrument_id") or "") > (token.get("venue_key"), token.get("canonical_key"), token.get("instrument_id"))]
-                except (json.JSONDecodeError, TypeError, KeyError):
-                    raise ValueError("cursor_query_mismatch")
-            selected = rows[: int(limit) + 1]
-            items = []
-            for row in selected[:limit]:
-                instrument_id = row["instrument_id"]
-                reference = self._select_historical_reference(conn, instrument_id=instrument_id, cutoff=cutoff)
-                operational = self._select_operational_state(conn, instrument_id=instrument_id, cutoff=cutoff, reference=reference)
-                items.append(self._compose_result(reference, operational, cutoff=cutoff))
-            resource_status = {v: self._latest_resource_status(conn, venue=v, cutoff=cutoff) for v in ([venue_value] if venue_value else ["TWSE", "TPEX"])}
+            selected = base_rows
+            page_rows = selected[:int(limit)]
+            instrument_ids = [str(row["instrument_id"]) for row in page_rows]
+            references = self._select_historical_references_batch(conn, instrument_ids=instrument_ids, cutoff=cutoff)
+            operational = self._select_operational_states_batch(
+                conn, instrument_ids=instrument_ids, references=references, cutoff=cutoff,
+            )
+            items = [
+                self._compose_result(references.get(instrument_id), operational.get(instrument_id), cutoff=cutoff)
+                for instrument_id in instrument_ids
+            ]
+            scoped_venues = [venue_value] if venue_value else ["TWSE", "TPEX"]
+            resource_status = self._latest_resource_statuses(conn, venues=scoped_venues, cutoff=cutoff)
         next_cursor = None
         if len(selected) > limit and items:
-            last = rows[limit - 1]
+            last = selected[int(limit) - 1]
             next_cursor = json.dumps({"cutoff": cutoff, "venue": venue_value, "query": query or "",
                                       "security_type": security_type or "", "listing_status": listing_value or "",
                                       "order": "venue ASC, canonical_symbol ASC, instrument_id ASC",
@@ -559,6 +743,50 @@ class UniverseRepository:
         if not rows:
             return "insufficient_data"
         latest = rows[0]
+        status = str(latest.get("status"))
+        if status in {"awaiting_review", "schema_changed"}:
+            return "needs_human_input"
+        if (
+            status != "accepted"
+            or latest.get("available_at") is None
+            or str(latest.get("available_at")) > cutoff
+            or latest.get("freshness_status") in {None, "unknown", "stale", "blocked"}
+        ):
+            return "partial"
+        if not bool(latest.get("current_complete")):
+            return "partial"
+        return "available"
+
+    def _latest_resource_statuses(self, conn: sqlite3.Connection, *, venues: list[str], cutoff: str) -> dict[str, str]:
+        """Read resource health for all requested venues in one bounded query."""
+        scoped = list(dict.fromkeys(str(value) for value in venues))
+        if not scoped:
+            return {}
+        placeholders = self._sql_placeholders(scoped)
+        rows = [dict(row) for row in conn.execute(
+            f"""
+            SELECT ur.*, p.freshness_mode AS policy_freshness_mode, dr.market AS resource_market
+            FROM universe_revisions ur
+            JOIN data_resources dr ON dr.resource_id = ur.resource_id
+            JOIN universe_resource_policies p ON p.resource_id = ur.resource_id
+            WHERE dr.market IN ({placeholders}) AND {self._operational_where('ur')}
+            ORDER BY dr.market, ur.ingested_at DESC,
+                     COALESCE(ur.available_at,'') DESC, ur.revision_number DESC,
+                     ur.universe_revision_id DESC
+            """, scoped + [cutoff]
+        ).fetchall()]
+        latest_by_venue: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            latest_by_venue.setdefault(str(row["resource_market"]), row)
+        return {
+            venue: self._resource_status_from_row(latest_by_venue.get(venue), cutoff=cutoff)
+            for venue in scoped
+        }
+
+    @staticmethod
+    def _resource_status_from_row(latest: dict[str, Any] | None, *, cutoff: str) -> str:
+        if latest is None:
+            return "insufficient_data"
         status = str(latest.get("status"))
         if status in {"awaiting_review", "schema_changed"}:
             return "needs_human_input"

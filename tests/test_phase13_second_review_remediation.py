@@ -257,7 +257,6 @@ def test_collector_uses_distinct_operational_contracts_and_fails_closed_on_drift
             "AlteredTrading": "Y", "PeriodicTrading": "", "ManagedStock": "",
             "MatchingFrequency": "", "SuspensionOfTrading": "", " FinancialAnnouncements": "",
         }]),
-        ("tpex.company.current", [{"Date": "1150821", "SecuritiesCompanyCode": "6488", "CompanyName": "元大"}]),
     ],
 )
 def test_every_approved_resource_has_a_fixed_contract(resource_key, payload):
@@ -265,6 +264,14 @@ def test_every_approved_resource_has_a_fixed_contract(resource_key, payload):
     assert parsed
     with pytest.raises(UniverseSourceRejected, match="source_schema_changed"):
         parse_universe_payload(resource_key, {"rows": []})
+
+
+def test_tpex_company_current_is_manual_only_until_machine_contract_is_verified():
+    with pytest.raises(UniverseSourceRejected, match="manual_source_contract_not_for_ingestion"):
+        parse_universe_payload(
+            "tpex.company.current",
+            [{"Date": "1150821", "SecuritiesCompanyCode": "6488", "CompanyName": "元大"}],
+        )
 
 
 def test_audit_log_records_operator_dimensions_without_secret_payload(tmp_path, caplog):

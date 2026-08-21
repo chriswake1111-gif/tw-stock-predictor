@@ -13,9 +13,14 @@ from src.domain.universe import payload_fingerprint, validate_official_code
 APPROVED_RESOURCE_KEYS = frozenset({
     "twse.t187ap03_L", "twse.company.newlisting", "twse.company.suspendListingCsvAndHtml",
     "tpex.mopsfin_t187ap03_O", "tpex.company.deListed",
-    "tpex.spendi.history", "tpex.spendi.today", "tpex.cmode", "tpex.company.current",
+    "tpex.spendi.history", "tpex.spendi.today", "tpex.cmode",
     "tpex_spendi_history", "tpex_spendi_today", "tpex_cmode",
 })
+# TPEx company.html / company/otcSearch is a manual corroborating source
+# until its machine response contract has been independently verified.  The
+# migration keeps its resource/policy row for historical compatibility, but
+# it is deliberately not a collector/parser contract.
+MANUAL_ONLY_RESOURCE_KEYS = frozenset({"tpex.company.current"})
 # The seven-row Phase 13 migration still contains this logical identity for
 # already-imported history.  It is intentionally not a new-ingestion contract.
 LEGACY_RESOURCE_KEYS = frozenset({"tpex.spendi.cmode"})
@@ -184,11 +189,6 @@ _RESOURCE_CONTRACTS = {
         allowed_fields=_TPEX_CMODE_FIELDS,
         value_required=frozenset({"date"}),
     ),
-    "tpex.company.current": _contract(
-        kind="corroborating", envelope="array",
-        required={"code": ("SecuritiesCompanyCode",), "name": ("CompanyName",)},
-        allowed_fields=_TPEX_MASTER_FIELDS, value_required=frozenset({"code", "name"}),
-    ),
 }
 _CODE_FIELDS = ("code", "official_code", "公司代號", "Code", "SecuritiesCompanyCode", "證券代號", "股票代號")
 _DATE_FIELDS = ("date", "Date", "effective_date", "source_effective_date", "上市日期", "交易日期", "year", "年度", "DelistingDate", "終止上櫃日期")
@@ -224,6 +224,8 @@ def assert_approved_resource(resource_key: str) -> str:
         raise UniverseSourceRejected("quote_source_excluded")
     if key in LEGACY_RESOURCE_KEYS:
         raise UniverseSourceRejected("legacy_source_contract_not_for_ingestion")
+    if key in MANUAL_ONLY_RESOURCE_KEYS:
+        raise UniverseSourceRejected("manual_source_contract_not_for_ingestion")
     if key not in APPROVED_RESOURCE_KEYS:
         raise UniverseSourceRejected("universe_source_not_approved")
     return _RESOURCE_ALIASES.get(key, key)
@@ -408,6 +410,7 @@ class UniverseCollector:
 
 __all__ = [
     "APPROVED_PROVIDER_HOSTS", "APPROVED_RESOURCE_KEYS", "EXCLUDED_RESOURCE_KEYS",
+    "MANUAL_ONLY_RESOURCE_KEYS",
     "LEGACY_RESOURCE_KEYS", "UniverseCollector", "UniverseFetchResult",
     "UniverseSourceRejected", "assert_approved_resource", "parse_universe_payload",
 ]

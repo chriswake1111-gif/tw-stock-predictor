@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.collectors.universe_collectors import APPROVED_RESOURCE_KEYS, EXCLUDED_RESOURCE_KEYS
+from src.collectors.universe_collectors import (
+    APPROVED_RESOURCE_KEYS,
+    EXCLUDED_RESOURCE_KEYS,
+    MANUAL_ONLY_RESOURCE_KEYS,
+)
 from src.repositories.universe_repository import UniverseStorageUnavailable
 
 
@@ -29,6 +33,8 @@ class UniverseResourceRegistry:
         key = str(resource_key).strip()
         if key in EXCLUDED_RESOURCE_KEYS or "quote" in key.lower() or "price" in key.lower():
             raise ValueError("quote_source_excluded")
+        if key in MANUAL_ONLY_RESOURCE_KEYS:
+            raise ValueError("manual_source_contract_not_for_ingestion")
         if key not in APPROVED_RESOURCE_KEYS:
             raise ValueError("universe_source_not_approved")
         return key

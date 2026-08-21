@@ -41,7 +41,7 @@ generic `status`. TPEx delisted data remains the official `tables` + `fields` +
 array-row envelope. Unknown fields, wrong envelope type, field type drift and
 renamed required fields fail closed without an old-parser fallback.
 
-Only TWSE `t187ap03_L`, `company/newlisting`, and termination candidates plus approved TPEx master, delisted, operational and corroborating sources are registrable. TPEx `spendi history`, `spendi today` and `cmode` are distinct source contracts in the collector and logical revision keys; legacy rows remain only for already imported history. `tpex_mainboard_quotes` is an explicit excluded price classification and has no Phase 13 resource, collector, hash, fixture, API or frontend path.
+Only TWSE `t187ap03_L`, `company/newlisting`, and termination candidates plus approved TPEx master, delisted and operational sources are registrable for new collection. TPEx `spendi history`, `spendi today` and `cmode` are distinct source contracts in the collector and logical revision keys; legacy rows remain only for already imported history. TPEx `company.html` / `company/otcSearch` remains a manual corroborating source until its machine response contract is independently verified, so `tpex.company.current` is retained only for registry/history compatibility and is rejected by new collector/parser ingestion. `tpex_mainboard_quotes` is an explicit excluded price classification and has no Phase 13 resource, collector, hash, fixture, API or frontend path.
 
 ## Writes and recovery
 
