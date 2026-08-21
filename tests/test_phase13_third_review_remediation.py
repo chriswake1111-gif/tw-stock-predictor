@@ -237,19 +237,20 @@ def test_schema_fingerprint_uses_observed_envelope_and_fields_and_legacy_key_is_
             return self.payload
 
     valid = UniverseCollector(
-        lambda *_args, **_kwargs: Response({"data": [{"code": "2330", "name": "fixture"}]})
+        lambda *_args, **_kwargs: Response([{"出表日期": "1150820", "公司代號": "2330", "公司名稱": "台積電"}])
     ).fetch_official("twse.t187ap03_L", url="https://www.twse.com.tw/fixture")
     changed = UniverseCollector(
-        lambda *_args, **_kwargs: Response({"data": [{"code": "2330", "name": "fixture", "industry": "semiconductor"}]})
-    ).fetch_official("twse.t187ap03_L", url="https://www.twse.com.tw/fixture")
-    assert valid.status == changed.status == "accepted"
-    assert valid.schema_fingerprint != changed.schema_fingerprint
-    assert valid.query_dimensions["source_envelope"] == "data"
-    assert "code" in valid.query_dimensions["observed_row_fields"]
+        lambda *_args, **_kwargs: Response([{"出表日期": "1150820", "公司代號": "2330", "公司名稱": "台積電", "industry": "semiconductor"}])
+    ).fetch_official("twse.t187ap03_L", url="https://www.twse.com.tw/fixture", schema_fingerprint="caller-cannot-authorize-drift")
+    assert valid.status == "accepted"
+    assert changed.status == "schema_changed"
+    assert valid.query_dimensions["source_envelope"] == "array"
+    assert "公司代號" in valid.query_dimensions["observed_row_fields"]
+    assert valid.query_dimensions["expected_schema_fingerprint"]
     with pytest.raises(UniverseSourceRejected, match="source_schema_changed"):
-        parse_universe_payload("twse.t187ap03_L", {"data": [{"symbol": "2330", "name": "fixture"}]})
+        parse_universe_payload("twse.t187ap03_L", [{"出表日期": "1150820", "公司代號": "2330", "symbol": "fixture"}])
     with pytest.raises(UniverseSourceRejected, match="legacy_source_contract_not_for_ingestion"):
-        parse_universe_payload("tpex.spendi.cmode", {"data": [{"date": "2026-08-21", "status": "normal"}]})
+        parse_universe_payload("tpex.spendi.cmode", [{"Date": "1150821"}])
 
 
 def test_collector_schema_evidence_round_trips_into_universe_revision(tmp_path):
@@ -264,7 +265,7 @@ def test_collector_schema_evidence_round_trips_into_universe_revision(tmp_path):
         status_code = 200
 
         def json(self):
-            return {"data": [{"code": "2330", "name": "fixture"}]}
+            return [{"出表日期": "1150820", "公司代號": "2330", "公司名稱": "台積電"}]
 
     fetched = UniverseCollector(lambda *_args, **_kwargs: Response()).fetch_official(
         "twse.t187ap03_L", url="https://www.twse.com.tw/fixture",

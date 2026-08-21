@@ -202,10 +202,23 @@ def test_empty_complete_and_empty_blocked_lists_are_distinct(tmp_path):
 
 
 def test_collector_uses_distinct_operational_contracts_and_fails_closed_on_drift():
-    for key in ("tpex.spendi.history", "tpex.spendi.today", "tpex.cmode"):
-        assert parse_universe_payload(key, {"data": [{"date": "2026-08-21", "status": "normal"}]})
+    assert parse_universe_payload("tpex.spendi.history", [{
+        "Date": "1150821", "Serial": "1", "SecuritiesCompanyCode": "6488", "CompanyName": "fixture",
+        "DateOfSuspendedTrading": "1150821", "TimeOfSuspendedTrading": "080000",
+        "DateOfResumedTrading": "", "TimeOfResumedTrading": "",
+    }])
+    assert parse_universe_payload("tpex.spendi.today", [{
+        "Date": "20260821", "SecuritiesCompanyCode": "6488", "CompanyName": "fixture",
+        "DateOfSuspendedTrading": "20260821", "TimeOfSuspendedTrading": "080000",
+        "DateOfResumedTrading": "", "TimeOfResumedTrading": "",
+    }])
+    assert parse_universe_payload("tpex.cmode", [{
+        "Date": "1150821", "SecuritiesCompanyCode": "6488", "CompanyName": "fixture",
+        "AlteredTrading": "Y", "PeriodicTrading": "", "ManagedStock": "",
+        "MatchingFrequency": "", "SuspensionOfTrading": "", " FinancialAnnouncements": "",
+    }])
     with pytest.raises(UniverseSourceRejected, match="legacy_source_contract_not_for_ingestion"):
-        parse_universe_payload("tpex.spendi.cmode", {"data": [{"date": "2026-08-21", "status": "normal"}]})
+        parse_universe_payload("tpex.spendi.cmode", [{"Date": "1150821"}])
     malformed = UniverseCollector(lambda *_args, **_kwargs: type("Response", (), {"status_code": 200, "json": lambda self: {"rows": [{"code": "2330"}]}})()).fetch_official(
         "tpex.spendi.history", url="https://www.tpex.org.tw/fixture",
     )
@@ -216,22 +229,42 @@ def test_collector_uses_distinct_operational_contracts_and_fails_closed_on_drift
 @pytest.mark.parametrize(
     ("resource_key", "payload"),
     [
-        ("twse.t187ap03_L", {"data": [{"code": "2330", "name": "fixture"}]}),
-        ("twse.company.newlisting", {"data": [{"code": "2330", "effective_date": "2026-01-01"}]}),
-        ("twse.company.suspendListingCsvAndHtml", {"data": [{"code": "2330", "date": "2026-01-01", "reason": "suspended"}]}),
-        ("tpex.mopsfin_t187ap03_O", {"data": [{"code": "6488", "name": "fixture"}]}),
-        ("tpex.company.deListed", {"tables": [{"data": [{"code": "6488", "year": "2026", "reason": "terminated"}]}]}),
-        ("tpex.spendi.history", {"data": [{"date": "2026-08-21", "status": "normal"}]}),
-        ("tpex.spendi.today", {"data": [{"date": "2026-08-21", "status": "normal"}]}),
-        ("tpex.cmode", {"data": [{"date": "2026-08-21", "status": "normal"}]}),
-        ("tpex.company.current", {"data": [{"code": "6488", "name": "fixture"}]}),
+        ("twse.t187ap03_L", [{"出表日期": "1150820", "公司代號": "2330", "公司名稱": "台積電"}]),
+        ("twse.company.newlisting", [{
+            "Code": "7855", "Company": "和運租車", "ApplicationDate": "1150414", "Chairman": "劉源森",
+            "AmountofCapital ": "1925279", "CommitteeDate": "1150522", "ApprovedDate": "1150616",
+            "AgreementDate": "1150624", "ListingDate": "", "ApprovedListingDate": "1150811",
+            "Underwriter": "台新", "UnderwritingPrice": "42.00", "Note": "",
+        }]),
+        ("twse.company.suspendListingCsvAndHtml", [{"DelistingDate": "115/06/23", "Company": "森崴能源", "Code": "2330"}]),
+        ("tpex.mopsfin_t187ap03_O", [{"Date": "1150821", "SecuritiesCompanyCode": "6488", "CompanyName": "元大"}]),
+        ("tpex.company.deListed", {"tables": [{
+            "fields": ["股票代號", "公司名稱", "終止上櫃日期", "終止上櫃原因", "公司資料網址"],
+            "data": [["6488", "元大", "115-01-01", "終止上櫃", "https://www.tpex.org.tw/" ]],
+        }]}),
+        ("tpex.spendi.history", [{
+            "Date": "1150821", "Serial": "1", "SecuritiesCompanyCode": "6488", "CompanyName": "元大",
+            "DateOfSuspendedTrading": "1150821", "TimeOfSuspendedTrading": "080000",
+            "DateOfResumedTrading": "", "TimeOfResumedTrading": "",
+        }]),
+        ("tpex.spendi.today", [{
+            "Date": "20260821", "SecuritiesCompanyCode": "6488", "CompanyName": "元大",
+            "DateOfSuspendedTrading": "20260821", "TimeOfSuspendedTrading": "080000",
+            "DateOfResumedTrading": "", "TimeOfResumedTrading": "",
+        }]),
+        ("tpex.cmode", [{
+            "Date": "1150821", "SecuritiesCompanyCode": "6488", "CompanyName": "元大",
+            "AlteredTrading": "Y", "PeriodicTrading": "", "ManagedStock": "",
+            "MatchingFrequency": "", "SuspensionOfTrading": "", " FinancialAnnouncements": "",
+        }]),
+        ("tpex.company.current", [{"Date": "1150821", "SecuritiesCompanyCode": "6488", "CompanyName": "元大"}]),
     ],
 )
 def test_every_approved_resource_has_a_fixed_contract(resource_key, payload):
     parsed = parse_universe_payload(resource_key, payload)
     assert parsed
     with pytest.raises(UniverseSourceRejected, match="source_schema_changed"):
-        parse_universe_payload(resource_key, {"rows": payload.get("data", [])})
+        parse_universe_payload(resource_key, {"rows": []})
 
 
 def test_audit_log_records_operator_dimensions_without_secret_payload(tmp_path, caplog):

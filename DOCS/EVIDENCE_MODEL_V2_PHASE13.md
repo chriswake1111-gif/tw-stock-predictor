@@ -24,8 +24,22 @@ operational health and never become a historical identity reference.
 The legacy synthetic TPEx spendi key is read-compatible only for persisted
 history and is rejected for new collector/parser ingestion. Approved resources
 use fixed official envelopes and required field groups; missing or renamed
-required fields and envelope drift become schema_changed. The schema evidence
-fingerprint includes the observed envelope and row-field set.
+required fields and envelope drift become schema_changed. The expected schema
+contract is code-owned and checked before acceptance; a caller cannot authorize
+drift by supplying a matching fingerprint. The observed schema evidence
+fingerprint includes the envelope and row-field set and is persisted only after
+the expected contract gate passes.
+
+The reviewed first-party shapes are preserved without approximation: TWSE
+`company/newlisting` and `company/suspendListingCsvAndHtml` are top-level JSON
+arrays, using the official `Code`/date fields and
+`DelistingDate`/`Company`/`Code` fields respectively (termination has no
+synthetic `reason`). TPEx `tpex_spendi_history`/`tpex_spendi_today` validate
+`Date`, `SecuritiesCompanyCode`, `CompanyName` and the suspend/resume event
+fields; `tpex_cmode` validates its official trading flags rather than a
+generic `status`. TPEx delisted data remains the official `tables` + `fields` +
+array-row envelope. Unknown fields, wrong envelope type, field type drift and
+renamed required fields fail closed without an old-parser fallback.
 
 Only TWSE `t187ap03_L`, `company/newlisting`, and termination candidates plus approved TPEx master, delisted, operational and corroborating sources are registrable. TPEx `spendi history`, `spendi today` and `cmode` are distinct source contracts in the collector and logical revision keys; legacy rows remain only for already imported history. `tpex_mainboard_quotes` is an explicit excluded price classification and has no Phase 13 resource, collector, hash, fixture, API or frontend path.
 

@@ -16,7 +16,7 @@ def test_approved_source_roles_and_quote_exclusion():
 
 
 def test_master_parser_keeps_leading_zero_and_rejects_malformed_schema():
-    rows = parse_universe_payload("twse.t187ap03_L", {"data": [{"code": "0050", "name": "ETF"}]})
+    rows = parse_universe_payload("twse.t187ap03_L", [{"出表日期": "1150820", "公司代號": "0050", "公司名稱": "元大台灣50"}])
     assert rows[0]["official_code"] == "0050"
 
 
@@ -25,7 +25,7 @@ def test_collector_assigns_first_observation_only_after_success_and_rejects_pric
         status_code = 200
 
         def json(self):
-            return {"data": [{"code": "2330", "name": "fixture"}]}
+            return [{"出表日期": "1150820", "公司代號": "2330", "公司名稱": "台積電"}]
 
     result = UniverseCollector(lambda *_args, **_kwargs: Response()).fetch_official(
         "twse.t187ap03_L", url="https://www.twse.com.tw/fixture",
@@ -36,7 +36,7 @@ def test_collector_assigns_first_observation_only_after_success_and_rejects_pric
 
     class PriceResponse(Response):
         def json(self):
-            return {"data": [{"code": "2330", "close": 100}]}
+            return [{"出表日期": "1150820", "公司代號": "2330", "公司名稱": "台積電", "收盤價": "100"}]
 
     rejected = UniverseCollector(lambda *_args, **_kwargs: PriceResponse()).fetch_official(
         "twse.t187ap03_L", url="https://www.twse.com.tw/fixture",
