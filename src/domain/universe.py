@@ -90,6 +90,7 @@ ACTIONABLE_HUMAN_REASONS = frozenset(
         "source_schema_review_required",
         "source_revision_revoked_without_corrected_revision",
         "canonical_mapping_unverified",
+        "availability_unproven",
     }
 )
 

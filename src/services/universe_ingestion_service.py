@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.repositories.universe_repository import UniverseIngestionRepository
+from src.repositories.universe_repository import UniverseIdempotencyRequired, UniverseIngestionRepository
 from src.services.universe_write_guard import UniverseOperatorContext, UniverseWriteGuard
 
 
@@ -14,9 +14,15 @@ class UniverseIngestionService:
         self.guard = guard or UniverseWriteGuard()
         self.repository = repository or UniverseIngestionRepository(db_path, guard=self.guard)
 
-    def ingest_revision(self, *, context: UniverseOperatorContext, **payload: Any) -> dict[str, Any]:
+    def ingest_revision(self, *, context: UniverseOperatorContext,
+                        idempotency_key: str | None = None,
+                        **payload: Any) -> dict[str, Any]:
         self.guard.before_mutation(context)
-        return self.repository.add_revision(context=context, **payload)
+        if idempotency_key is None or not str(idempotency_key).strip():
+            raise UniverseIdempotencyRequired()
+        return self.repository.add_revision(
+            context=context, idempotency_key=str(idempotency_key).strip(), **payload
+        )
 
 
 __all__ = ["UniverseIngestionService"]

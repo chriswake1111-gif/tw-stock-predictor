@@ -14,7 +14,7 @@ def test_universe_api_requires_aware_cutoff_and_is_get_only(tmp_path, monkeypatc
     db = tmp_path / "api.sqlite"
     apply_valuation_migration(str(db))
     repo = UniverseRepository(str(db), guard=UniverseWriteGuard(True))
-    context = UniverseOperatorContext("operator")
+    context = UniverseOperatorContext("operator", "run-api", "lock-api", "audit-api")
     anchor = repo.allocate_instrument(venue="TWSE", official_code="2330", source_identity="fixture",
                                       first_observed_at="2026-08-21T00:00:00Z", source_reference="fixture", context=context)
     repo.add_revision(instrument_id=anchor["instrument_id"], resource_id="twse-universe-master", logical_revision_key="master",

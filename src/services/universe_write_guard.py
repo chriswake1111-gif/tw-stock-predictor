@@ -44,9 +44,21 @@ class UniverseWriteGuard:
     def require_enabled(self, context: UniverseOperatorContext | None = None) -> UniverseOperatorContext:
         if not self.enabled:
             raise UniverseIngestionWritesDisabled()
-        if context is None or not context.actor_id or not context.actor_id.strip():
+        if context is None:
             raise UniverseOperatorContextRequired("actor_id")
-        return context
+        # Phase 13 mutations are operator-run artifacts.  An actor by itself
+        # is not an auditable write context: every mutation must carry the
+        # run, lock and audit references that identify the approved operation.
+        for field_name in ("actor_id", "run_id", "lock_id", "audit_id"):
+            value = getattr(context, field_name)
+            if value is None or not str(value).strip():
+                raise UniverseOperatorContextRequired(field_name)
+        return UniverseOperatorContext(
+            actor_id=str(context.actor_id).strip(),
+            run_id=str(context.run_id).strip(),
+            lock_id=str(context.lock_id).strip(),
+            audit_id=str(context.audit_id).strip(),
+        )
 
     # Names used by services/repositories and simple tests.
     def before_mutation(self, context: UniverseOperatorContext | None = None) -> UniverseOperatorContext:

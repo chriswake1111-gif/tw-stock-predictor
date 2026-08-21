@@ -30,6 +30,7 @@ from src.domain.valuation import utc_now_timestamp
 from src.repositories.migration_runner import apply_valuation_migration
 from src.services.universe_write_guard import (
     UniverseOperatorContext,
+    UniverseOperatorContextRequired,
     UniverseWriteGuard,
 )
 
@@ -40,6 +41,13 @@ class UniverseStorageUnavailable(RuntimeError):
 
 class UniverseIdempotencyConflict(ValueError):
     code = "idempotency_key_reused"
+
+
+class UniverseIdempotencyRequired(ValueError):
+    code = "idempotency_key_required"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
 
 
 class UniverseIdentityCollision(ValueError):
@@ -98,7 +106,40 @@ class UniverseRepository:
 
     @staticmethod
     def _cutoff_where(alias: str = "r") -> str:
-        return f"({alias}.available_at IS NULL OR {alias}.available_at <= ?) AND {alias}.ingested_at <= ?"
+        # A historical reference is safe only when the source has an explicit,
+        # proven availability instant.  NULL is an unknown publication state,
+        # not an implicit "available since ingestion" value.  Manual sources
+        # additionally need the exact accepted publication evidence bound to
+        # the parent Universe revision and visible at this cutoff.
+        return f"""(
+            {alias}.available_at IS NOT NULL
+            AND {alias}.available_at <= ?
+            AND {alias}.ingested_at <= ?
+            AND (
+                {alias}.availability_mode <> 'manual_publication_evidence_required'
+                OR EXISTS (
+                    SELECT 1
+                    FROM universe_revisions ur
+                    JOIN resource_publication_evidence pe
+                      ON pe.publication_evidence_id = ur.publication_evidence_id
+                    WHERE ur.universe_revision_id = {alias}.universe_revision_id
+                      AND pe.status = 'accepted'
+                      AND pe.official_release_at <= {alias}.available_at
+                      AND pe.ingested_at <= ?
+                      AND pe.publication_evidence_id = (
+                          SELECT latest.publication_evidence_id
+                          FROM resource_publication_evidence latest
+                          WHERE latest.resource_id = ur.resource_id
+                            AND latest.logical_revision_key = ur.logical_revision_key
+                            AND latest.ingested_at <= ?
+                          ORDER BY latest.revision_number DESC,
+                                   latest.ingested_at DESC,
+                                   latest.publication_evidence_id DESC
+                          LIMIT 1
+                      )
+                )
+            )
+        )"""
 
     @staticmethod
     def _reference(row: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -179,7 +220,7 @@ class UniverseRepository:
                 WHERE r.instrument_id = ? AND {self._cutoff_where('r')}
                 ORDER BY COALESCE(r.available_at,'' ) DESC, r.ingested_at DESC, r.revision_number DESC
                 LIMIT 1
-                """, (instrument_id, cutoff, cutoff)
+                """, (instrument_id, cutoff, cutoff, cutoff, cutoff)
             ).fetchone()
         return self._row(row)
 
@@ -208,6 +249,8 @@ class UniverseRepository:
             reasons.append("source_revision_partial")
         elif status == "revoked":
             reasons.append("source_revision_revoked_without_corrected_revision")
+        if revision.get("available_at") is None:
+            reasons.append("availability_unproven")
         if revision.get("reason"):
             reasons.append(str(revision["reason"]))
         if revision.get("canonical_symbol") is None:
@@ -251,7 +294,7 @@ class UniverseRepository:
             params: list[Any] = [venue.value, code]
             if not current:
                 query += f" AND {self._cutoff_where('r')}"
-                params += [cutoff, cutoff]
+                params += [cutoff, cutoff, cutoff, cutoff]
             query += " ORDER BY r.ingested_at DESC, COALESCE(r.available_at,'' ) DESC, r.revision_number DESC LIMIT 1"
             row = self._row(conn.execute(query, params).fetchone())
             return self._decorate(row, cutoff=cutoff, current=current)
@@ -315,7 +358,7 @@ class UniverseRepository:
                 except (json.JSONDecodeError, KeyError, TypeError):
                     raise ValueError("cursor_query_mismatch")
             if not current:
-                params += [cutoff, cutoff]
+                params += [cutoff, cutoff, cutoff, cutoff]
             sql = f"""
                 WITH ranked AS (
                     SELECT r.*, i.venue AS anchor_venue, i.official_code AS anchor_code,
@@ -402,7 +445,12 @@ class UniverseRepository:
                      revision_number: int, payload: dict[str, Any], context: UniverseOperatorContext | None = None,
                      idempotency_key: str | None = None, actor_id: str | None = None) -> dict[str, Any]:
         ctx = self._require_context(context)
-        actor = actor_id or ctx.actor_id
+        if idempotency_key is None or not str(idempotency_key).strip():
+            raise UniverseIdempotencyRequired()
+        idempotency_key = str(idempotency_key).strip()
+        if actor_id is not None and str(actor_id).strip() != ctx.actor_id:
+            raise UniverseOperatorContextRequired("actor_id")
+        actor = ctx.actor_id
         fetched_at = normalize_universe_timestamp(payload["fetched_at"], "fetched_at")
         received_at = normalize_universe_timestamp(payload["received_at"], "received_at")
         ingested_at = normalize_universe_timestamp(payload["ingested_at"], "ingested_at")
@@ -431,8 +479,6 @@ class UniverseRepository:
             and payload.get("freshness_mode", FreshnessMode.UNKNOWN_WITHOUT_OFFICIAL_CADENCE.value)
             in {FreshnessMode.OFFICIAL_CADENCE_WINDOW.value, FreshnessMode.LICENSED_REFERENCE.value}
         )
-        if idempotency_key is not None and not str(idempotency_key).strip():
-            raise ValueError("idempotency_key cannot be blank")
         fingerprint = _json(payload)
         import hashlib
         fingerprint = hashlib.sha256(fingerprint.encode()).hexdigest()
@@ -530,7 +576,7 @@ class UniverseRepository:
             conn.execute("""INSERT INTO universe_instrument_revisions
                     (instrument_revision_id,instrument_id,universe_revision_id,resource_id,revision_number,venue,official_code,canonical_symbol,mapping_basis,security_type,display_name,listing_status,trading_state,membership_state,source_effective_date,source_effective_at,source_published_at,first_observed_at,received_at,fetched_at,available_at,ingested_at,availability_mode,freshness_mode,freshness_status,current_complete,coverage_complete,status,reason,source_reference,payload_sha256,schema_fingerprint,parser_version,effective_from,effective_to,supersedes_revision_id)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
-                    f"uirev_{uuid.uuid4().hex}", instrument_id, revision_id, resource_id, int(revision_number), payload_venue.value, payload_code, canonical_symbol, mapping_basis, payload.get("security_type","unknown"), payload.get("display_name"), listing_status, trading_state, membership_state, payload.get("source_effective_date"), source_effective_at, source_published_at, first_observed_at, received_at, fetched_at, available_at, ingested_at, payload.get("availability_mode", AvailabilityMode.CONSERVATIVE_FIRST_OBSERVED.value), payload.get("freshness_mode", FreshnessMode.UNKNOWN_WITHOUT_OFFICIAL_CADENCE.value), payload.get("freshness_status", FreshnessStatus.UNKNOWN.value), int(current_complete), int(bool(payload.get("coverage_complete", False))), status, reason, payload.get("source_reference"), fingerprint, payload.get("schema_fingerprint"), payload.get("parser_version"), effective_from, effective_to, instrument_supersedes))
+                    f"uirev_{uuid.uuid4().hex}", instrument_id, revision_id, resource_id, int(revision_number), payload_venue.value, payload_code, canonical_symbol, mapping_basis, payload.get("security_type","unknown"), payload.get("display_name"), listing_status, trading_state, membership_state, payload.get("source_effective_date"), source_effective_at, source_published_at, first_observed_at, received_at, fetched_at, available_at, ingested_at, policy["availability_mode"], payload.get("freshness_mode", FreshnessMode.UNKNOWN_WITHOUT_OFFICIAL_CADENCE.value), payload.get("freshness_status", FreshnessStatus.UNKNOWN.value), int(current_complete), int(bool(payload.get("coverage_complete", False))), status, reason, payload.get("source_reference"), fingerprint, payload.get("schema_fingerprint"), payload.get("parser_version"), effective_from, effective_to, instrument_supersedes))
             if idempotency_key:
                 try:
                     conn.execute("INSERT INTO universe_ingestion_idempotency VALUES (?,?,?,?,?,?)", (idempotency_key, fingerprint, resource_id, revision_id, actor, ingested_at))
@@ -627,5 +673,6 @@ class UniverseIngestionRepository:
 
 __all__ = [
     "UniverseIdentityCollision", "UniverseIdentityRepository", "UniverseIdempotencyConflict",
+    "UniverseIdempotencyRequired",
     "UniverseIngestionRepository", "UniverseRepository", "UniverseStorageUnavailable",
 ]

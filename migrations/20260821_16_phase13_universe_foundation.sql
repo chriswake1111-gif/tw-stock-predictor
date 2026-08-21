@@ -177,15 +177,16 @@ CREATE INDEX idx_universe_idempotency_resource
 ON universe_ingestion_idempotency(resource_id, payload_fingerprint);
 
 /* Approved registry seed contains only identity/lifecycle/operational roles. */
-INSERT OR IGNORE INTO data_providers
+INSERT INTO data_providers
 (provider_id, display_name, authority_tier, provider_type, base_identity, enabled, created_at, payload_fingerprint)
 VALUES
 ('twse-universe-official','TWSE Universe Official','authoritative','official','https://www.twse.com.tw',1,'2026-08-21T00:00:00Z',
  '042ecef36a6ca8dd109b948f6a679973b31e69c759d7e9d1e408b1f83746cb3e'),
 ('tpex-universe-official','TPEx Universe Official','authoritative','official','https://www.tpex.org.tw',1,'2026-08-21T00:00:00Z',
- 'add538b4692192633b1142339113d9a5009e68ab309c83d5de69f0657e7eb3bb');
+ 'add538b4692192633b1142339113d9a5009e68ab309c83d5de69f0657e7eb3bb')
+ON CONFLICT(provider_id) DO NOTHING;
 
-INSERT OR IGNORE INTO data_resources
+INSERT INTO data_resources
 (resource_id, provider_id, logical_resource_key, resource_type, market, expected_frequency, freshness_policy,
  parser_id, parser_version, schema_version, storage_policy, enabled, created_at, payload_fingerprint)
 VALUES
@@ -195,9 +196,10 @@ VALUES
 ('tpex-universe-master','tpex-universe-official','tpex.mopsfin_t187ap03_O','symbol_master','TPEX','periodic','unknown_without_official_cadence','tpex_universe_master','1','phase13','archive_raw',1,'2026-08-21T00:00:00Z','afeb2b0cd9e896bc8a3d0e3b77410557a0d3357ea3bdd94c7ede4e1274265d66'),
 ('tpex-universe-lifecycle','tpex-universe-official','tpex.company.deListed','corporate_action','TPEX','manual','manual_publication_evidence_required','tpex_universe_lifecycle','1','phase13','archive_raw',1,'2026-08-21T00:00:00Z','355e21480d1413692b2698e4fe82cd16c87b5de553b76ca0504f92378d738cb7'),
 ('tpex-universe-operational','tpex-universe-official','tpex.spendi.cmode','trading_calendar','TPEX','periodic','event_observation','tpex_universe_operational','1','phase13','archive_raw',1,'2026-08-21T00:00:00Z','53f96df666aa8c19fdf4b3e0254d9e1033ff617a9273c7789345e65a430d5884'),
-('tpex-universe-corroborating','tpex-universe-official','tpex.company.current','symbol_master','TPEX','manual','manual_publication_evidence_required','tpex_universe_company','1','phase13','archive_raw',1,'2026-08-21T00:00:00Z','aadfe1261421f17cb48341c4721d09575c7ac667b5c5a65b1645a14cf6b2f254');
+('tpex-universe-corroborating','tpex-universe-official','tpex.company.current','symbol_master','TPEX','manual','manual_publication_evidence_required','tpex_universe_company','1','phase13','archive_raw',1,'2026-08-21T00:00:00Z','aadfe1261421f17cb48341c4721d09575c7ac667b5c5a65b1645a14cf6b2f254')
+ON CONFLICT(resource_id) DO NOTHING;
 
-INSERT OR IGNORE INTO universe_resource_policies
+INSERT INTO universe_resource_policies
 (resource_id,resource_role,availability_mode,freshness_mode,completeness_policy,mapping_policy_version,source_scope,enabled,created_at,policy_fingerprint)
 VALUES
 ('twse-universe-master','master_snapshot','conservative_first_observed','unknown_without_official_cadence','accepted_master_complete','universe_symbol_mapping_v1','TWSE t187ap03_L basic master',1,'2026-08-21T00:00:00Z','93588835b58c11ee96ec28266ae2820de103a9a78fdc8bb8572448f98b8cf9fd'),
@@ -206,7 +208,8 @@ VALUES
 ('tpex-universe-master','master_snapshot','conservative_first_observed','unknown_without_official_cadence','accepted_master_complete','universe_symbol_mapping_v1','TPEx mopsfin_t187ap03_O',1,'2026-08-21T00:00:00Z','7fd75d94f0e867594ab7c2834cec5c0cd1422b0996198d94395d0b59791a4966'),
 ('tpex-universe-lifecycle','listing_lifecycle_event','manual_publication_evidence_required','event_observation','explicit_termination_only','universe_symbol_mapping_v1','TPEx delisted/deListed manual publication',1,'2026-08-21T00:00:00Z','a8252cf02efa17cfb0ac44ca594014517096d9d98f28dbb0333496231b5430d3'),
 ('tpex-universe-operational','trading_operational_event','conservative_first_observed','event_observation','event_only','universe_symbol_mapping_v1','TPEx spendi/cmode',1,'2026-08-21T00:00:00Z','a1261db49fdcfae33d97edc73a227ec37e669ee506a96b91c07c55106c402870'),
-('tpex-universe-corroborating','corroborating_identity_observation','manual_publication_evidence_required','event_observation','corroborating_only','universe_symbol_mapping_v1','TPEx company current page',1,'2026-08-21T00:00:00Z','d949c987016490aa4ba03b8110bde71588ee74f62b594f29802e3bfa61a97661');
+('tpex-universe-corroborating','corroborating_identity_observation','manual_publication_evidence_required','event_observation','corroborating_only','universe_symbol_mapping_v1','TPEx company current page',1,'2026-08-21T00:00:00Z','d949c987016490aa4ba03b8110bde71588ee74f62b594f29802e3bfa61a97661')
+ON CONFLICT(resource_id) DO NOTHING;
 
 CREATE TRIGGER universe_instruments_no_update BEFORE UPDATE ON universe_instruments BEGIN SELECT RAISE(ABORT,'universe identity anchors are immutable'); END;
 CREATE TRIGGER universe_instruments_no_delete BEFORE DELETE ON universe_instruments BEGIN SELECT RAISE(ABORT,'universe identity anchors are immutable'); END;

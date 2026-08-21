@@ -20,6 +20,12 @@ def _anchor(repo, context):
                                     first_observed_at="2026-08-21T00:00:00Z", source_reference="fixture", context=context)
 
 
+def _context(suffix="default"):
+    return UniverseOperatorContext(
+        "operator", f"run-{suffix}", f"lock-{suffix}", f"audit-{suffix}"
+    )
+
+
 def _payload(**overrides):
     value = {"venue": "TWSE", "official_code": "2330", "canonical_symbol": "2330.TW",
              "fetched_at": "2026-08-21T00:01:00Z", "received_at": "2026-08-21T00:01:00Z",
@@ -34,7 +40,7 @@ def test_write_guard_default_disabled_has_zero_mutation(tmp_path):
     db, repo = _repo(tmp_path, enabled=False)
     before = db.read_bytes()
     with pytest.raises(UniverseIngestionWritesDisabled):
-        _anchor(repo, UniverseOperatorContext("operator"))
+        _anchor(repo, _context("disabled"))
     assert db.read_bytes() == before
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM universe_instruments").fetchone()[0] == 0
@@ -42,7 +48,7 @@ def test_write_guard_default_disabled_has_zero_mutation(tmp_path):
 
 def test_identity_retry_cross_venue_and_code_reuse_epoch(tmp_path):
     db, repo = _repo(tmp_path)
-    context = UniverseOperatorContext("operator", "run", "lock", "audit")
+    context = _context("identity")
     first = _anchor(repo, context)
     retry = _anchor(repo, context)
     assert retry["instrument_id"] == first["instrument_id"]
@@ -62,7 +68,7 @@ def test_identity_retry_cross_venue_and_code_reuse_epoch(tmp_path):
 
 def test_idempotency_keys_bind_without_duplicate_and_conflict_before_mutation(tmp_path):
     db, repo = _repo(tmp_path)
-    context = UniverseOperatorContext("operator")
+    context = _context("idempotency")
     anchor = _anchor(repo, context)
     first = repo.add_revision(instrument_id=anchor["instrument_id"], resource_id="twse-universe-master",
                               logical_revision_key="master", revision_number=1, payload=_payload(), context=context,
@@ -85,7 +91,7 @@ def test_idempotency_keys_bind_without_duplicate_and_conflict_before_mutation(tm
 
 def test_current_latest_block_does_not_fallback_and_dto_has_no_sensitive_fields(tmp_path):
     _, repo = _repo(tmp_path)
-    context = UniverseOperatorContext("operator")
+    context = _context("latest")
     anchor = _anchor(repo, context)
     first = repo.add_revision(instrument_id=anchor["instrument_id"], resource_id="twse-universe-master", logical_revision_key="master",
                               revision_number=1, payload=_payload(), context=context, idempotency_key="one")
@@ -100,11 +106,12 @@ def test_current_latest_block_does_not_fallback_and_dto_has_no_sensitive_fields(
 
 def test_resource_scope_and_partial_membership_fail_closed(tmp_path):
     _, repo = _repo(tmp_path)
-    context = UniverseOperatorContext("operator")
+    context = _context("scope")
     anchor = _anchor(repo, context)
     with pytest.raises(ValueError, match="universe_resource_not_registered"):
         repo.add_revision(instrument_id=anchor["instrument_id"], resource_id="non-universe-resource",
-                          logical_revision_key="master", revision_number=1, payload=_payload(), context=context)
+                          logical_revision_key="master", revision_number=1, payload=_payload(), context=context,
+                          idempotency_key="invalid-resource")
     partial = repo.add_revision(
         instrument_id=anchor["instrument_id"], resource_id="twse-universe-master",
         logical_revision_key="master", revision_number=1,

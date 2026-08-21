@@ -35,6 +35,160 @@ MIGRATION_FILES = tuple(
 )
 
 
+# Phase 13 registry rows are part of the migration contract.  SQLite's
+# ``ON CONFLICT DO NOTHING`` is safe only after these semantic checks: an
+# incompatible same-ID row must abort the transaction rather than being
+# silently retained.
+_PHASE13_SEED_EXPECTATIONS = {
+    "data_providers": {
+        "twse-universe-official": {
+            "display_name": "TWSE Universe Official", "authority_tier": "authoritative",
+            "provider_type": "official", "base_identity": "https://www.twse.com.tw",
+            "enabled": 1, "created_at": "2026-08-21T00:00:00Z",
+            "payload_fingerprint": "042ecef36a6ca8dd109b948f6a679973b31e69c759d7e9d1e408b1f83746cb3e",
+        },
+        "tpex-universe-official": {
+            "display_name": "TPEx Universe Official", "authority_tier": "authoritative",
+            "provider_type": "official", "base_identity": "https://www.tpex.org.tw",
+            "enabled": 1, "created_at": "2026-08-21T00:00:00Z",
+            "payload_fingerprint": "add538b4692192633b1142339113d9a5009e68ab309c83d5de69f0657e7eb3bb",
+        },
+    },
+    "data_resources": {
+        "twse-universe-master": {
+            "provider_id": "twse-universe-official", "logical_resource_key": "twse.t187ap03_L",
+            "resource_type": "symbol_master", "market": "TWSE", "expected_frequency": "periodic",
+            "freshness_policy": "unknown_without_official_cadence", "parser_id": "twse_universe_master",
+            "parser_version": "1", "schema_version": "phase13", "storage_policy": "archive_raw",
+            "enabled": 1, "created_at": "2026-08-21T00:00:00Z",
+            "payload_fingerprint": "be3665c8f7640f7031de4c8526eeace37873f34df8adebdff32792f94e8e808d",
+        },
+        "twse-universe-newlisting": {
+            "provider_id": "twse-universe-official", "logical_resource_key": "twse.company.newlisting",
+            "resource_type": "corporate_action", "market": "TWSE", "expected_frequency": "periodic",
+            "freshness_policy": "event_observation", "parser_id": "twse_universe_newlisting",
+            "parser_version": "1", "schema_version": "phase13", "storage_policy": "archive_raw",
+            "enabled": 1, "created_at": "2026-08-21T00:00:00Z",
+            "payload_fingerprint": "7a521d559be9f20658c194b2b8bc5e11584b3b883c0550dd25148f9a2bf0bbbd",
+        },
+        "twse-universe-termination": {
+            "provider_id": "twse-universe-official", "logical_resource_key": "twse.company.suspendListingCsvAndHtml",
+            "resource_type": "corporate_action", "market": "TWSE", "expected_frequency": "periodic",
+            "freshness_policy": "manual_publication_evidence_required", "parser_id": "twse_universe_termination",
+            "parser_version": "1", "schema_version": "phase13", "storage_policy": "archive_raw",
+            "enabled": 1, "created_at": "2026-08-21T00:00:00Z",
+            "payload_fingerprint": "c9f0bb3f8ec9c7bfdd40bb56a21bafc6d7d947e0e4b2cc4be0b9edb5b33e8502",
+        },
+        "tpex-universe-master": {
+            "provider_id": "tpex-universe-official", "logical_resource_key": "tpex.mopsfin_t187ap03_O",
+            "resource_type": "symbol_master", "market": "TPEX", "expected_frequency": "periodic",
+            "freshness_policy": "unknown_without_official_cadence", "parser_id": "tpex_universe_master",
+            "parser_version": "1", "schema_version": "phase13", "storage_policy": "archive_raw",
+            "enabled": 1, "created_at": "2026-08-21T00:00:00Z",
+            "payload_fingerprint": "afeb2b0cd9e896bc8a3d0e3b77410557a0d3357ea3bdd94c7ede4e1274265d66",
+        },
+        "tpex-universe-lifecycle": {
+            "provider_id": "tpex-universe-official", "logical_resource_key": "tpex.company.deListed",
+            "resource_type": "corporate_action", "market": "TPEX", "expected_frequency": "manual",
+            "freshness_policy": "manual_publication_evidence_required", "parser_id": "tpex_universe_lifecycle",
+            "parser_version": "1", "schema_version": "phase13", "storage_policy": "archive_raw",
+            "enabled": 1, "created_at": "2026-08-21T00:00:00Z",
+            "payload_fingerprint": "355e21480d1413692b2698e4fe82cd16c87b5de553b76ca0504f92378d738cb7",
+        },
+        "tpex-universe-operational": {
+            "provider_id": "tpex-universe-official", "logical_resource_key": "tpex.spendi.cmode",
+            "resource_type": "trading_calendar", "market": "TPEX", "expected_frequency": "periodic",
+            "freshness_policy": "event_observation", "parser_id": "tpex_universe_operational",
+            "parser_version": "1", "schema_version": "phase13", "storage_policy": "archive_raw",
+            "enabled": 1, "created_at": "2026-08-21T00:00:00Z",
+            "payload_fingerprint": "53f96df666aa8c19fdf4b3e0254d9e1033ff617a9273c7789345e65a430d5884",
+        },
+        "tpex-universe-corroborating": {
+            "provider_id": "tpex-universe-official", "logical_resource_key": "tpex.company.current",
+            "resource_type": "symbol_master", "market": "TPEX", "expected_frequency": "manual",
+            "freshness_policy": "manual_publication_evidence_required", "parser_id": "tpex_universe_company",
+            "parser_version": "1", "schema_version": "phase13", "storage_policy": "archive_raw",
+            "enabled": 1, "created_at": "2026-08-21T00:00:00Z",
+            "payload_fingerprint": "aadfe1261421f17cb48341c4721d09575c7ac667b5c5a65b1645a14cf6b2f254",
+        },
+    },
+    "universe_resource_policies": {
+        "twse-universe-master": {
+            "resource_role": "master_snapshot", "availability_mode": "conservative_first_observed",
+            "freshness_mode": "unknown_without_official_cadence", "completeness_policy": "accepted_master_complete",
+            "mapping_policy_version": "universe_symbol_mapping_v1", "source_scope": "TWSE t187ap03_L basic master",
+            "enabled": 1, "created_at": "2026-08-21T00:00:00Z",
+            "policy_fingerprint": "93588835b58c11ee96ec28266ae2820de103a9a78fdc8bb8572448f98b8cf9fd",
+        },
+        "twse-universe-newlisting": {
+            "resource_role": "listing_lifecycle_event", "availability_mode": "conservative_first_observed",
+            "freshness_mode": "event_observation", "completeness_policy": "explicit_listing_event",
+            "mapping_policy_version": "universe_symbol_mapping_v1", "source_scope": "TWSE company/newlisting",
+            "enabled": 1, "created_at": "2026-08-21T00:00:00Z",
+            "policy_fingerprint": "6670de4e7d08da5ec3cf25aee65c9791f90f4882c7589632e40b09b51db351c7",
+        },
+        "twse-universe-termination": {
+            "resource_role": "listing_lifecycle_event", "availability_mode": "manual_publication_evidence_required",
+            "freshness_mode": "event_observation", "completeness_policy": "explicit_termination_only",
+            "mapping_policy_version": "universe_symbol_mapping_v1", "source_scope": "TWSE company/suspendListingCsvAndHtml termination candidate",
+            "enabled": 1, "created_at": "2026-08-21T00:00:00Z",
+            "policy_fingerprint": "c9f0bb3f8ec9c7bfdd40bb56a21bafc6d7d947e0e4b2cc4be0b9edb5b33e8502",
+        },
+        "tpex-universe-master": {
+            "resource_role": "master_snapshot", "availability_mode": "conservative_first_observed",
+            "freshness_mode": "unknown_without_official_cadence", "completeness_policy": "accepted_master_complete",
+            "mapping_policy_version": "universe_symbol_mapping_v1", "source_scope": "TPEx mopsfin_t187ap03_O",
+            "enabled": 1, "created_at": "2026-08-21T00:00:00Z",
+            "policy_fingerprint": "7fd75d94f0e867594ab7c2834cec5c0cd1422b0996198d94395d0b59791a4966",
+        },
+        "tpex-universe-lifecycle": {
+            "resource_role": "listing_lifecycle_event", "availability_mode": "manual_publication_evidence_required",
+            "freshness_mode": "event_observation", "completeness_policy": "explicit_termination_only",
+            "mapping_policy_version": "universe_symbol_mapping_v1", "source_scope": "TPEx delisted/deListed manual publication",
+            "enabled": 1, "created_at": "2026-08-21T00:00:00Z",
+            "policy_fingerprint": "a8252cf02efa17cfb0ac44ca594014517096d9d98f28dbb0333496231b5430d3",
+        },
+        "tpex-universe-operational": {
+            "resource_role": "trading_operational_event", "availability_mode": "conservative_first_observed",
+            "freshness_mode": "event_observation", "completeness_policy": "event_only",
+            "mapping_policy_version": "universe_symbol_mapping_v1", "source_scope": "TPEx spendi/cmode",
+            "enabled": 1, "created_at": "2026-08-21T00:00:00Z",
+            "policy_fingerprint": "a1261db49fdcfae33d97edc73a227ec37e669ee506a96b91c07c55106c402870",
+        },
+        "tpex-universe-corroborating": {
+            "resource_role": "corroborating_identity_observation", "availability_mode": "manual_publication_evidence_required",
+            "freshness_mode": "event_observation", "completeness_policy": "corroborating_only",
+            "mapping_policy_version": "universe_symbol_mapping_v1", "source_scope": "TPEx company current page",
+            "enabled": 1, "created_at": "2026-08-21T00:00:00Z",
+            "policy_fingerprint": "d949c987016490aa4ba03b8110bde71588ee74f62b594f29802e3bfa61a97661",
+        },
+    },
+}
+
+
+def _validate_phase13_seed_compatibility(conn: sqlite3.Connection) -> None:
+    tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+    for table, seeds in _PHASE13_SEED_EXPECTATIONS.items():
+        if table not in tables:
+            continue
+        identity_column = "provider_id" if table == "data_providers" else "resource_id"
+        for identity, expected in seeds.items():
+            row = conn.execute(
+                f"SELECT * FROM {table} WHERE {identity_column} = ?", (identity,)
+            ).fetchone()
+            if row is None:
+                continue
+            for field, value in expected.items():
+                if row[field] != value:
+                    raise RuntimeError(
+                        f"phase13 seed conflict: {table}:{identity}:{field}"
+                    )
+
+
 def _statements(sql: str) -> list[str]:
     statements: list[str] = []
     buffer = ""
@@ -64,6 +218,7 @@ def apply_valuation_migration(db_path: str) -> dict[str, Any]:
         ))
     applied_ids: list[str] = []
     with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
         # Rebuild migrations run with FK enforcement paused, then fail closed on
         # explicit checks of the rebuilt table and its dependants before commit.
         # This prevents ALTER TABLE from rewriting child references to a
@@ -91,8 +246,12 @@ def apply_valuation_migration(db_path: str) -> dict[str, Any]:
                             f"migration checksum mismatch for {migration_id}"
                         )
                     continue
+                if migration_id == "20260821_16_phase13_universe_foundation":
+                    _validate_phase13_seed_compatibility(conn)
                 for statement in _statements(sql):
                     conn.execute(statement)
+                if migration_id == "20260821_16_phase13_universe_foundation":
+                    _validate_phase13_seed_compatibility(conn)
                 conn.execute(
                     "INSERT INTO schema_migrations(version_id, checksum_sha256, applied_at) VALUES (?, ?, ?)",
                     (migration_id, checksum, utc_now_timestamp()),
