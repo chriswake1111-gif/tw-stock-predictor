@@ -12,10 +12,13 @@ from src.domain.universe import payload_fingerprint, validate_official_code
 
 APPROVED_RESOURCE_KEYS = frozenset({
     "twse.t187ap03_L", "twse.company.newlisting", "twse.company.suspendListingCsvAndHtml",
-    "tpex.mopsfin_t187ap03_O", "tpex.company.deListed", "tpex.spendi.cmode",
+    "tpex.mopsfin_t187ap03_O", "tpex.company.deListed",
     "tpex.spendi.history", "tpex.spendi.today", "tpex.cmode", "tpex.company.current",
     "tpex_spendi_history", "tpex_spendi_today", "tpex_cmode",
 })
+# The seven-row Phase 13 migration still contains this logical identity for
+# already-imported history.  It is intentionally not a new-ingestion contract.
+LEGACY_RESOURCE_KEYS = frozenset({"tpex.spendi.cmode"})
 EXCLUDED_RESOURCE_KEYS = frozenset({"tpex_mainboard_quotes", "price_context_out_of_scope"})
 APPROVED_PROVIDER_HOSTS = frozenset({"twse.com.tw", "tpex.org.tw"})
 PRICE_FIELD_NAMES = frozenset({
@@ -29,16 +32,53 @@ _RESOURCE_ALIASES = {
     "tpex_cmode": "tpex.cmode",
 }
 _RESOURCE_CONTRACTS = {
-    "twse.t187ap03_L": {"kind": "master", "schema": ("data", "code")},
-    "twse.company.newlisting": {"kind": "listing", "schema": ("data", "code", "effective_date")},
-    "twse.company.suspendListingCsvAndHtml": {"kind": "termination", "schema": ("tables|data", "code", "reason")},
-    "tpex.mopsfin_t187ap03_O": {"kind": "master", "schema": ("data", "code")},
-    "tpex.company.deListed": {"kind": "termination", "schema": ("tables|data", "code", "year", "reason")},
-    "tpex.spendi.cmode": {"kind": "operational", "schema": ("data", "state_or_date")},
-    "tpex.spendi.history": {"kind": "operational", "schema": ("data", "state_or_date")},
-    "tpex.spendi.today": {"kind": "operational", "schema": ("data", "state_or_date")},
-    "tpex.cmode": {"kind": "operational", "schema": ("data", "state_or_date")},
-    "tpex.company.current": {"kind": "corroborating", "schema": ("data", "code")},
+    # Each contract fixes the response envelope and the required official
+    # field groups.  Additional fields are retained in the normalized row and
+    # included in the observed schema evidence rather than silently ignored.
+    "twse.t187ap03_L": {
+        "kind": "master", "envelope": "data",
+        "required": {"code": ("code", "official_code", "公司代號", "SecuritiesCompanyCode", "證券代號"),
+                      "name": ("name", "公司名稱", "SecuritiesCompanyName")},
+    },
+    "twse.company.newlisting": {
+        "kind": "listing", "envelope": "data",
+        "required": {"code": ("code", "official_code", "公司代號", "SecuritiesCompanyCode", "證券代號"),
+                      "effective_date": ("effective_date", "source_effective_date", "上市日期", "Date", "date")},
+    },
+    "twse.company.suspendListingCsvAndHtml": {
+        "kind": "termination", "envelope": "data",
+        "required": {"code": ("code", "official_code", "公司代號", "SecuritiesCompanyCode", "證券代號"),
+                      "date": ("effective_date", "source_effective_date", "上市日期", "終止日期", "Date", "date"),
+                      "reason": ("reason", "termination_reason", "下市原因", "終止上市原因")},
+    },
+    "tpex.mopsfin_t187ap03_O": {
+        "kind": "master", "envelope": "data",
+        "required": {"code": ("code", "official_code", "公司代號", "SecuritiesCompanyCode", "證券代號"),
+                      "name": ("name", "公司名稱", "SecuritiesCompanyName")},
+    },
+    "tpex.company.deListed": {
+        "kind": "termination", "envelope": "tables",
+        "required": {"code": ("code", "official_code", "公司代號", "SecuritiesCompanyCode", "證券代號"),
+                      "date": ("effective_date", "source_effective_date", "下市日期", "Date", "date", "year", "年度"),
+                      "reason": ("reason", "termination_reason", "下市原因", "終止上市原因")},
+    },
+    "tpex.spendi.history": {
+        "kind": "operational", "envelope": "data",
+        "required": {"date": ("date", "Date", "交易日期"), "state": ("status", "state", "trading_state", "交易狀態", "處置狀態", "session_status")},
+    },
+    "tpex.spendi.today": {
+        "kind": "operational", "envelope": "data",
+        "required": {"date": ("date", "Date", "交易日期"), "state": ("status", "state", "trading_state", "交易狀態", "處置狀態", "session_status")},
+    },
+    "tpex.cmode": {
+        "kind": "operational", "envelope": "data",
+        "required": {"date": ("date", "Date", "交易日期"), "state": ("status", "state", "trading_state", "交易狀態", "處置狀態", "session_status")},
+    },
+    "tpex.company.current": {
+        "kind": "corroborating", "envelope": "data",
+        "required": {"code": ("code", "official_code", "公司代號", "SecuritiesCompanyCode", "證券代號"),
+                      "name": ("name", "公司名稱", "SecuritiesCompanyName")},
+    },
 }
 _CODE_FIELDS = ("code", "official_code", "公司代號", "SecuritiesCompanyCode", "證券代號")
 _DATE_FIELDS = ("date", "Date", "effective_date", "source_effective_date", "上市日期", "交易日期", "year", "年度")
@@ -72,30 +112,32 @@ def assert_approved_resource(resource_key: str) -> str:
     key = str(resource_key).strip()
     if key in EXCLUDED_RESOURCE_KEYS or "quote" in key.lower() or "price" in key.lower():
         raise UniverseSourceRejected("quote_source_excluded")
+    if key in LEGACY_RESOURCE_KEYS:
+        raise UniverseSourceRejected("legacy_source_contract_not_for_ingestion")
     if key not in APPROVED_RESOURCE_KEYS:
         raise UniverseSourceRejected("universe_source_not_approved")
     return _RESOURCE_ALIASES.get(key, key)
 
 
-def _extract_rows(payload: Any) -> list[dict[str, Any]]:
+def _extract_rows(resource_key: str, payload: Any) -> tuple[list[dict[str, Any]], str]:
+    contract = _RESOURCE_CONTRACTS[resource_key]
     if not isinstance(payload, dict):
         raise UniverseSourceRejected("source_schema_changed")
-    if isinstance(payload.get("data"), list):
+    envelope = contract["envelope"]
+    if envelope == "data" and isinstance(payload.get("data"), list):
         rows = payload["data"]
-    elif isinstance(payload.get("tables"), list):
+    elif envelope == "tables" and isinstance(payload.get("tables"), list):
         rows = []
         for table in payload["tables"]:
             if isinstance(table, dict) and isinstance(table.get("data"), list):
                 rows.extend(table["data"])
-            elif isinstance(table, dict) and all(isinstance(v, (str, int, float, type(None))) for v in table.values()):
-                rows.append(table)
             else:
                 raise UniverseSourceRejected("source_schema_changed")
     else:
         raise UniverseSourceRejected("source_schema_changed")
     if not all(isinstance(row, dict) for row in rows):
         raise UniverseSourceRejected("source_schema_changed")
-    return [dict(row) for row in rows]
+    return [dict(row) for row in rows], envelope
 
 
 def _has_value(row: dict[str, Any], fields: tuple[str, ...]) -> bool:
@@ -110,27 +152,39 @@ def _validate_rows(key: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]
         if any(str(field).strip().lower() in PRICE_FIELD_NAMES for field in row):
             raise UniverseSourceRejected("price_field_excluded")
         value = dict(row)
+        for fields in contract["required"].values():
+            if not _has_value(row, fields):
+                raise UniverseSourceRejected("source_schema_changed")
         if kind in {"master", "listing", "termination", "corroborating"}:
             code = next((row.get(field) for field in _CODE_FIELDS if row.get(field) not in (None, "")), None)
-            if code is None:
-                raise UniverseSourceRejected("source_schema_changed")
             value["official_code"] = validate_official_code(str(code))
-        if kind == "listing" and not _has_value(row, _DATE_FIELDS) and not _has_value(row, ("name", "公司名稱", "SecuritiesCompanyName")):
-            raise UniverseSourceRejected("source_schema_changed")
-        if kind == "termination":
-            if not _has_value(row, _REASON_FIELDS):
-                raise UniverseSourceRejected("source_schema_changed")
-            if key == "tpex.company.deListed" and not _has_value(row, ("year", "年度", "Date", "date")):
-                raise UniverseSourceRejected("source_schema_changed")
-        if kind == "operational" and not (_has_value(row, _STATE_FIELDS) or _has_value(row, _DATE_FIELDS)):
-            raise UniverseSourceRejected("source_schema_changed")
         parsed.append(value)
     return parsed
 
 
-def parse_universe_payload(resource_key: str, payload: Any) -> list[dict[str, Any]]:
+def _schema_evidence(key: str, envelope: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    contract = _RESOURCE_CONTRACTS[key]
+    observed_fields = sorted({str(field) for row in rows for field in row})
+    return {
+        "logical_resource_key": key,
+        "schema_version": "phase13",
+        "envelope": envelope,
+        "required_field_groups": {
+            name: list(fields) for name, fields in contract["required"].items()
+        },
+        "observed_row_fields": observed_fields,
+    }
+
+
+def _parse_with_evidence(resource_key: str, payload: Any) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     key = assert_approved_resource(resource_key)
-    return _validate_rows(key, _extract_rows(payload))
+    rows, envelope = _extract_rows(key, payload)
+    parsed = _validate_rows(key, rows)
+    return parsed, _schema_evidence(key, envelope, rows)
+
+
+def parse_universe_payload(resource_key: str, payload: Any) -> list[dict[str, Any]]:
+    return _parse_with_evidence(resource_key, payload)[0]
 
 
 class UniverseCollector:
@@ -158,21 +212,24 @@ class UniverseCollector:
             return UniverseFetchResult(key, "provider_error", (), None, "", "", None, None, f"http_{status_code}")
         try:
             raw = response.json() if hasattr(response, "json") else response
-            rows = parse_universe_payload(key, raw)
+            rows, schema_evidence = _parse_with_evidence(key, raw)
             # The observation timestamp is assigned only after transport, JSON,
             # schema and parser acceptance; it is independent of coverage.
             first = kwargs.get("first_observed_at") or kwargs.get("received_at") or kwargs.get("fetched_at")
             raw_hash = payload_fingerprint(raw)
             normalized_hash = payload_fingerprint(rows)
-            schema_hash = payload_fingerprint({"logical_resource_key": key, "schema_version": "phase13"})
+            schema_hash = payload_fingerprint(schema_evidence)
             supplied_schema = kwargs.get("schema_fingerprint")
             if supplied_schema and str(supplied_schema).lower() != schema_hash:
                 raise UniverseSourceRejected("schema_evidence_mismatch")
             query_dimensions = dict(kwargs.get("query_dimensions") or {})
             query_dimensions.setdefault("source_contract_key", key)
+            query_dimensions["source_envelope"] = schema_evidence["envelope"]
+            query_dimensions["required_field_groups"] = schema_evidence["required_field_groups"]
+            query_dimensions["observed_row_fields"] = schema_evidence["observed_row_fields"]
             return UniverseFetchResult(
                 key, "accepted", tuple(rows), first, kwargs.get("received_at", ""), kwargs.get("fetched_at", ""),
-                normalized_hash, schema_hash, None, raw_hash, normalized_hash, "2", query_dimensions,
+                normalized_hash, schema_hash, None, raw_hash, normalized_hash, "1", query_dimensions,
                 kwargs.get("source_record_reference") or f"{key}:{normalized_hash[:16]}",
             )
         except UniverseSourceRejected as exc:
@@ -181,4 +238,8 @@ class UniverseCollector:
             return UniverseFetchResult(key, "schema_changed", (), None, kwargs.get("received_at", ""), kwargs.get("fetched_at", ""), None, None, str(exc))
 
 
-__all__ = ["APPROVED_PROVIDER_HOSTS", "APPROVED_RESOURCE_KEYS", "EXCLUDED_RESOURCE_KEYS", "UniverseCollector", "UniverseFetchResult", "UniverseSourceRejected", "assert_approved_resource", "parse_universe_payload"]
+__all__ = [
+    "APPROVED_PROVIDER_HOSTS", "APPROVED_RESOURCE_KEYS", "EXCLUDED_RESOURCE_KEYS",
+    "LEGACY_RESOURCE_KEYS", "UniverseCollector", "UniverseFetchResult",
+    "UniverseSourceRejected", "assert_approved_resource", "parse_universe_payload",
+]

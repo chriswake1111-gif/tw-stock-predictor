@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 import sqlite3
 
 import pytest
@@ -9,6 +10,7 @@ from src.collectors.universe_collectors import UniverseCollector, UniverseSource
 from src.repositories.migration_runner import apply_valuation_migration
 from src.repositories.universe_repository import UniverseRepository
 from src.services.universe_write_guard import UniverseOperatorContext, UniverseWriteGuard
+from tests.phase13_test_support import raw_for, seed_raw_provenance
 
 
 def _ctx(name: str = "second") -> UniverseOperatorContext:
@@ -18,6 +20,7 @@ def _ctx(name: str = "second") -> UniverseOperatorContext:
 def _repo(tmp_path):
     db = tmp_path / "universe.sqlite"
     apply_valuation_migration(str(db))
+    seed_raw_provenance(db)
     return db, UniverseRepository(str(db), guard=UniverseWriteGuard(True))
 
 
@@ -28,6 +31,8 @@ def _instrument_payload(**overrides):
         "ingested_at": "2026-08-21T00:02:00Z", "available_at": "2026-08-21T00:01:00Z",
         "source_reference": "fixture", "status": "accepted", "freshness_status": "current",
         "freshness_mode": "official_cadence_window", "current_complete": True, "coverage_complete": True,
+        "raw_resource_revision_id": "raw-phase13-twse_universe_master",
+        "raw_payload_sha256": hashlib.sha256(b"phase13:twse-universe-master").hexdigest(),
     }
     value.update(overrides)
     return value
@@ -40,6 +45,8 @@ def _resource_payload(**overrides):
         "source_reference": "fixture-resource", "status": "provider_error", "reason": "provider unavailable",
         "freshness_status": "blocked", "freshness_mode": "event_observation", "current_complete": False,
         "coverage_complete": False, "venue": "TWSE",
+        "raw_resource_revision_id": "raw-phase13-twse_universe_master",
+        "raw_payload_sha256": hashlib.sha256(b"phase13:twse-universe-master").hexdigest(),
     }
     value.update(overrides)
     return value
@@ -107,16 +114,18 @@ def test_historical_reference_and_operational_state_are_independent(tmp_path):
 
 @pytest.mark.parametrize("status", ["partial", "schema_changed"])
 def test_resource_failure_without_instrument_row_is_visible_per_venue(tmp_path, status):
-    _, repo = _repo(tmp_path)
+    db, repo = _repo(tmp_path)
     context = _ctx(status)
     anchor = _anchor(repo, context)
     repo.add_revision(
         instrument_id=anchor["instrument_id"], resource_id="twse-universe-master", logical_revision_key="master",
         revision_number=1, payload=_instrument_payload(), context=context, idempotency_key="twse-s1",
     )
+    raw_id, raw_hash = raw_for(db, "tpex-universe-operational")
     repo.add_resource_revision(
         resource_id="tpex-universe-operational", logical_revision_key="tpex.spendi.history", revision_number=1,
-        payload=_resource_payload(venue="TPEX", status=status, reason=f"{status} fixture"),
+        payload=_resource_payload(venue="TPEX", status=status, reason=f"{status} fixture",
+                                 raw_resource_revision_id=raw_id, raw_payload_sha256=raw_hash),
         context=context, idempotency_key=f"tpex-{status}",
     )
     result = repo.list_instruments(knowledge_cutoff_at="2026-08-21T00:05:00Z", limit=25)
@@ -128,7 +137,7 @@ def test_resource_failure_without_instrument_row_is_visible_per_venue(tmp_path, 
 
 
 def test_reverse_venue_failure_does_not_hide_healthy_venue(tmp_path):
-    _, repo = _repo(tmp_path)
+    db, repo = _repo(tmp_path)
     context = _ctx("reverse")
     tpex_anchor = repo.allocate_instrument(
         venue="TPEX", official_code="6488", source_identity="tpex:6488:v1",
@@ -137,7 +146,11 @@ def test_reverse_venue_failure_does_not_hide_healthy_venue(tmp_path):
     repo.add_revision(
         instrument_id=tpex_anchor["instrument_id"], resource_id="tpex-universe-master",
         logical_revision_key="master", revision_number=1,
-        payload=_instrument_payload(venue="TPEX", official_code="6488", canonical_symbol="6488.TWO"),
+        payload=_instrument_payload(
+            venue="TPEX", official_code="6488", canonical_symbol="6488.TWO",
+            raw_resource_revision_id=raw_for(db, "tpex-universe-master")[0],
+            raw_payload_sha256=raw_for(db, "tpex-universe-master")[1],
+        ),
         context=context, idempotency_key="reverse-tpex",
     )
     repo.add_resource_revision(
@@ -151,14 +164,18 @@ def test_reverse_venue_failure_does_not_hide_healthy_venue(tmp_path):
 
 
 def test_empty_complete_and_empty_blocked_lists_are_distinct(tmp_path):
-    _, repo = _repo(tmp_path)
+    db, repo = _repo(tmp_path)
     context = _ctx("empty")
+    twse_raw = raw_for(db, "twse-universe-master")
+    tpex_raw = raw_for(db, "tpex-universe-master")
     for resource_id, venue in (("twse-universe-master", "TWSE"), ("tpex-universe-master", "TPEX")):
+        raw_id, raw_hash = twse_raw if venue == "TWSE" else tpex_raw
         repo.add_resource_revision(
             resource_id=resource_id, logical_revision_key="master", revision_number=1,
             payload=_resource_payload(venue=venue, status="accepted", reason=None,
                                       freshness_status="current", current_complete=True,
-                                      coverage_complete=True),
+                                      coverage_complete=True, raw_resource_revision_id=raw_id,
+                                      raw_payload_sha256=raw_hash),
             context=context, idempotency_key=f"empty-complete-{venue}",
         )
     complete = repo.list_instruments(knowledge_cutoff_at="2026-08-21T00:05:00Z", limit=25)
@@ -166,12 +183,16 @@ def test_empty_complete_and_empty_blocked_lists_are_distinct(tmp_path):
     assert complete["status"] == "available"
     assert complete["per_venue_status"] == {"TWSE": "available", "TPEX": "available"}
 
-    _, blocked_repo = _repo(tmp_path / "blocked")
+    blocked_db, blocked_repo = _repo(tmp_path / "blocked")
     blocked_context = _ctx("blocked")
+    twse_raw = raw_for(blocked_db, "twse-universe-master")
+    tpex_raw = raw_for(blocked_db, "tpex-universe-master")
     for resource_id, venue in (("twse-universe-master", "TWSE"), ("tpex-universe-master", "TPEX")):
+        raw_id, raw_hash = twse_raw if venue == "TWSE" else tpex_raw
         blocked_repo.add_resource_revision(
             resource_id=resource_id, logical_revision_key="master", revision_number=1,
-            payload=_resource_payload(venue=venue, status="provider_error", reason="provider unavailable"),
+            payload=_resource_payload(venue=venue, status="provider_error", reason="provider unavailable",
+                                      raw_resource_revision_id=raw_id, raw_payload_sha256=raw_hash),
             context=blocked_context, idempotency_key=f"empty-blocked-{venue}",
         )
     blocked = blocked_repo.list_instruments(knowledge_cutoff_at="2026-08-21T00:05:00Z", limit=25)
@@ -183,6 +204,8 @@ def test_empty_complete_and_empty_blocked_lists_are_distinct(tmp_path):
 def test_collector_uses_distinct_operational_contracts_and_fails_closed_on_drift():
     for key in ("tpex.spendi.history", "tpex.spendi.today", "tpex.cmode"):
         assert parse_universe_payload(key, {"data": [{"date": "2026-08-21", "status": "normal"}]})
+    with pytest.raises(UniverseSourceRejected, match="legacy_source_contract_not_for_ingestion"):
+        parse_universe_payload("tpex.spendi.cmode", {"data": [{"date": "2026-08-21", "status": "normal"}]})
     malformed = UniverseCollector(lambda *_args, **_kwargs: type("Response", (), {"status_code": 200, "json": lambda self: {"rows": [{"code": "2330"}]}})()).fetch_official(
         "tpex.spendi.history", url="https://www.tpex.org.tw/fixture",
     )
@@ -191,25 +214,24 @@ def test_collector_uses_distinct_operational_contracts_and_fails_closed_on_drift
 
 
 @pytest.mark.parametrize(
-    ("resource_key", "row"),
+    ("resource_key", "payload"),
     [
-        ("twse.t187ap03_L", {"code": "2330"}),
-        ("twse.company.newlisting", {"code": "2330", "effective_date": "2026-01-01"}),
-        ("twse.company.suspendListingCsvAndHtml", {"code": "2330", "reason": "suspended"}),
-        ("tpex.mopsfin_t187ap03_O", {"code": "6488"}),
-        ("tpex.company.deListed", {"code": "6488", "year": "2026", "reason": "terminated"}),
-        ("tpex.spendi.cmode", {"status": "normal"}),
-        ("tpex.spendi.history", {"date": "2026-08-21"}),
-        ("tpex.spendi.today", {"status": "normal"}),
-        ("tpex.cmode", {"date": "2026-08-21"}),
-        ("tpex.company.current", {"code": "6488"}),
+        ("twse.t187ap03_L", {"data": [{"code": "2330", "name": "fixture"}]}),
+        ("twse.company.newlisting", {"data": [{"code": "2330", "effective_date": "2026-01-01"}]}),
+        ("twse.company.suspendListingCsvAndHtml", {"data": [{"code": "2330", "date": "2026-01-01", "reason": "suspended"}]}),
+        ("tpex.mopsfin_t187ap03_O", {"data": [{"code": "6488", "name": "fixture"}]}),
+        ("tpex.company.deListed", {"tables": [{"data": [{"code": "6488", "year": "2026", "reason": "terminated"}]}]}),
+        ("tpex.spendi.history", {"data": [{"date": "2026-08-21", "status": "normal"}]}),
+        ("tpex.spendi.today", {"data": [{"date": "2026-08-21", "status": "normal"}]}),
+        ("tpex.cmode", {"data": [{"date": "2026-08-21", "status": "normal"}]}),
+        ("tpex.company.current", {"data": [{"code": "6488", "name": "fixture"}]}),
     ],
 )
-def test_every_approved_resource_has_a_fixed_contract(resource_key, row):
-    parsed = parse_universe_payload(resource_key, {"data": [row]})
+def test_every_approved_resource_has_a_fixed_contract(resource_key, payload):
+    parsed = parse_universe_payload(resource_key, payload)
     assert parsed
     with pytest.raises(UniverseSourceRejected, match="source_schema_changed"):
-        parse_universe_payload(resource_key, {"rows": [row]})
+        parse_universe_payload(resource_key, {"rows": payload.get("data", [])})
 
 
 def test_audit_log_records_operator_dimensions_without_secret_payload(tmp_path, caplog):
@@ -230,10 +252,12 @@ def test_provenance_columns_round_trip_and_public_dto_remains_safe(tmp_path):
     db, repo = _repo(tmp_path)
     context = _ctx("provenance")
     anchor = _anchor(repo, context)
+    raw_id, raw_hash = raw_for(db, "twse-universe-master")
     row = repo.add_revision(
         instrument_id=anchor["instrument_id"], resource_id="twse-universe-master", logical_revision_key="master",
         revision_number=1, payload=_instrument_payload(
-            raw_payload_sha256="a" * 64, query_dimensions={"scope": "master"}, source_record_reference="row-1",
+            raw_resource_revision_id=raw_id, raw_payload_sha256=raw_hash,
+            query_dimensions={"scope": "master"}, source_record_reference="row-1",
         ), context=context, idempotency_key="provenance-key",
     )
     with sqlite3.connect(db) as conn:
@@ -241,7 +265,7 @@ def test_provenance_columns_round_trip_and_public_dto_remains_safe(tmp_path):
             "SELECT raw_payload_sha256, normalized_payload_sha256, query_dimensions_json, source_record_reference, raw_resource_revision_id FROM universe_revisions WHERE universe_revision_id=?",
             (row["universe_revision_id"],),
         ).fetchone()
-    assert stored[0] == "a" * 64
+    assert stored[0] == raw_hash
     assert stored[1] == row["payload_sha256"]
     assert '"scope":"master"' in stored[2]
     assert stored[3] == "row-1"

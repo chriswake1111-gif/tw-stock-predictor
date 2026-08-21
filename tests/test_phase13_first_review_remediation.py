@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from src.services.universe_write_guard import (
     UniverseOperatorContextRequired,
     UniverseWriteGuard,
 )
+from tests.phase13_test_support import raw_for, seed_raw_provenance
 
 
 PHASE13 = "20260821_16_phase13_universe_foundation"
@@ -36,6 +38,7 @@ def _context(suffix: str = "review") -> UniverseOperatorContext:
 def _repo(tmp_path, *, enabled: bool = True):
     db = tmp_path / "universe.sqlite"
     apply_valuation_migration(str(db))
+    seed_raw_provenance(db)
     return db, UniverseRepository(str(db), guard=UniverseWriteGuard(enabled))
 
 
@@ -55,6 +58,8 @@ def _payload(**overrides):
         "source_reference": "fixture", "status": "accepted",
         "freshness_status": "current", "freshness_mode": "official_cadence_window",
         "current_complete": True, "coverage_complete": True,
+        "raw_resource_revision_id": "raw-phase13-twse_universe_master",
+        "raw_payload_sha256": hashlib.sha256(b"phase13:twse-universe-master").hexdigest(),
     }
     value.update(overrides)
     return value
@@ -160,13 +165,16 @@ def _publication_evidence(db, *, ingested_at: str):
 
 
 def test_manual_publication_evidence_missing_is_not_historical_reference(tmp_path):
-    _, repo = _repo(tmp_path)
+    db, repo = _repo(tmp_path)
     context = _context("manual-missing")
     anchor = _anchor(repo, context)
+    termination_raw_id, termination_raw_hash = raw_for(db, "twse-universe-termination")
     repo.add_revision(
         instrument_id=anchor["instrument_id"], resource_id="twse-universe-termination",
         logical_revision_key="termination-2330", revision_number=1,
-        payload=_payload(available_at="2026-08-21T00:01:00Z"),
+        payload=_payload(available_at="2026-08-21T00:01:00Z",
+                         raw_resource_revision_id=termination_raw_id,
+                         raw_payload_sha256=termination_raw_hash),
         context=context, idempotency_key="manual-missing",
     )
     result = repo.get_by_canonical("2330.TW", knowledge_cutoff_at="2026-08-22T00:00:00Z")
@@ -178,6 +186,7 @@ def test_manual_publication_evidence_uses_visibility_cutoff_and_approved_point(t
     db, repo = _repo(tmp_path)
     context = _context("manual-later")
     anchor = _anchor(repo, context)
+    termination_raw_id, termination_raw_hash = raw_for(db, "twse-universe-termination")
     evidence = _publication_evidence(db, ingested_at="2026-08-22T00:00:00Z")
     repo.add_revision(
         instrument_id=anchor["instrument_id"], resource_id="twse-universe-termination",
@@ -186,6 +195,8 @@ def test_manual_publication_evidence_uses_visibility_cutoff_and_approved_point(t
             available_at="2026-08-21T00:01:00Z",
             publication_evidence_id=evidence["publication_evidence_id"],
             availability_mode="manual_publication_evidence_required",
+            raw_resource_revision_id=termination_raw_id,
+            raw_payload_sha256=termination_raw_hash,
         ),
         context=context, idempotency_key="manual-later",
     )

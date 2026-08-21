@@ -152,6 +152,19 @@ class UniverseRepository:
         )"""
 
     @staticmethod
+    def _operational_where(alias: str = "r") -> str:
+        """Visibility for the current/resource channel.
+
+        A provider/transport/schema observation may have no source
+        available_at. Its deterministic local observation boundary is the
+        server-side ingested_at timestamp. This is intentionally a separate
+        predicate: it can expose a blocked operational state after the
+        observation, but it can never make that row a historical identity
+        reference.
+        """
+        return f"({alias}.ingested_at IS NOT NULL AND {alias}.ingested_at <= ?)"
+
+    @staticmethod
     def _reference(row: dict[str, Any] | None) -> dict[str, Any] | None:
         if not row:
             return None
@@ -290,9 +303,9 @@ class UniverseRepository:
                    i.first_observed_at AS anchor_first_observed_at
             FROM universe_instrument_revisions r
             JOIN universe_instruments i ON i.instrument_id = r.instrument_id
-            WHERE r.instrument_id = ? AND {self._cutoff_where('r')}
+            WHERE r.instrument_id = ? AND {self._operational_where('r')}
             ORDER BY r.ingested_at DESC, COALESCE(r.available_at,'' ) DESC, r.revision_number DESC
-            """, (instrument_id, cutoff, cutoff, cutoff, cutoff)
+            """, (instrument_id, cutoff)
         ).fetchall()]
         if reference and reference.get("resource_id"):
             resource_rows = [dict(row) for row in conn.execute(
@@ -304,9 +317,9 @@ class UniverseRepository:
                 JOIN universe_resource_policies p ON p.resource_id = ur.resource_id
                 JOIN data_resources r ON r.resource_id = ur.resource_id
                 WHERE ur.resource_id = ? AND ur.logical_revision_key = ?
-                  AND {self._cutoff_where('ur')}
+                  AND {self._operational_where('ur')}
                 ORDER BY ur.ingested_at DESC, COALESCE(ur.available_at,'' ) DESC, ur.revision_number DESC
-                """, (reference["resource_id"], reference.get("logical_revision_key") or "", cutoff, cutoff, cutoff, cutoff)
+                """, (reference["resource_id"], reference.get("logical_revision_key") or "", cutoff)
             ).fetchall()]
             for row in resource_rows:
                 row["instrument_id"] = instrument_id
@@ -358,7 +371,13 @@ class UniverseRepository:
         }
         if status in reason_map:
             reasons.append(reason_map[status])
-        if op.get("available_at") is None:
+        # A blocked operational attempt has no source publication instant by
+        # design.  Unknown availability is actionable only for an otherwise
+        # accepted identity fact; provider/partial observations remain
+        # non-actionable partial health states.
+        if status == "accepted" and (
+            op.get("available_at") is None or str(op.get("available_at")) > cutoff
+        ):
             reasons.append("availability_unproven")
         if op.get("reason"):
             reasons.append(str(op["reason"]))
@@ -533,9 +552,9 @@ class UniverseRepository:
             FROM universe_revisions ur
             JOIN data_resources dr ON dr.resource_id = ur.resource_id
             JOIN universe_resource_policies p ON p.resource_id = ur.resource_id
-            WHERE dr.market = ? AND {self._cutoff_where('ur')}
+            WHERE dr.market = ? AND {self._operational_where('ur')}
             ORDER BY ur.ingested_at DESC, COALESCE(ur.available_at,'' ) DESC, ur.revision_number DESC
-            """, (venue, cutoff, cutoff, cutoff, cutoff)
+            """, (venue, cutoff)
         ).fetchall()]
         if not rows:
             return "insufficient_data"
@@ -543,7 +562,12 @@ class UniverseRepository:
         status = str(latest.get("status"))
         if status in {"awaiting_review", "schema_changed"}:
             return "needs_human_input"
-        if status != "accepted" or latest.get("freshness_status") in {None, "unknown", "stale", "blocked"}:
+        if (
+            status != "accepted"
+            or latest.get("available_at") is None
+            or str(latest.get("available_at")) > cutoff
+            or latest.get("freshness_status") in {None, "unknown", "stale", "blocked"}
+        ):
             return "partial"
         if not bool(latest.get("current_complete")):
             return "partial"
@@ -569,32 +593,61 @@ class UniverseRepository:
         if not isinstance(query_dimensions, dict):
             raise ValueError("query_dimensions must be an object")
         contract_key = str(payload.get("source_contract_key") or query_dimensions.get("source_contract_key") or resource["logical_resource_key"])
-        schema_identity = {"logical_resource_key": contract_key, "schema_version": resource["schema_version"]}
+        observed_fields = query_dimensions.get("observed_row_fields")
+        if not isinstance(observed_fields, list) or not all(isinstance(item, str) for item in observed_fields):
+            # Direct operator payloads may contain one normalized source row.
+            # Derive evidence from that observed row rather than a static
+            # resource identity; collector-produced envelopes override this
+            # fallback through query_dimensions.
+            metadata_fields = {
+                "venue", "official_code", "canonical_symbol", "mapping_basis", "security_type",
+                "display_name", "listing_status", "trading_state", "membership_state",
+                "source_effective_date", "source_effective_at", "source_published_at",
+                "fetched_at", "received_at", "first_observed_at", "available_at", "ingested_at",
+                "status", "reason", "freshness_mode", "freshness_status", "current_complete",
+                "coverage_complete", "effective_from", "effective_to", "supersedes_revision_id",
+                "source_reference", "publication_evidence_id", "raw_resource_revision_id",
+                "raw_payload_sha256", "normalized_payload_sha256", "query_dimensions",
+                "source_contract_key", "schema_fingerprint", "parser_version", "source_record_reference",
+            }
+            observed_fields = sorted(str(key) for key in payload if key not in metadata_fields)
+        else:
+            observed_fields = sorted(set(observed_fields))
+        required_groups = query_dimensions.get("required_field_groups")
+        if not isinstance(required_groups, dict):
+            required_groups = {}
+        envelope = str(query_dimensions.get("source_envelope") or "row")
+        schema_identity = {
+            "logical_resource_key": contract_key,
+            "schema_version": resource["schema_version"],
+            "envelope": envelope,
+            "required_field_groups": required_groups,
+            "observed_row_fields": observed_fields,
+        }
         derived_schema = hashlib.sha256(_json(schema_identity).encode()).hexdigest()
         supplied_schema = payload.get("schema_fingerprint")
         if supplied_schema and str(supplied_schema).lower() != derived_schema:
-            # Legacy fixtures may not carry a schema fingerprint; caller-supplied
-            # arbitrary evidence is never accepted as the source of truth.
             raise ValueError("schema_evidence_mismatch")
-        raw_id = payload.get("raw_resource_revision_id")
+        raw_id = str(payload.get("raw_resource_revision_id") or "").strip()
         raw_hash = payload.get("raw_payload_sha256")
-        if raw_hash is not None:
-            raw_hash = str(raw_hash).strip().lower()
-            if len(raw_hash) != 64 or any(ch not in "0123456789abcdef" for ch in raw_hash):
-                raise ValueError("raw_payload_sha256 must be a SHA-256 digest")
-        if raw_id:
-            raw = conn.execute("SELECT * FROM raw_resource_revisions WHERE raw_resource_revision_id=?", (str(raw_id),)).fetchone()
-            if raw is None or raw["resource_id"] != resource_id:
-                raise ValueError("raw_resource_revision_mismatch")
-            if raw_hash and raw["raw_payload_sha256"].lower() != raw_hash:
-                raise ValueError("raw_payload_sha256_mismatch")
-            raw_hash = raw["raw_payload_sha256"].lower()
+        if not raw_id or raw_hash is None or not str(raw_hash).strip():
+            raise UniverseRawProvenanceRequired()
+        raw_hash = str(raw_hash).strip().lower()
+        if len(raw_hash) != 64 or any(ch not in "0123456789abcdef" for ch in raw_hash):
+            raise ValueError("raw_payload_sha256 must be a SHA-256 digest")
+        raw = conn.execute("SELECT * FROM raw_resource_revisions WHERE raw_resource_revision_id=?", (raw_id,)).fetchone()
+        if raw is None:
+            raise UniverseRawProvenanceRequired()
+        if raw["resource_id"] != resource_id:
+            raise ValueError("raw_resource_revision_mismatch")
+        if raw["raw_payload_sha256"].lower() != raw_hash:
+            raise ValueError("raw_payload_sha256_mismatch")
         source_record_reference = str(payload.get("source_record_reference") or f"{resource_id}:{logical_revision_key}").strip()
         if not source_record_reference:
             raise ValueError("source_record_reference is required")
         parser_evidence = hashlib.sha256(_json({"parser_id": resource["parser_id"], "parser_version": parser_version}).encode()).hexdigest()
         return {
-            "raw_resource_revision_id": str(raw_id) if raw_id else None,
+            "raw_resource_revision_id": raw_id,
             "raw_payload_sha256": raw_hash,
             "normalized_payload_sha256": normalized_hash,
             "query_dimensions_json": _json(query_dimensions),

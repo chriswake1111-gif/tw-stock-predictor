@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 
 import pytest
@@ -7,11 +8,13 @@ import pytest
 from src.repositories.migration_runner import apply_valuation_migration
 from src.repositories.universe_repository import UniverseIdempotencyConflict, UniverseRepository
 from src.services.universe_write_guard import UniverseIngestionWritesDisabled, UniverseOperatorContext, UniverseWriteGuard
+from tests.phase13_test_support import seed_raw_provenance
 
 
 def _repo(tmp_path, enabled=True):
     db = tmp_path / "universe.sqlite"
     apply_valuation_migration(str(db))
+    seed_raw_provenance(db)
     return db, UniverseRepository(str(db), guard=UniverseWriteGuard(enabled))
 
 
@@ -31,7 +34,9 @@ def _payload(**overrides):
              "fetched_at": "2026-08-21T00:01:00Z", "received_at": "2026-08-21T00:01:00Z",
              "ingested_at": "2026-08-21T00:02:00Z", "available_at": "2026-08-21T00:01:00Z",
              "source_reference": "fixture", "status": "accepted", "freshness_status": "current", "freshness_mode": "official_cadence_window",
-             "current_complete": True, "coverage_complete": True}
+             "current_complete": True, "coverage_complete": True,
+             "raw_resource_revision_id": "raw-phase13-twse_universe_master",
+             "raw_payload_sha256": hashlib.sha256(b"phase13:twse-universe-master").hexdigest()}
     value.update(overrides)
     return value
 

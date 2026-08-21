@@ -13,13 +13,28 @@ Provider errors, partial observations and schema changes may therefore preserve 
 
 ## Identity and mapping
 
+Operational observations without a source publication instant are visible only
+from their server-side ingested_at observation boundary. They remain blocked
+operational health and never become a historical identity reference.
+
 `universe_instruments` is an immutable anchor keyed by venue, source code and identity epoch. Same-code reuse requires explicit termination and no proven continuity; a successor gets a new anchor and append-only alias. `universe_symbol_mapping_v1` creates `.TW` or `.TWO` only for an approved resource scope and verified identity. `security_type=unknown` remains unknown.
 
 ## Source boundary
 
+The legacy synthetic TPEx spendi key is read-compatible only for persisted
+history and is rejected for new collector/parser ingestion. Approved resources
+use fixed official envelopes and required field groups; missing or renamed
+required fields and envelope drift become schema_changed. The schema evidence
+fingerprint includes the observed envelope and row-field set.
+
 Only TWSE `t187ap03_L`, `company/newlisting`, and termination candidates plus approved TPEx master, delisted, operational and corroborating sources are registrable. TPEx `spendi history`, `spendi today` and `cmode` are distinct source contracts in the collector and logical revision keys; legacy rows remain only for already imported history. `tpex_mainboard_quotes` is an explicit excluded price classification and has no Phase 13 resource, collector, hash, fixture, API or frontend path.
 
 ## Writes and recovery
+
+Every operator revision must bind to an existing Phase 10 raw-resource
+revision for the same resource and match its stored SHA-256. A caller-supplied
+hash without that durable raw provenance row is rejected before any Universe
+mutation.
 
 Runtime ingestion is disabled unless `UNIVERSE_INGESTION_WRITES_ENABLED=true` and a complete operator context (non-blank actor, run, lock and audit references) is supplied. Revision ingestion additionally requires a non-blank idempotency key and Phase 10 raw-resource provenance before its first mutation. A resource-level revision can record accepted, partial, provider-error, schema-changed, awaiting-review or revoked source health even when no normalized instrument row exists; list/search composes that health per venue without silently dropping a blocked source. All revisions, events, anchors and idempotency bindings are append-only. A key is permanently bound to its payload fingerprint; corrected content creates a superseding revision. Historical lookups require an explicit non-null availability instant; manual-publication resources also require the exact accepted publication evidence to be visible at the cutoff and at or before that approved availability point.
 
