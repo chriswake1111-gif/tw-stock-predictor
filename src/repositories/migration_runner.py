@@ -26,6 +26,7 @@ MIGRATION_IDS = (
     "20260811_13_phase10_first_review_remediation",
     "20260813_14_evidence_model_v2_research_review_queue",
     "20260813_15_phase12_first_review_remediation",
+    "20260821_16_phase13_universe_foundation",
 )
 MIGRATION_ID = MIGRATION_IDS[-1]
 MIGRATION_FILES = tuple(
@@ -107,6 +108,13 @@ def apply_valuation_migration(db_path: str) -> dict[str, Any]:
                 "cbc_m1b_monthly",
                 "research_watchlist_items",
                 "research_review_events",
+                "universe_instruments",
+                "universe_revisions",
+                "universe_instrument_revisions",
+                "universe_identity_alias_events",
+                "universe_lifecycle_events",
+                "universe_operational_state_events",
+                "universe_ingestion_idempotency",
             )
             existing_tables = {
                 row[0] for row in conn.execute(

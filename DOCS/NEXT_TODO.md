@@ -136,8 +136,18 @@
 - [x] Actual-latest no-fallback selection, one shared cutoff/read transaction, and Phase 11 query-time comparison integrated.
 - [x] Local/loopback exact-Origin/Host boundary, writes-disabled default, 1,800-second CSRF, strict DTO/body limits, and browser no-admin-secret guard implemented.
 - [x] Backup/restore validation and `/research` desktop/mobile workspace added.
-- [ ] Phase 12 remains in Draft PR review state and is not merged to `main`.
-- [ ] Phase 13 has not started and requires separate explicit authorization after Phase 12 closure.
+- [x] Phase 12 research review queue is merged to `main`; its read-only workflow and governance remain regression boundaries.
+- [x] Phase 13 Universe Foundation is implemented on its dedicated Draft PR branch; merge and Phase 14 remain blocked pending independent first code review.
+
+## Evidence Model v2 Phase 13 — Universe Foundation
+
+- Universe identity is an immutable venue/code/identity-epoch context.  Same-code reuse requires explicit termination and no continuity evidence before allocating a new epoch; aliases are append-only and never inferred from name similarity.
+- `universe_symbol_mapping_v1` is a project canonical convention (`.TW` / `.TWO`) and never changes v1 `normalize_symbol`. Unknown security type is retained as `unknown`, not coerced to ordinary share.
+- The exact status policy is `universe_status_matrix_v1`: no safe reference is `insufficient_data`; actionable governance reasons are `needs_human_input`; non-actionable stale/unknown/provider failures are `partial`; only proven current complete data is `available`.
+- Universe reads are historical/as-of and current-operational channels.  A latest blocking revision never falls back to an older revision as current.  Public DTOs contain no prices, quotes, turnover, ranking, recommendation, Rule Trace, raw payload, secrets, locks, idempotency key, or fingerprint.
+- Phase 13 resources are limited to approved TWSE `t187ap03_L`/newlisting/termination and TPEx master/delisted/operational/corroborating roles. `tpex_mainboard_quotes` is documentation-only and excluded from registry, collectors, raw revisions, hashes, fixtures, API and frontend.
+- Runtime ingestion writes use `UNIVERSE_INGESTION_WRITES_ENABLED=false` by default and a centralized actor/run/lock/audit guard. Migration seed is the only normal registry seed; read constructors and GET routes are side-effect-free.
+- `universe_ingestion_idempotency` permanently binds every key to a payload fingerprint and revision.  Backup/restore includes Universe anchors, policies, revisions, events and idempotency bindings.
 
 ## Evidence Model V2 Phase 3 status (2026-08-01)
 
