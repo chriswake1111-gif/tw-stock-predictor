@@ -34,6 +34,18 @@ MIGRATION_FILES = tuple(
     for migration_id in MIGRATION_IDS
 )
 
+# Additive remediation migrations are tracked separately so historical callers
+# that treat Phase 13's original migration as the public baseline remain
+# compatible. They still have a durable version/checksum marker and execute in
+# the same transaction after the ordered baseline migrations.
+ADDITIONAL_MIGRATION_IDS = (
+    "20260821_17_phase13_second_review_remediation",
+)
+ADDITIONAL_MIGRATION_FILES = tuple(
+    Path(__file__).resolve().parents[2] / "migrations" / f"{migration_id}.sql"
+    for migration_id in ADDITIONAL_MIGRATION_IDS
+)
+
 
 # Phase 13 registry rows are part of the migration contract.  SQLite's
 # ``ON CONFLICT DO NOTHING`` is safe only after these semantic checks: an
@@ -257,6 +269,43 @@ def apply_valuation_migration(db_path: str) -> dict[str, Any]:
                     (migration_id, checksum, utc_now_timestamp()),
                 )
                 applied_ids.append(migration_id)
+            # The Phase 13 remediation is additive to the Phase 13 schema.
+            # Older compatibility tests and callers may intentionally stop at
+            # an earlier migration; do not attempt ALTER TABLE against a
+            # database that has not created its target tables yet. A later
+            # full invocation will apply the marker after Phase 13 itself.
+            phase13_tables_exist = all(
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                    (table_name,),
+                ).fetchone()
+                for table_name in ("universe_revisions", "universe_instrument_revisions")
+            )
+            if phase13_tables_exist:
+                conn.execute(
+                    """CREATE TABLE IF NOT EXISTS additive_schema_migrations (
+                        version_id TEXT PRIMARY KEY,
+                        checksum_sha256 TEXT NOT NULL,
+                        applied_at TEXT NOT NULL
+                    )"""
+                )
+                for migration_id, migration_file in zip(ADDITIONAL_MIGRATION_IDS, ADDITIONAL_MIGRATION_FILES):
+                    sql = migration_file.read_text(encoding="utf-8")
+                    checksum = hashlib.sha256(sql.encode("utf-8")).hexdigest()
+                    existing = conn.execute(
+                        "SELECT checksum_sha256 FROM additive_schema_migrations WHERE version_id = ?",
+                        (migration_id,),
+                    ).fetchone()
+                    if existing:
+                        if existing[0] != checksum:
+                            raise RuntimeError(f"migration checksum mismatch for {migration_id}")
+                        continue
+                    for statement in _statements(sql):
+                        conn.execute(statement)
+                    conn.execute(
+                        "INSERT INTO additive_schema_migrations(version_id, checksum_sha256, applied_at) VALUES (?, ?, ?)",
+                        (migration_id, checksum, utc_now_timestamp()),
+                    )
             checked_tables = (
                 "raw_resource_revisions",
                 "data_quality_issues",
@@ -292,11 +341,18 @@ def apply_valuation_migration(db_path: str) -> dict[str, Any]:
                 )
             conn.commit()
             conn.execute("PRAGMA foreign_keys = ON")
+            additive_rows = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT version_id FROM additive_schema_migrations ORDER BY version_id"
+                ).fetchall()
+            ] if phase13_tables_exist else []
             return {
                 "migration_id": MIGRATION_ID,
                 "checksum_sha256": migrations[-1][2],
                 "applied": bool(applied_ids),
                 "applied_migration_ids": applied_ids,
+                "additive_migration_ids": additive_rows,
             }
         except Exception:
             conn.rollback()

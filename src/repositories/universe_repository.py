@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -21,6 +22,7 @@ from src.domain.universe import (
     coerce_venue,
     identity_binding_fingerprint,
     normalize_universe_timestamp,
+    payload_fingerprint,
     parse_source_temporal,
     parse_canonical_symbol,
     validate_knowledge_cutoff_at,
@@ -33,6 +35,7 @@ from src.services.universe_write_guard import (
     UniverseOperatorContextRequired,
     UniverseWriteGuard,
 )
+from src.services.universe_audit import write_universe_audit
 
 
 class UniverseStorageUnavailable(RuntimeError):
@@ -45,6 +48,13 @@ class UniverseIdempotencyConflict(ValueError):
 
 class UniverseIdempotencyRequired(ValueError):
     code = "idempotency_key_required"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
+
+
+class UniverseRawProvenanceRequired(ValueError):
+    code = "raw_resource_provenance_required"
 
     def __init__(self) -> None:
         super().__init__(self.code)
@@ -190,91 +200,206 @@ class UniverseRepository:
                 "instrument_revision_id": revision.get("instrument_revision_id"),
                 "source_reference": revision.get("source_reference"),
                 "parser_version": revision.get("parser_version"),
+                "historical_reference": True,
+                "operational_resource_id": revision.get("operational_resource_id"),
+                "operational_revision_id": revision.get("operational_revision_id"),
+                "operational_ingested_at": revision.get("operational_ingested_at"),
             },
             "reasons": [revision["reason"]] if revision.get("reason") else [],
         }
 
-    def _find_revision(self, conn: sqlite3.Connection, *, instrument_id: str,
-                       cutoff: str, current: bool = False) -> dict[str, Any] | None:
-        cutoff = validate_knowledge_cutoff_at(cutoff)
-        if current:
-            # Select the actual latest row first.  A blocking latest row must not fall back.
-            row = conn.execute(
-                """
-                SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
-                       i.first_observed_at AS anchor_first_observed_at
-                FROM universe_instrument_revisions r
-                JOIN universe_instruments i ON i.instrument_id = r.instrument_id
-                WHERE r.instrument_id = ?
-                ORDER BY r.ingested_at DESC, COALESCE(r.available_at,'' ) DESC, r.revision_number DESC
-                LIMIT 1
-                """, (instrument_id,)
+    @staticmethod
+    def _select_latest(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+        if not rows:
+            return None
+        return max(rows, key=lambda row: (
+            str(row.get("ingested_at") or ""),
+            str(row.get("available_at") or ""),
+            int(row.get("revision_number") or 0),
+            str(row.get("universe_revision_id") or ""),
+        ))
+
+    def _select_historical_reference(self, conn: sqlite3.Connection, *, instrument_id: str,
+                                     cutoff: str) -> dict[str, Any] | None:
+        """Select the safe identity/reference channel only.
+
+        Accepted rows remain the reference across a later provider/partial/schema
+        observation. A visible revoke that targets that row removes it from the
+        eligible set; the public composition may still expose it as a historical
+        prior reference while the operational channel reports the revoke.
+        """
+        rows = [dict(row) for row in conn.execute(
+            f"""
+            SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
+                   i.first_observed_at AS anchor_first_observed_at
+            FROM universe_instrument_revisions r
+            JOIN universe_instruments i ON i.instrument_id = r.instrument_id
+            WHERE r.instrument_id = ? AND r.status = 'accepted' AND {self._cutoff_where('r')}
+            ORDER BY COALESCE(r.available_at,'' ) DESC, r.ingested_at DESC, r.revision_number DESC
+            """, (instrument_id, cutoff, cutoff, cutoff, cutoff)
+        ).fetchall()]
+        for row in rows:
+            parent = conn.execute(
+                "SELECT logical_revision_key FROM universe_revisions WHERE universe_revision_id=?",
+                (row.get("universe_revision_id"),),
             ).fetchone()
-        else:
-            row = conn.execute(
+            row["logical_revision_key"] = parent[0] if parent else None
+        if not rows:
+            # Preserve the v1-compatible descriptive partial row when no
+            # accepted identity exists. It is never considered complete and
+            # remains visibly partial; provider/schema/revocation-only rows do
+            # not receive this fallback.
+            partial = conn.execute(
                 f"""
                 SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
                        i.first_observed_at AS anchor_first_observed_at
-                FROM universe_instrument_revisions r
-                JOIN universe_instruments i ON i.instrument_id = r.instrument_id
-                WHERE r.instrument_id = ? AND {self._cutoff_where('r')}
-                ORDER BY COALESCE(r.available_at,'' ) DESC, r.ingested_at DESC, r.revision_number DESC
-                LIMIT 1
+                FROM universe_instrument_revisions r JOIN universe_instruments i ON i.instrument_id=r.instrument_id
+                WHERE r.instrument_id=? AND r.status='partial' AND r.canonical_symbol IS NOT NULL AND {self._cutoff_where('r')}
+                ORDER BY r.ingested_at DESC, COALESCE(r.available_at,'' ) DESC, r.revision_number DESC LIMIT 1
                 """, (instrument_id, cutoff, cutoff, cutoff, cutoff)
             ).fetchone()
-        return self._row(row)
+            value = self._row(partial)
+            if value:
+                parent = conn.execute("SELECT logical_revision_key FROM universe_revisions WHERE universe_revision_id=?", (value.get("universe_revision_id"),)).fetchone()
+                value["logical_revision_key"] = parent[0] if parent else None
+            return value
+        visible_revokes = [dict(row) for row in conn.execute(
+            f"""
+            SELECT r.universe_revision_id, r.supersedes_revision_id, r.ingested_at
+            FROM universe_instrument_revisions r
+            WHERE r.instrument_id = ? AND r.status = 'revoked' AND {self._cutoff_where('r')}
+            """, (instrument_id, cutoff, cutoff, cutoff, cutoff)
+        ).fetchall()]
+        revoked_ids = {
+            row.get("supersedes_revision_id") for row in visible_revokes
+            if row.get("supersedes_revision_id")
+        }
+        for row in rows:
+            if row.get("universe_revision_id") not in revoked_ids:
+                return row
+        # Keep a prior immutable identity available for a human-visible revoke;
+        # _compose_result marks it needs_human_input and never current_complete.
+        return rows[0]
 
-    def _decorate(self, revision: dict[str, Any] | None, *, cutoff: str, current: bool) -> dict[str, Any]:
+    def _select_operational_state(self, conn: sqlite3.Connection, *, instrument_id: str,
+                                  cutoff: str, reference: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        """Select the actual latest operational/resource state at the same cutoff."""
+        rows = [dict(row) for row in conn.execute(
+            f"""
+            SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
+                   i.first_observed_at AS anchor_first_observed_at
+            FROM universe_instrument_revisions r
+            JOIN universe_instruments i ON i.instrument_id = r.instrument_id
+            WHERE r.instrument_id = ? AND {self._cutoff_where('r')}
+            ORDER BY r.ingested_at DESC, COALESCE(r.available_at,'' ) DESC, r.revision_number DESC
+            """, (instrument_id, cutoff, cutoff, cutoff, cutoff)
+        ).fetchall()]
+        if reference and reference.get("resource_id"):
+            resource_rows = [dict(row) for row in conn.execute(
+                f"""
+                SELECT ur.*, p.availability_mode AS policy_availability_mode,
+                       p.freshness_mode AS policy_freshness_mode,
+                       p.resource_role, r.market
+                FROM universe_revisions ur
+                JOIN universe_resource_policies p ON p.resource_id = ur.resource_id
+                JOIN data_resources r ON r.resource_id = ur.resource_id
+                WHERE ur.resource_id = ? AND ur.logical_revision_key = ?
+                  AND {self._cutoff_where('ur')}
+                ORDER BY ur.ingested_at DESC, COALESCE(ur.available_at,'' ) DESC, ur.revision_number DESC
+                """, (reference["resource_id"], reference.get("logical_revision_key") or "", cutoff, cutoff, cutoff, cutoff)
+            ).fetchall()]
+            for row in resource_rows:
+                row["instrument_id"] = instrument_id
+                row["venue"] = row.get("market") or reference.get("venue")
+                row["official_code"] = reference.get("official_code")
+                row["canonical_symbol"] = reference.get("canonical_symbol")
+                row["identity_epoch"] = reference.get("identity_epoch")
+                row["identity_binding_fingerprint"] = reference.get("identity_binding_fingerprint")
+                row["availability_mode"] = row.get("policy_availability_mode")
+                row["freshness_mode"] = row.get("policy_freshness_mode")
+                row["freshness_status"] = row.get("freshness_status") or (
+                    FreshnessStatus.CURRENT.value if row.get("status") == "accepted" and row.get("current_complete") else FreshnessStatus.BLOCKED.value
+                )
+                rows.append(row)
+        return self._select_latest(rows)
+
+    def _compose_result(self, reference: dict[str, Any] | None, operational: dict[str, Any] | None,
+                        *, cutoff: str, missing_reason: str = "instrument_not_found") -> dict[str, Any]:
         from src.services.universe_status_service import evaluate_universe_status
-        if revision is None:
-            result = evaluate_universe_status(None, reasons=("instrument_not_found",))
-            return {
-                "status": result["status"],
-                "status_policy_version": result["status_policy_version"],
+        if reference is None:
+            reasons = [missing_reason]
+            if operational and operational.get("status") == "revoked":
+                reasons.append("source_revision_revoked_without_corrected_revision")
+            result = evaluate_universe_status(None, reasons=tuple(reasons))
+            dto = {
+                "status": result["status"], "status_policy_version": result["status_policy_version"],
                 "knowledge_cutoff_at": cutoff,
                 "cutoff_policy": {"type": "aware_timestamp", "no_end_of_day_expansion": True},
                 "identity_reference": None,
-                "operational_freshness": {"freshness": "unknown", "current_complete": False, "reasons": ["instrument_not_found"]},
-                "reasons": ["instrument_not_found"],
+                "operational_freshness": {
+                    "freshness": (operational or {}).get("freshness_status", FreshnessStatus.UNKNOWN.value),
+                    "current_complete": False,
+                    "latest_visible_state": (operational or {}).get("status"),
+                    "freshness_mode": (operational or {}).get("freshness_mode") or (operational or {}).get("policy_freshness_mode"),
+                    "reasons": reasons,
+                },
+                "reasons": reasons,
             }
+            return dto
+        op = operational or reference
         reasons: list[str] = []
-        status = str(revision.get("status"))
-        if status == "awaiting_review":
-            reasons.append("source_revision_awaiting_review")
-        elif status == "schema_changed":
-            reasons.append("source_schema_review_required")
-        elif status == "provider_error":
-            reasons.append("source_provider_error")
-        elif status == "partial":
-            reasons.append("source_revision_partial")
-        elif status == "revoked":
-            reasons.append("source_revision_revoked_without_corrected_revision")
-        if revision.get("available_at") is None:
+        status = str(op.get("status") or "unknown")
+        reason_map = {
+            "awaiting_review": "source_revision_awaiting_review",
+            "schema_changed": "source_schema_review_required",
+            "provider_error": "source_provider_error",
+            "partial": "source_revision_partial",
+            "revoked": "source_revision_revoked_without_corrected_revision",
+        }
+        if status in reason_map:
+            reasons.append(reason_map[status])
+        if op.get("available_at") is None:
             reasons.append("availability_unproven")
-        if revision.get("reason"):
-            reasons.append(str(revision["reason"]))
-        if revision.get("canonical_symbol") is None:
+        if op.get("reason"):
+            reasons.append(str(op["reason"]))
+        if reference.get("canonical_symbol") is None:
             reasons.append("canonical_mapping_unverified")
-        freshness = revision.get("freshness_status") or "unknown"
-        if freshness == "stale":
+        freshness = op.get("freshness_status") or FreshnessStatus.UNKNOWN.value
+        if status != "accepted" and freshness == FreshnessStatus.CURRENT.value:
+            freshness = FreshnessStatus.BLOCKED.value
+        if freshness == FreshnessStatus.STALE.value:
             reasons.append("freshness_stale")
-        elif freshness == "unknown":
+        elif freshness == FreshnessStatus.UNKNOWN.value:
             reasons.append("freshness_unknown")
-        if current and not revision.get("current_complete"):
-            reasons.append("current_freshness_blocked")
-        from src.services.universe_status_service import evaluate_universe_status
-        result = evaluate_universe_status(self._reference(revision), freshness=freshness,
-                                          current_complete=bool(revision.get("current_complete")), reasons=tuple(reasons))
-        revision["public_status"] = result["status"]
-        revision["reason"] = reasons[0] if reasons else revision.get("reason")
-        return {**self._safe_dto(revision, cutoff=cutoff), "reasons": list(dict.fromkeys(reasons))}
+        current_complete = bool(op.get("current_complete")) and status == "accepted" and freshness == FreshnessStatus.CURRENT.value
+        result = evaluate_universe_status(self._reference(reference), freshness=freshness,
+                                          current_complete=current_complete, reasons=tuple(reasons))
+        dto = self._safe_dto({**reference, **{
+            "public_status": result["status"], "status": status,
+            "freshness_status": freshness, "current_complete": current_complete,
+            "reason": op.get("reason") or reference.get("reason"),
+            "operational_revision_id": op.get("universe_revision_id"),
+            "operational_resource_id": op.get("resource_id"),
+            "operational_ingested_at": op.get("ingested_at"),
+        }}, cutoff=cutoff)
+        return {**dto, "reasons": list(dict.fromkeys(reasons))}
+
+    def _find_revision(self, conn: sqlite3.Connection, *, instrument_id: str,
+                       cutoff: str, current: bool = False) -> dict[str, Any] | None:
+        # Kept as a compatibility helper; both historical and current calls are
+        # cutoff-bound now. The public methods use the explicit dual channels.
+        return self._select_operational_state(conn, instrument_id=instrument_id, cutoff=validate_knowledge_cutoff_at(cutoff))
+
+    def _decorate(self, revision: dict[str, Any] | None, *, cutoff: str, current: bool) -> dict[str, Any]:
+        return self._compose_result(revision, revision, cutoff=cutoff)
 
     def get_by_instrument_id(self, instrument_id: str, *, knowledge_cutoff_at: str,
                              current: bool = False) -> dict[str, Any]:
         cutoff = validate_knowledge_cutoff_at(knowledge_cutoff_at)
         with self.read_transaction() as conn:
-            row = self._find_revision(conn, instrument_id=instrument_id, cutoff=cutoff, current=current)
-            return self._decorate(row, cutoff=cutoff, current=current)
+            reference = self._select_historical_reference(conn, instrument_id=instrument_id, cutoff=cutoff)
+            operational = self._select_operational_state(conn, instrument_id=instrument_id, cutoff=cutoff, reference=reference)
+            return self._compose_result(reference, operational, cutoff=cutoff)
 
     def get_instrument(self, instrument_id: str, *, knowledge_cutoff_at: str, current: bool = False) -> dict[str, Any]:
         return self.get_by_instrument_id(instrument_id, knowledge_cutoff_at=knowledge_cutoff_at, current=current)
@@ -284,20 +409,22 @@ class UniverseRepository:
         venue, code = parse_canonical_symbol(canonical_symbol)
         cutoff = validate_knowledge_cutoff_at(knowledge_cutoff_at)
         with self.read_transaction() as conn:
-            query = """
+            candidates = [dict(row) for row in conn.execute(
+                f"""
                 SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
                        i.first_observed_at AS anchor_first_observed_at
                 FROM universe_instrument_revisions r
                 JOIN universe_instruments i ON i.instrument_id = r.instrument_id
-                WHERE i.venue = ? AND i.official_code = ?
-            """
-            params: list[Any] = [venue.value, code]
-            if not current:
-                query += f" AND {self._cutoff_where('r')}"
-                params += [cutoff, cutoff, cutoff, cutoff]
-            query += " ORDER BY r.ingested_at DESC, COALESCE(r.available_at,'' ) DESC, r.revision_number DESC LIMIT 1"
-            row = self._row(conn.execute(query, params).fetchone())
-            return self._decorate(row, cutoff=cutoff, current=current)
+                WHERE i.venue = ? AND i.official_code = ? AND {self._cutoff_where('r')}
+                ORDER BY r.ingested_at DESC, COALESCE(r.available_at,'' ) DESC, r.revision_number DESC
+                """, (venue.value, code, cutoff, cutoff, cutoff, cutoff)
+            ).fetchall()]
+            if not candidates:
+                return self._compose_result(None, None, cutoff=cutoff, missing_reason="instrument_not_found")
+            instrument_id = candidates[0]["instrument_id"]
+            reference = self._select_historical_reference(conn, instrument_id=instrument_id, cutoff=cutoff)
+            operational = self._select_operational_state(conn, instrument_id=instrument_id, cutoff=cutoff, reference=reference)
+            return self._compose_result(reference, operational, cutoff=cutoff)
 
     def get_by_symbol(self, canonical_symbol: str, *, knowledge_cutoff_at: str, current: bool = False) -> dict[str, Any]:
         return self.get_by_canonical(canonical_symbol, knowledge_cutoff_at=knowledge_cutoff_at, current=current)
@@ -325,10 +452,8 @@ class UniverseRepository:
         venue_value = coerce_venue(venue).value if venue else None
         listing_value = ListingStatus(str(listing_status).lower()).value if listing_status else None
         with self.read_transaction() as conn:
-            # Window selection keeps one latest visible revision per identity.
-            visibility = "" if current else f"AND {self._cutoff_where('r')}"
-            params: list[Any] = []
-            clauses = ["1=1"]
+            clauses = [f"{self._cutoff_where('r')}", "r.status = 'accepted'"]
+            params: list[Any] = [cutoff, cutoff, cutoff, cutoff]
             if venue_value:
                 clauses.append("i.venue = ?"); params.append(venue_value)
             if security_type:
@@ -338,58 +463,54 @@ class UniverseRepository:
             if query:
                 clauses.append("(r.official_code LIKE ? OR COALESCE(r.canonical_symbol,'') LIKE ? OR COALESCE(r.display_name,'') LIKE ?)")
                 term = f"%{query.strip().upper()}%"; params += [term, term, term]
-            # cursor is an opaque, cutoff/filter-bound JSON token.
+            base_rows = [dict(row) for row in conn.execute(
+                f"""
+                SELECT r.*, i.venue AS anchor_venue, i.official_code AS anchor_code,
+                       i.identity_epoch, i.identity_binding_fingerprint,
+                       ROW_NUMBER() OVER (PARTITION BY r.instrument_id ORDER BY COALESCE(r.available_at,'') DESC, r.ingested_at DESC, r.revision_number DESC) AS rn
+                FROM universe_instrument_revisions r
+                JOIN universe_instruments i ON i.instrument_id = r.instrument_id
+                WHERE {' AND '.join(clauses)}
+                """, params
+            ).fetchall()]
+            rows = [row for row in base_rows if int(row.get("rn") or 0) == 1]
+            rows.sort(key=lambda row: (row.get("anchor_venue") or "", row.get("canonical_symbol") or "", row.get("instrument_id") or ""))
             if cursor:
                 try:
                     token = json.loads(cursor)
-                    if not isinstance(token, dict):
+                    if not isinstance(token, dict) or token.get("cutoff") != cutoff or token.get("venue") != venue_value or token.get("query") != (query or "") or token.get("security_type") != (security_type or "") or token.get("listing_status") != (listing_value or "") or token.get("order") != "venue ASC, canonical_symbol ASC, instrument_id ASC":
                         raise ValueError("cursor_query_mismatch")
-                    if (
-                        token.get("cutoff") != cutoff
-                        or token.get("venue") != venue_value
-                        or token.get("query") != (query or "")
-                        or token.get("security_type") != (security_type or "")
-                        or token.get("listing_status") != (listing_value or "")
-                        or token.get("order") != "venue ASC, canonical_symbol ASC, instrument_id ASC"
-                    ):
-                        raise ValueError("cursor_query_mismatch")
-                    clauses.append("(i.venue, COALESCE(r.canonical_symbol,''), i.instrument_id) > (?, ?, ?)")
-                    params += [token["venue_key"], token["canonical_key"], token["instrument_id"]]
-                except (json.JSONDecodeError, KeyError, TypeError):
+                    rows = [row for row in rows if (row.get("anchor_venue") or "", row.get("canonical_symbol") or "", row.get("instrument_id") or "") > (token.get("venue_key"), token.get("canonical_key"), token.get("instrument_id"))]
+                except (json.JSONDecodeError, TypeError, KeyError):
                     raise ValueError("cursor_query_mismatch")
-            if not current:
-                params += [cutoff, cutoff, cutoff, cutoff]
-            sql = f"""
-                WITH ranked AS (
-                    SELECT r.*, i.venue AS anchor_venue, i.official_code AS anchor_code,
-                           i.identity_epoch, i.identity_binding_fingerprint,
-                           ROW_NUMBER() OVER (PARTITION BY r.instrument_id ORDER BY r.ingested_at DESC, COALESCE(r.available_at,'') DESC, r.revision_number DESC) AS rn
-                    FROM universe_instrument_revisions r JOIN universe_instruments i ON i.instrument_id=r.instrument_id
-                    WHERE {' AND '.join(clauses)} {visibility}
-                )
-                SELECT * FROM ranked WHERE rn=1
-                ORDER BY anchor_venue ASC, COALESCE(canonical_symbol,'') ASC, instrument_id ASC LIMIT ?
-            """
-            params.append(int(limit) + 1)
-            rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
-        items = []
-        for row in rows[:limit]:
-            row["venue"] = row.pop("anchor_venue", row.get("venue"))
-            row["official_code"] = row.pop("anchor_code", row.get("official_code"))
-            items.append(self._decorate(row, cutoff=cutoff, current=current))
+            selected = rows[: int(limit) + 1]
+            items = []
+            for row in selected[:limit]:
+                instrument_id = row["instrument_id"]
+                reference = self._select_historical_reference(conn, instrument_id=instrument_id, cutoff=cutoff)
+                operational = self._select_operational_state(conn, instrument_id=instrument_id, cutoff=cutoff, reference=reference)
+                items.append(self._compose_result(reference, operational, cutoff=cutoff))
+            resource_status = {v: self._latest_resource_status(conn, venue=v, cutoff=cutoff) for v in ([venue_value] if venue_value else ["TWSE", "TPEX"])}
         next_cursor = None
-        if len(rows) > limit and items:
+        if len(selected) > limit and items:
             last = rows[limit - 1]
             next_cursor = json.dumps({"cutoff": cutoff, "venue": venue_value, "query": query or "",
                                       "security_type": security_type or "", "listing_status": listing_value or "",
                                       "order": "venue ASC, canonical_symbol ASC, instrument_id ASC",
-                                      "venue_key": last["anchor_venue"], "canonical_key": last.get("canonical_symbol") or "",
-                                      "instrument_id": last["instrument_id"]}, separators=(",", ":"))
+                                      "venue_key": last.get("anchor_venue"), "canonical_key": last.get("canonical_symbol") or "",
+                                      "instrument_id": last.get("instrument_id")}, separators=(",", ":"))
         scoped = [venue_value] if venue_value else ["TWSE", "TPEX"]
-        from src.services.universe_status_service import compose_list_status
-        return {"status": compose_list_status(items, scoped), "status_policy_version": "universe_status_matrix_v1",
+        per_venue = {}
+        for v in scoped:
+            item_status = self._venue_status(items, v)
+            source_status = resource_status.get(v, "insufficient_data")
+            precedence = {"needs_human_input": 3, "partial": 2, "available": 1, "insufficient_data": 0}
+            per_venue[v] = source_status if precedence.get(source_status, 0) >= precedence.get(item_status, 0) else item_status
+        statuses = list(per_venue.values())
+        overall = "needs_human_input" if "needs_human_input" in statuses else ("partial" if "partial" in statuses or (items and any(i["status"] == "partial" for i in items)) else ("available" if statuses and all(s == "available" for s in statuses) else "insufficient_data"))
+        return {"status": overall, "status_policy_version": "universe_status_matrix_v1",
                 "knowledge_cutoff_at": cutoff, "cutoff_policy": {"type": "aware_timestamp", "no_end_of_day_expansion": True},
-                "items": items, "per_venue_status": {v: self._venue_status(items, v) for v in scoped}, "next_cursor": next_cursor,
+                "items": items, "per_venue_status": per_venue, "next_cursor": next_cursor,
                 "order": "venue ASC, canonical_symbol ASC, instrument_id ASC", "limit": int(limit)}
 
     def search(self, **kwargs: Any) -> dict[str, Any]:
@@ -405,9 +526,84 @@ class UniverseRepository:
         if any(item["status"] == "available" for item in rows): return "available"
         return "insufficient_data"
 
+    def _latest_resource_status(self, conn: sqlite3.Connection, *, venue: str, cutoff: str) -> str:
+        rows = [dict(row) for row in conn.execute(
+            f"""
+            SELECT ur.*, p.freshness_mode AS policy_freshness_mode
+            FROM universe_revisions ur
+            JOIN data_resources dr ON dr.resource_id = ur.resource_id
+            JOIN universe_resource_policies p ON p.resource_id = ur.resource_id
+            WHERE dr.market = ? AND {self._cutoff_where('ur')}
+            ORDER BY ur.ingested_at DESC, COALESCE(ur.available_at,'' ) DESC, ur.revision_number DESC
+            """, (venue, cutoff, cutoff, cutoff, cutoff)
+        ).fetchall()]
+        if not rows:
+            return "insufficient_data"
+        latest = rows[0]
+        status = str(latest.get("status"))
+        if status in {"awaiting_review", "schema_changed"}:
+            return "needs_human_input"
+        if status != "accepted" or latest.get("freshness_status") in {None, "unknown", "stale", "blocked"}:
+            return "partial"
+        if not bool(latest.get("current_complete")):
+            return "partial"
+        return "available"
+
     # ----- Guarded mutation paths used by operator/CLI ingestion -----
     def _require_context(self, context: UniverseOperatorContext | None) -> UniverseOperatorContext:
         return self.guard.require_enabled(context)
+
+    @staticmethod
+    def _provenance(conn: sqlite3.Connection, *, resource_id: str, logical_revision_key: str,
+                    payload: dict[str, Any], normalized_hash: str) -> dict[str, Any]:
+        resource = conn.execute(
+            "SELECT provider_id, logical_resource_key, parser_id, parser_version, schema_version, storage_policy FROM data_resources WHERE resource_id=?",
+            (resource_id,),
+        ).fetchone()
+        if resource is None:
+            raise ValueError("universe_resource_not_registered")
+        parser_version = str(payload.get("parser_version") or resource["parser_version"])
+        if parser_version != str(resource["parser_version"]):
+            raise ValueError("parser_evidence_mismatch")
+        query_dimensions = payload.get("query_dimensions") or {}
+        if not isinstance(query_dimensions, dict):
+            raise ValueError("query_dimensions must be an object")
+        contract_key = str(payload.get("source_contract_key") or query_dimensions.get("source_contract_key") or resource["logical_resource_key"])
+        schema_identity = {"logical_resource_key": contract_key, "schema_version": resource["schema_version"]}
+        derived_schema = hashlib.sha256(_json(schema_identity).encode()).hexdigest()
+        supplied_schema = payload.get("schema_fingerprint")
+        if supplied_schema and str(supplied_schema).lower() != derived_schema:
+            # Legacy fixtures may not carry a schema fingerprint; caller-supplied
+            # arbitrary evidence is never accepted as the source of truth.
+            raise ValueError("schema_evidence_mismatch")
+        raw_id = payload.get("raw_resource_revision_id")
+        raw_hash = payload.get("raw_payload_sha256")
+        if raw_hash is not None:
+            raw_hash = str(raw_hash).strip().lower()
+            if len(raw_hash) != 64 or any(ch not in "0123456789abcdef" for ch in raw_hash):
+                raise ValueError("raw_payload_sha256 must be a SHA-256 digest")
+        if raw_id:
+            raw = conn.execute("SELECT * FROM raw_resource_revisions WHERE raw_resource_revision_id=?", (str(raw_id),)).fetchone()
+            if raw is None or raw["resource_id"] != resource_id:
+                raise ValueError("raw_resource_revision_mismatch")
+            if raw_hash and raw["raw_payload_sha256"].lower() != raw_hash:
+                raise ValueError("raw_payload_sha256_mismatch")
+            raw_hash = raw["raw_payload_sha256"].lower()
+        source_record_reference = str(payload.get("source_record_reference") or f"{resource_id}:{logical_revision_key}").strip()
+        if not source_record_reference:
+            raise ValueError("source_record_reference is required")
+        parser_evidence = hashlib.sha256(_json({"parser_id": resource["parser_id"], "parser_version": parser_version}).encode()).hexdigest()
+        return {
+            "raw_resource_revision_id": str(raw_id) if raw_id else None,
+            "raw_payload_sha256": raw_hash,
+            "normalized_payload_sha256": normalized_hash,
+            "query_dimensions_json": _json(query_dimensions),
+            "source_record_reference": source_record_reference,
+            "parser_version": parser_version,
+            "schema_fingerprint": derived_schema,
+            "parser_evidence_fingerprint": parser_evidence,
+            "schema_evidence_fingerprint": hashlib.sha256(_json(schema_identity).encode()).hexdigest(),
+        }
 
     def allocate_instrument(self, *, venue: UniverseVenue | str, official_code: str,
                             source_identity: str, first_observed_at: str, source_reference: str,
@@ -439,7 +635,81 @@ class UniverseRepository:
             binding = identity_binding_fingerprint(venue_value, code, epoch, source_identity)
             instrument_id = f"uinstr_{binding[:24]}"
             conn.execute("INSERT INTO universe_instruments VALUES (?,?,?,?,?,?,?,?,?,?)", (instrument_id, venue_value.value, code, epoch, binding, first_observed, source_reference, source_identity, None, utc_now_timestamp()))
+            write_universe_audit(ctx, command="allocate_instrument", outcome="created", venue=venue_value.value,
+                                 channel="identity", reason="identity_anchor_created")
             return {**dict(conn.execute("SELECT * FROM universe_instruments WHERE instrument_id=?", (instrument_id,)).fetchone()), "created": True, "actor_id": ctx.actor_id}
+
+    def add_resource_revision(self, *, resource_id: str, logical_revision_key: str,
+                              revision_number: int, payload: dict[str, Any],
+                              context: UniverseOperatorContext | None = None,
+                              idempotency_key: str | None = None) -> dict[str, Any]:
+        """Persist a resource/provider observation even when it has zero rows."""
+        ctx = self._require_context(context)
+        if idempotency_key is None or not str(idempotency_key).strip():
+            raise UniverseIdempotencyRequired()
+        key = str(idempotency_key).strip()
+        fetched_at = normalize_universe_timestamp(payload["fetched_at"], "fetched_at")
+        received_at = normalize_universe_timestamp(payload["received_at"], "received_at")
+        ingested_at = normalize_universe_timestamp(payload["ingested_at"], "ingested_at")
+        available_at = normalize_universe_timestamp(payload["available_at"], "available_at") if payload.get("available_at") else None
+        first_observed_at = normalize_universe_timestamp(payload["first_observed_at"], "first_observed_at") if payload.get("first_observed_at") else None
+        source_published_at = payload.get("source_published_at")
+        if source_published_at and "T" in str(source_published_at):
+            source_published_at = normalize_universe_timestamp(str(source_published_at), "source_published_at")
+        if payload.get("source_effective_date"):
+            parse_source_temporal(str(payload["source_effective_date"]), "source_effective_date")
+        normalized_hash = payload_fingerprint(payload)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            policy = conn.execute(
+                """SELECT p.availability_mode, p.enabled, p.resource_role, p.freshness_mode,
+                          r.market, r.logical_resource_key
+                   FROM universe_resource_policies p JOIN data_resources r ON r.resource_id=p.resource_id
+                   WHERE p.resource_id=?""", (resource_id,)
+            ).fetchone()
+            if policy is None or not int(policy["enabled"]):
+                raise ValueError("universe_resource_not_registered")
+            provenance = self._provenance(conn, resource_id=resource_id, logical_revision_key=logical_revision_key,
+                                          payload=payload, normalized_hash=normalized_hash)
+            old = conn.execute("SELECT * FROM universe_ingestion_idempotency WHERE idempotency_key=?", (key,)).fetchone()
+            if old:
+                if old["payload_fingerprint"] != normalized_hash:
+                    raise UniverseIdempotencyConflict("idempotency_key_reused")
+                row = conn.execute("SELECT * FROM universe_revisions WHERE universe_revision_id=?", (old["universe_revision_id"],)).fetchone()
+                return {**dict(row), "created": False, "idempotent": True}
+            existing = conn.execute("SELECT * FROM universe_ingestion_idempotency WHERE resource_id=? AND payload_fingerprint=?", (resource_id, normalized_hash)).fetchone()
+            if existing:
+                conn.execute("INSERT INTO universe_ingestion_idempotency VALUES (?,?,?,?,?,?)", (key, normalized_hash, resource_id, existing["universe_revision_id"], ctx.actor_id, ingested_at))
+                row = conn.execute("SELECT * FROM universe_revisions WHERE universe_revision_id=?", (existing["universe_revision_id"],)).fetchone()
+                return {**dict(row), "created": False, "idempotent": True}
+            previous = conn.execute("SELECT * FROM universe_revisions WHERE resource_id=? AND logical_revision_key=? ORDER BY revision_number DESC LIMIT 1", (resource_id, logical_revision_key)).fetchone()
+            supersedes = payload.get("supersedes_revision_id")
+            if previous and supersedes != previous["universe_revision_id"]:
+                raise ValueError("corrected universe revision must supersede the latest revision")
+            if previous is None and supersedes is not None:
+                raise ValueError("first universe revision cannot supersede another revision")
+            status = str(payload.get("status", "accepted"))
+            reason = payload.get("reason")
+            if policy["availability_mode"] == AvailabilityMode.MANUAL_PUBLICATION_EVIDENCE_REQUIRED.value and not payload.get("publication_evidence_id"):
+                status, reason = "awaiting_review", "manual_publication_evidence_required"
+            current_complete = bool(payload.get("current_complete")) and status == "accepted" and payload.get("freshness_status") == FreshnessStatus.CURRENT.value
+            revision_id = f"urev_{uuid.uuid4().hex}"
+            conn.execute("""INSERT INTO universe_revisions
+                (universe_revision_id,resource_id,logical_revision_key,revision_number,raw_resource_revision_id,source_published_at,source_effective_date,fetched_at,received_at,first_observed_at,available_at,ingested_at,status,reason,payload_sha256,normalized_payload_sha256,raw_payload_sha256,query_dimensions_json,source_record_reference,parser_evidence_fingerprint,schema_evidence_fingerprint,schema_fingerprint,parser_version,source_reference,publication_evidence_id,supersedes_revision_id,availability_mode,freshness_mode,freshness_status,current_complete,coverage_complete)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                revision_id, resource_id, logical_revision_key, int(revision_number), provenance["raw_resource_revision_id"], source_published_at,
+                payload.get("source_effective_date"), fetched_at, received_at, first_observed_at, available_at, ingested_at,
+                status, reason, normalized_hash, provenance["normalized_payload_sha256"], provenance["raw_payload_sha256"], provenance["query_dimensions_json"],
+                provenance["source_record_reference"], provenance["parser_evidence_fingerprint"], provenance["schema_evidence_fingerprint"], provenance["schema_fingerprint"],
+                provenance["parser_version"], payload.get("source_reference"), payload.get("publication_evidence_id"), supersedes,
+                policy["availability_mode"], payload.get("freshness_mode", policy["freshness_mode"]), payload.get("freshness_status", FreshnessStatus.UNKNOWN.value),
+                int(current_complete), int(bool(payload.get("coverage_complete", False)))))
+            conn.execute("INSERT INTO universe_ingestion_idempotency VALUES (?,?,?,?,?,?)", (key, normalized_hash, resource_id, revision_id, ctx.actor_id, ingested_at))
+            row = conn.execute("SELECT * FROM universe_revisions WHERE universe_revision_id=?", (revision_id,)).fetchone()
+            write_universe_audit(ctx, command="add_resource_revision", outcome="created", resource_id=resource_id,
+                                 resource_role=policy["resource_role"], venue=policy["market"],
+                                 channel="operational", reason=str(status))
+            return {**dict(row), "created": True, "idempotent": False}
 
     def add_revision(self, *, instrument_id: str, resource_id: str, logical_revision_key: str,
                      revision_number: int, payload: dict[str, Any], context: UniverseOperatorContext | None = None,
@@ -479,9 +749,7 @@ class UniverseRepository:
             and payload.get("freshness_mode", FreshnessMode.UNKNOWN_WITHOUT_OFFICIAL_CADENCE.value)
             in {FreshnessMode.OFFICIAL_CADENCE_WINDOW.value, FreshnessMode.LICENSED_REFERENCE.value}
         )
-        fingerprint = _json(payload)
-        import hashlib
-        fingerprint = hashlib.sha256(fingerprint.encode()).hexdigest()
+        fingerprint = payload_fingerprint(payload)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             policy = conn.execute(
@@ -493,6 +761,10 @@ class UniverseRepository:
             ).fetchone()
             if policy is None or not int(policy["enabled"]):
                 raise ValueError("universe_resource_not_registered")
+            provenance = self._provenance(
+                conn, resource_id=resource_id, logical_revision_key=logical_revision_key,
+                payload=payload, normalized_hash=fingerprint,
+            )
             payload_venue = coerce_venue(payload["venue"])
             payload_code = validate_official_code(payload["official_code"])
             if str(policy["market"]).upper() != payload_venue.value:
@@ -570,19 +842,22 @@ class UniverseRepository:
             instrument_supersedes = previous_instrument["instrument_revision_id"] if previous_instrument else None
             revision_id = f"urev_{uuid.uuid4().hex}"
             conn.execute("""INSERT INTO universe_revisions
-                    (universe_revision_id,resource_id,logical_revision_key,revision_number,source_published_at,source_effective_date,fetched_at,received_at,first_observed_at,available_at,ingested_at,status,reason,payload_sha256,schema_fingerprint,parser_version,source_reference,publication_evidence_id,supersedes_revision_id)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
-                    revision_id, resource_id, logical_revision_key, int(revision_number), source_published_at, payload.get("source_effective_date"), fetched_at, received_at, first_observed_at, available_at, ingested_at, status, reason, fingerprint, payload.get("schema_fingerprint"), payload.get("parser_version"), payload.get("source_reference"), publication_evidence_id, payload.get("supersedes_revision_id")))
+                    (universe_revision_id,resource_id,logical_revision_key,revision_number,raw_resource_revision_id,source_published_at,source_effective_date,fetched_at,received_at,first_observed_at,available_at,ingested_at,status,reason,payload_sha256,normalized_payload_sha256,raw_payload_sha256,query_dimensions_json,source_record_reference,parser_evidence_fingerprint,schema_evidence_fingerprint,schema_fingerprint,parser_version,source_reference,publication_evidence_id,supersedes_revision_id,availability_mode,freshness_mode,freshness_status,current_complete,coverage_complete)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                    revision_id, resource_id, logical_revision_key, int(revision_number), provenance["raw_resource_revision_id"], source_published_at, payload.get("source_effective_date"), fetched_at, received_at, first_observed_at, available_at, ingested_at, status, reason, fingerprint, provenance["normalized_payload_sha256"], provenance["raw_payload_sha256"], provenance["query_dimensions_json"], provenance["source_record_reference"], provenance["parser_evidence_fingerprint"], provenance["schema_evidence_fingerprint"], provenance["schema_fingerprint"], provenance["parser_version"], payload.get("source_reference"), publication_evidence_id, payload.get("supersedes_revision_id"), policy["availability_mode"], payload.get("freshness_mode", FreshnessMode.UNKNOWN_WITHOUT_OFFICIAL_CADENCE.value), payload.get("freshness_status", FreshnessStatus.UNKNOWN.value), int(current_complete), int(bool(payload.get("coverage_complete", False)))))
             conn.execute("""INSERT INTO universe_instrument_revisions
-                    (instrument_revision_id,instrument_id,universe_revision_id,resource_id,revision_number,venue,official_code,canonical_symbol,mapping_basis,security_type,display_name,listing_status,trading_state,membership_state,source_effective_date,source_effective_at,source_published_at,first_observed_at,received_at,fetched_at,available_at,ingested_at,availability_mode,freshness_mode,freshness_status,current_complete,coverage_complete,status,reason,source_reference,payload_sha256,schema_fingerprint,parser_version,effective_from,effective_to,supersedes_revision_id)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
-                    f"uirev_{uuid.uuid4().hex}", instrument_id, revision_id, resource_id, int(revision_number), payload_venue.value, payload_code, canonical_symbol, mapping_basis, payload.get("security_type","unknown"), payload.get("display_name"), listing_status, trading_state, membership_state, payload.get("source_effective_date"), source_effective_at, source_published_at, first_observed_at, received_at, fetched_at, available_at, ingested_at, policy["availability_mode"], payload.get("freshness_mode", FreshnessMode.UNKNOWN_WITHOUT_OFFICIAL_CADENCE.value), payload.get("freshness_status", FreshnessStatus.UNKNOWN.value), int(current_complete), int(bool(payload.get("coverage_complete", False))), status, reason, payload.get("source_reference"), fingerprint, payload.get("schema_fingerprint"), payload.get("parser_version"), effective_from, effective_to, instrument_supersedes))
+                    (instrument_revision_id,instrument_id,universe_revision_id,resource_id,revision_number,venue,official_code,canonical_symbol,mapping_basis,security_type,display_name,listing_status,trading_state,membership_state,source_effective_date,source_effective_at,source_published_at,first_observed_at,received_at,fetched_at,available_at,ingested_at,availability_mode,freshness_mode,freshness_status,current_complete,coverage_complete,status,reason,source_reference,payload_sha256,normalized_payload_sha256,raw_payload_sha256,raw_resource_revision_id,query_dimensions_json,source_record_reference,parser_evidence_fingerprint,schema_evidence_fingerprint,schema_fingerprint,parser_version,effective_from,effective_to,supersedes_revision_id)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                    f"uirev_{uuid.uuid4().hex}", instrument_id, revision_id, resource_id, int(revision_number), payload_venue.value, payload_code, canonical_symbol, mapping_basis, payload.get("security_type","unknown"), payload.get("display_name"), listing_status, trading_state, membership_state, payload.get("source_effective_date"), source_effective_at, source_published_at, first_observed_at, received_at, fetched_at, available_at, ingested_at, policy["availability_mode"], payload.get("freshness_mode", FreshnessMode.UNKNOWN_WITHOUT_OFFICIAL_CADENCE.value), payload.get("freshness_status", FreshnessStatus.UNKNOWN.value), int(current_complete), int(bool(payload.get("coverage_complete", False))), status, reason, payload.get("source_reference"), fingerprint, provenance["normalized_payload_sha256"], provenance["raw_payload_sha256"], provenance["raw_resource_revision_id"], provenance["query_dimensions_json"], provenance["source_record_reference"], provenance["parser_evidence_fingerprint"], provenance["schema_evidence_fingerprint"], provenance["schema_fingerprint"], provenance["parser_version"], effective_from, effective_to, instrument_supersedes))
             if idempotency_key:
                 try:
                     conn.execute("INSERT INTO universe_ingestion_idempotency VALUES (?,?,?,?,?,?)", (idempotency_key, fingerprint, resource_id, revision_id, actor, ingested_at))
                 except sqlite3.IntegrityError:
                     raise UniverseIdempotencyConflict("idempotency_key_reused") from None
             row = conn.execute("SELECT * FROM universe_revisions WHERE universe_revision_id=?", (revision_id,)).fetchone()
+            write_universe_audit(ctx, command="add_revision", outcome="created", resource_id=resource_id,
+                                 resource_role=policy["resource_role"], venue=payload_venue.value,
+                                 channel="historical_and_operational", reason=str(status))
             return {**dict(row), "created": existing is None, "idempotent": False}
 
     def add_lifecycle_event(self, *, instrument_id: str, event_type: str, available_at: str,
@@ -602,6 +877,8 @@ class UniverseRepository:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute("INSERT INTO universe_lifecycle_events VALUES (?,?,?,?,?,?,?,?,?,?)",
                          (event_id, instrument_id, event_type, event_date, effective, available, ingested, source_reference.strip(), status, reason.strip()))
+            write_universe_audit(ctx, command="add_lifecycle_event", outcome="created",
+                                 channel="historical", reason=event_type)
             return {**dict(conn.execute("SELECT * FROM universe_lifecycle_events WHERE lifecycle_event_id=?", (event_id,)).fetchone()), "actor_id": ctx.actor_id}
 
     def add_operational_event(self, *, instrument_id: str, trading_state: str, available_at: str,
@@ -621,6 +898,8 @@ class UniverseRepository:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute("INSERT INTO universe_operational_state_events VALUES (?,?,?,?,?,?,?,?,?)",
                          (event_id, instrument_id, trading_state, effective, available, ingested, source_reference.strip(), status, reason.strip()))
+            write_universe_audit(ctx, command="add_operational_event", outcome="created",
+                                 channel="operational", reason=trading_state)
             return {**dict(conn.execute("SELECT * FROM universe_operational_state_events WHERE operational_event_id=?", (event_id,)).fetchone()), "actor_id": ctx.actor_id}
 
     def add_alias_event(self, *, from_instrument_id: str, to_instrument_id: str, alias_code: str,
@@ -644,6 +923,8 @@ class UniverseRepository:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute("INSERT INTO universe_identity_alias_events VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                          (event_id, from_instrument_id, to_instrument_id, code, venue.value, alias_type, effective, available, ingested, source_reference.strip(), reason.strip()))
+            write_universe_audit(ctx, command="add_alias_event", outcome="created", venue=venue.value,
+                                 channel="identity", reason=alias_type)
             return {**dict(conn.execute("SELECT * FROM universe_identity_alias_events WHERE alias_event_id=?", (event_id,)).fetchone()), "actor_id": ctx.actor_id}
 
 
@@ -670,9 +951,12 @@ class UniverseIngestionRepository:
     def add_revision(self, **kwargs: Any) -> dict[str, Any]:
         return self.repository.add_revision(**kwargs)
 
+    def add_resource_revision(self, **kwargs: Any) -> dict[str, Any]:
+        return self.repository.add_resource_revision(**kwargs)
+
 
 __all__ = [
     "UniverseIdentityCollision", "UniverseIdentityRepository", "UniverseIdempotencyConflict",
-    "UniverseIdempotencyRequired",
+    "UniverseIdempotencyRequired", "UniverseRawProvenanceRequired",
     "UniverseIngestionRepository", "UniverseRepository", "UniverseStorageUnavailable",
 ]
