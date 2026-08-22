@@ -58,7 +58,7 @@ def _resource_payload(db, resource_id: str, *, venue: str, status: str, ingested
         "reason": None if status in {"accepted", "partial"} else f"{status} fixture",
         "freshness_status": "current" if status == "accepted" else "blocked",
         "freshness_mode": "event_observation",
-        "current_complete": status == "accepted",
+        "current_complete": False,
         "coverage_complete": status == "accepted",
         "raw_resource_revision_id": raw_id,
         "raw_payload_sha256": raw_hash,
@@ -167,7 +167,7 @@ def test_corrected_latest_revision_of_same_resource_clears_its_blocker(tmp_path)
         context=context, idempotency_key="operational-corrected",
     )
     result = repo.list_instruments(knowledge_cutoff_at="2026-08-21T00:07:00Z", venue="TPEX", limit=25)
-    assert result["per_venue_status"]["TPEX"] == "available"
+    assert result["per_venue_status"]["TPEX"] == "insufficient_data"
 
 
 def test_list_composes_both_venues_and_honors_explicit_venue_filter(tmp_path):

@@ -226,11 +226,33 @@ class UniverseRepository:
         if not rows:
             return None
         return max(rows, key=lambda row: (
-            str(row.get("ingested_at") or ""),
-            str(row.get("available_at") or ""),
             int(row.get("revision_number") or 0),
-            str(row.get("universe_revision_id") or ""),
+            str(row.get("available_at") or ""),
+            str(row.get("ingested_at") or ""),
+            str(row.get("instrument_revision_id") or row.get("universe_revision_id") or ""),
         ))
+
+    @staticmethod
+    def _effective_current_complete(*, policy: sqlite3.Row | dict[str, Any],
+                                    payload: dict[str, Any], status: str) -> bool:
+        """Derive master completeness from policy and independently eligible evidence.
+
+        The caller-supplied ``current_complete`` flag is intentionally ignored.
+        Event and corroborating resources can contribute operational blockers,
+        but can never establish master completeness.
+        """
+        freshness_mode = str(payload.get("freshness_mode") or policy["freshness_mode"])
+        return (
+            status == "accepted"
+            and str(policy["resource_role"]) == "master_snapshot"
+            and str(policy["completeness_policy"]) == "accepted_master_complete"
+            and freshness_mode in {
+                FreshnessMode.OFFICIAL_CADENCE_WINDOW.value,
+                FreshnessMode.LICENSED_REFERENCE.value,
+            }
+            and payload.get("freshness_status") == FreshnessStatus.CURRENT.value
+            and bool(payload.get("coverage_complete", False))
+        )
 
     def _select_historical_reference(self, conn: sqlite3.Connection, *, instrument_id: str,
                                      cutoff: str) -> dict[str, Any] | None:
@@ -244,11 +266,14 @@ class UniverseRepository:
         rows = [dict(row) for row in conn.execute(
             f"""
             SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
-                   i.first_observed_at AS anchor_first_observed_at
+                   i.first_observed_at AS anchor_first_observed_at,
+                   p.resource_role, p.completeness_policy
             FROM universe_instrument_revisions r
             JOIN universe_instruments i ON i.instrument_id = r.instrument_id
+            JOIN universe_resource_policies p ON p.resource_id = r.resource_id
             WHERE r.instrument_id = ? AND r.status = 'accepted' AND {self._cutoff_where('r')}
-            ORDER BY COALESCE(r.available_at,'' ) DESC, r.ingested_at DESC, r.revision_number DESC
+            ORDER BY r.revision_number DESC, COALESCE(r.available_at,'' ) DESC,
+                     r.ingested_at DESC, r.instrument_revision_id DESC
             """, (instrument_id, cutoff, cutoff, cutoff, cutoff)
         ).fetchall()]
         for row in rows:
@@ -265,10 +290,13 @@ class UniverseRepository:
             partial = conn.execute(
                 f"""
                 SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
-                       i.first_observed_at AS anchor_first_observed_at
+                       i.first_observed_at AS anchor_first_observed_at,
+                       p.resource_role, p.completeness_policy
                 FROM universe_instrument_revisions r JOIN universe_instruments i ON i.instrument_id=r.instrument_id
+                JOIN universe_resource_policies p ON p.resource_id = r.resource_id
                 WHERE r.instrument_id=? AND r.status='partial' AND r.canonical_symbol IS NOT NULL AND {self._cutoff_where('r')}
-                ORDER BY r.ingested_at DESC, COALESCE(r.available_at,'' ) DESC, r.revision_number DESC LIMIT 1
+                ORDER BY r.revision_number DESC, COALESCE(r.available_at,'' ) DESC,
+                         r.ingested_at DESC, r.instrument_revision_id DESC LIMIT 1
                 """, (instrument_id, cutoff, cutoff, cutoff, cutoff)
             ).fetchone()
             value = self._row(partial)
@@ -315,14 +343,15 @@ class UniverseRepository:
             f"""
             SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
                    i.first_observed_at AS anchor_first_observed_at,
-                   ur.logical_revision_key
+                   ur.logical_revision_key, p.resource_role, p.completeness_policy
             FROM universe_instrument_revisions r
             JOIN universe_instruments i ON i.instrument_id = r.instrument_id
             JOIN universe_revisions ur ON ur.universe_revision_id = r.universe_revision_id
+            JOIN universe_resource_policies p ON p.resource_id = r.resource_id
             WHERE r.instrument_id IN ({placeholders})
               AND r.status = 'accepted' AND {self._cutoff_where('r')}
-            ORDER BY r.instrument_id, COALESCE(r.available_at,'') DESC,
-                     r.ingested_at DESC, r.revision_number DESC,
+            ORDER BY r.instrument_id, r.revision_number DESC,
+                     COALESCE(r.available_at,'') DESC, r.ingested_at DESC,
                      r.instrument_revision_id DESC
             """, ids + [cutoff, cutoff, cutoff, cutoff]
         ).fetchall()]
@@ -348,15 +377,16 @@ class UniverseRepository:
             f"""
             SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
                    i.first_observed_at AS anchor_first_observed_at,
-                   ur.logical_revision_key
+                   ur.logical_revision_key, p.resource_role, p.completeness_policy
             FROM universe_instrument_revisions r
             JOIN universe_instruments i ON i.instrument_id = r.instrument_id
             JOIN universe_revisions ur ON ur.universe_revision_id = r.universe_revision_id
+            JOIN universe_resource_policies p ON p.resource_id = r.resource_id
             WHERE r.instrument_id IN ({placeholders})
               AND r.status = 'partial' AND r.canonical_symbol IS NOT NULL
               AND {self._cutoff_where('r')}
-            ORDER BY r.instrument_id, r.ingested_at DESC,
-                     COALESCE(r.available_at,'') DESC, r.revision_number DESC,
+            ORDER BY r.instrument_id, r.revision_number DESC,
+                     COALESCE(r.available_at,'') DESC, r.ingested_at DESC,
                      r.instrument_revision_id DESC
             """, ids + [cutoff, cutoff, cutoff, cutoff]
         ).fetchall()]
@@ -383,11 +413,14 @@ class UniverseRepository:
         rows = [dict(row) for row in conn.execute(
             f"""
             SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
-                   i.first_observed_at AS anchor_first_observed_at
+                   i.first_observed_at AS anchor_first_observed_at,
+                   p.resource_role, p.completeness_policy
             FROM universe_instrument_revisions r
             JOIN universe_instruments i ON i.instrument_id = r.instrument_id
+            JOIN universe_resource_policies p ON p.resource_id = r.resource_id
             WHERE r.instrument_id = ? AND {self._operational_where('r')}
-            ORDER BY r.ingested_at DESC, COALESCE(r.available_at,'' ) DESC, r.revision_number DESC
+            ORDER BY r.revision_number DESC, COALESCE(r.available_at,'' ) DESC,
+                     r.ingested_at DESC, r.instrument_revision_id DESC
             """, (instrument_id, cutoff)
         ).fetchall()]
         if reference and reference.get("resource_id"):
@@ -395,13 +428,14 @@ class UniverseRepository:
                 f"""
                 SELECT ur.*, p.availability_mode AS policy_availability_mode,
                        p.freshness_mode AS policy_freshness_mode,
-                       p.resource_role, r.market
+                       p.resource_role, p.completeness_policy, r.market
                 FROM universe_revisions ur
                 JOIN universe_resource_policies p ON p.resource_id = ur.resource_id
                 JOIN data_resources r ON r.resource_id = ur.resource_id
                 WHERE ur.resource_id = ? AND ur.logical_revision_key = ?
                   AND {self._operational_where('ur')}
-                ORDER BY ur.ingested_at DESC, COALESCE(ur.available_at,'' ) DESC, ur.revision_number DESC
+                ORDER BY ur.revision_number DESC, COALESCE(ur.available_at,'' ) DESC,
+                         ur.ingested_at DESC, ur.universe_revision_id DESC
                 """, (reference["resource_id"], reference.get("logical_revision_key") or "", cutoff)
             ).fetchall()]
             for row in resource_rows:
@@ -432,12 +466,14 @@ class UniverseRepository:
         instrument_rows = [dict(row) for row in conn.execute(
             f"""
             SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
-                   i.first_observed_at AS anchor_first_observed_at
+                   i.first_observed_at AS anchor_first_observed_at,
+                   p.resource_role, p.completeness_policy
             FROM universe_instrument_revisions r
             JOIN universe_instruments i ON i.instrument_id = r.instrument_id
+            JOIN universe_resource_policies p ON p.resource_id = r.resource_id
             WHERE r.instrument_id IN ({placeholders}) AND {self._operational_where('r')}
-            ORDER BY r.instrument_id, r.ingested_at DESC,
-                     COALESCE(r.available_at,'') DESC, r.revision_number DESC,
+            ORDER BY r.instrument_id, r.revision_number DESC,
+                     COALESCE(r.available_at,'') DESC, r.ingested_at DESC,
                      r.instrument_revision_id DESC
             """, ids + [cutoff]
         ).fetchall()]
@@ -458,13 +494,13 @@ class UniverseRepository:
                 f"""
                 SELECT ur.*, p.availability_mode AS policy_availability_mode,
                        p.freshness_mode AS policy_freshness_mode,
-                       p.resource_role, dr.market AS resource_market
+                       p.resource_role, p.completeness_policy, dr.market AS resource_market
                 FROM universe_revisions ur
                 JOIN universe_resource_policies p ON p.resource_id = ur.resource_id
                 JOIN data_resources dr ON dr.resource_id = ur.resource_id
                 WHERE ({pair_predicates}) AND {self._operational_where('ur')}
-                ORDER BY ur.resource_id, ur.logical_revision_key, ur.ingested_at DESC,
-                         COALESCE(ur.available_at,'') DESC, ur.revision_number DESC,
+                ORDER BY ur.resource_id, ur.logical_revision_key, ur.revision_number DESC,
+                         COALESCE(ur.available_at,'') DESC, ur.ingested_at DESC,
                          ur.universe_revision_id DESC
                 """, pair_params + [cutoff]
             ).fetchall()]
@@ -515,6 +551,11 @@ class UniverseRepository:
         op = operational or reference
         reasons: list[str] = []
         status = str(op.get("status") or "unknown")
+        completeness_source = op
+        if status == "accepted" and op.get("resource_role") != "master_snapshot":
+            # Accepted event/corroborating observations are neutral support.
+            # They neither replace nor invalidate the eligible master state.
+            completeness_source = reference
         reason_map = {
             "awaiting_review": "source_revision_awaiting_review",
             "schema_changed": "source_schema_review_required",
@@ -529,21 +570,28 @@ class UniverseRepository:
         # accepted identity fact; provider/partial observations remain
         # non-actionable partial health states.
         if status == "accepted" and (
-            op.get("available_at") is None or str(op.get("available_at")) > cutoff
+            completeness_source.get("available_at") is None
+            or str(completeness_source.get("available_at")) > cutoff
         ):
             reasons.append("availability_unproven")
         if op.get("reason"):
             reasons.append(str(op["reason"]))
         if reference.get("canonical_symbol") is None:
             reasons.append("canonical_mapping_unverified")
-        freshness = op.get("freshness_status") or FreshnessStatus.UNKNOWN.value
+        freshness = completeness_source.get("freshness_status") or FreshnessStatus.UNKNOWN.value
         if status != "accepted" and freshness == FreshnessStatus.CURRENT.value:
             freshness = FreshnessStatus.BLOCKED.value
         if freshness == FreshnessStatus.STALE.value:
             reasons.append("freshness_stale")
         elif freshness == FreshnessStatus.UNKNOWN.value:
             reasons.append("freshness_unknown")
-        current_complete = bool(op.get("current_complete")) and status == "accepted" and freshness == FreshnessStatus.CURRENT.value
+        current_complete = (
+            bool(completeness_source.get("current_complete"))
+            and status == "accepted"
+            and freshness == FreshnessStatus.CURRENT.value
+            and completeness_source.get("resource_role") == "master_snapshot"
+            and completeness_source.get("completeness_policy") == "accepted_master_complete"
+        )
         result = evaluate_universe_status(self._reference(reference), freshness=freshness,
                                           current_complete=current_complete, reasons=tuple(reasons))
         dto = self._safe_dto({**reference, **{
@@ -588,7 +636,8 @@ class UniverseRepository:
                 FROM universe_instrument_revisions r
                 JOIN universe_instruments i ON i.instrument_id = r.instrument_id
                 WHERE i.venue = ? AND i.official_code = ? AND {self._cutoff_where('r')}
-                ORDER BY r.ingested_at DESC, COALESCE(r.available_at,'' ) DESC, r.revision_number DESC
+                ORDER BY r.revision_number DESC, COALESCE(r.available_at,'' ) DESC,
+                         r.ingested_at DESC, r.instrument_revision_id DESC
                 """, (venue.value, code, cutoff, cutoff, cutoff, cutoff)
             ).fetchall()]
             if not candidates:
@@ -679,8 +728,8 @@ class UniverseRepository:
                            COALESCE(r.canonical_symbol,'') AS canonical_key,
                            ROW_NUMBER() OVER (
                                PARTITION BY r.instrument_id
-                               ORDER BY COALESCE(r.available_at,'') DESC, r.ingested_at DESC,
-                                        r.revision_number DESC, r.instrument_revision_id DESC
+                                ORDER BY r.revision_number DESC, COALESCE(r.available_at,'') DESC,
+                                         r.ingested_at DESC, r.instrument_revision_id DESC
                            ) AS rn
                     FROM universe_instrument_revisions r
                     JOIN universe_instruments i ON i.instrument_id = r.instrument_id
@@ -742,34 +791,6 @@ class UniverseRepository:
         if any(item["status"] == "available" for item in rows): return "available"
         return "insufficient_data"
 
-    def _latest_resource_status(self, conn: sqlite3.Connection, *, venue: str, cutoff: str) -> str:
-        rows = [dict(row) for row in conn.execute(
-            f"""
-            SELECT ur.*, p.freshness_mode AS policy_freshness_mode
-            FROM universe_revisions ur
-            JOIN data_resources dr ON dr.resource_id = ur.resource_id
-            JOIN universe_resource_policies p ON p.resource_id = ur.resource_id
-            WHERE dr.market = ? AND {self._operational_where('ur')}
-            ORDER BY ur.ingested_at DESC, COALESCE(ur.available_at,'' ) DESC, ur.revision_number DESC
-            """, (venue, cutoff)
-        ).fetchall()]
-        if not rows:
-            return "insufficient_data"
-        latest = rows[0]
-        status = str(latest.get("status"))
-        if status in {"awaiting_review", "schema_changed"}:
-            return "needs_human_input"
-        if (
-            status != "accepted"
-            or latest.get("available_at") is None
-            or str(latest.get("available_at")) > cutoff
-            or latest.get("freshness_status") in {None, "unknown", "stale", "blocked"}
-        ):
-            return "partial"
-        if not bool(latest.get("current_complete")):
-            return "partial"
-        return "available"
-
     def _latest_resource_statuses(self, conn: sqlite3.Connection, *, venues: list[str], cutoff: str) -> dict[str, str]:
         """Compose resource health per venue without cross-resource masking.
 
@@ -786,13 +807,14 @@ class UniverseRepository:
             f"""
             WITH ranked AS (
                 SELECT ur.*, p.freshness_mode AS policy_freshness_mode,
+                       p.resource_role, p.completeness_policy,
                        dr.market AS resource_market,
                        ROW_NUMBER() OVER (
                            PARTITION BY dr.market, ur.resource_id
-                           ORDER BY ur.ingested_at DESC,
-                                    COALESCE(ur.available_at,'') DESC,
-                                    ur.revision_number DESC,
-                                    ur.universe_revision_id DESC
+                            ORDER BY ur.revision_number DESC,
+                                     COALESCE(ur.available_at,'') DESC,
+                                     ur.ingested_at DESC,
+                                     ur.universe_revision_id DESC
                        ) AS rn
                 FROM universe_revisions ur
                 JOIN data_resources dr ON dr.resource_id = ur.resource_id
@@ -804,30 +826,45 @@ class UniverseRepository:
             """, scoped + [cutoff]
         ).fetchall()]
         statuses_by_venue: dict[str, list[str]] = {venue: [] for venue in scoped}
+        master_statuses_by_venue: dict[str, list[str]] = {venue: [] for venue in scoped}
         for row in rows:
             venue = str(row["resource_market"])
-            statuses_by_venue.setdefault(venue, []).append(
-                self._resource_status_from_row(row, cutoff=cutoff)
-            )
+            resource_status = self._resource_status_from_row(row, cutoff=cutoff)
+            if resource_status is not None:
+                statuses_by_venue.setdefault(venue, []).append(resource_status)
+            if row.get("resource_role") == "master_snapshot" and resource_status is not None:
+                master_statuses_by_venue.setdefault(venue, []).append(resource_status)
         precedence = {"needs_human_input": 3, "partial": 2, "available": 1, "insufficient_data": 0}
-        return {
-            venue: max(statuses_by_venue.get(venue) or ["insufficient_data"], key=lambda status: precedence.get(status, 0))
-            for venue in scoped
-        }
+        result: dict[str, str] = {}
+        for venue in scoped:
+            blockers = [status for status in statuses_by_venue.get(venue, []) if status in {"needs_human_input", "partial"}]
+            if blockers:
+                result[venue] = max(blockers, key=lambda status: precedence[status])
+                continue
+            masters = master_statuses_by_venue.get(venue, [])
+            result[venue] = "available" if "available" in masters else "insufficient_data"
+        return result
 
     @staticmethod
-    def _resource_status_from_row(latest: dict[str, Any] | None, *, cutoff: str) -> str:
+    def _resource_status_from_row(latest: dict[str, Any] | None, *, cutoff: str) -> str | None:
         if latest is None:
             return "insufficient_data"
+        resource_role = str(latest.get("resource_role") or "")
         status = str(latest.get("status"))
-        if status in {"awaiting_review", "schema_changed"}:
+        if resource_role == "corroborating_identity_observation":
+            return None
+        if status in {"awaiting_review", "schema_changed", "revoked"}:
             return "needs_human_input"
+        if resource_role != "master_snapshot" and status == "accepted":
+            return None
         if (
             status != "accepted"
             or latest.get("available_at") is None
             or str(latest.get("available_at")) > cutoff
             or latest.get("freshness_status") in {None, "unknown", "stale", "blocked"}
         ):
+            return "partial"
+        if latest.get("completeness_policy") != "accepted_master_complete":
             return "partial"
         if not bool(latest.get("current_complete")):
             return "partial"
@@ -976,6 +1013,7 @@ class UniverseRepository:
             conn.execute("BEGIN IMMEDIATE")
             policy = conn.execute(
                 """SELECT p.availability_mode, p.enabled, p.resource_role, p.freshness_mode,
+                          p.completeness_policy,
                           r.market, r.logical_resource_key
                    FROM universe_resource_policies p JOIN data_resources r ON r.resource_id=p.resource_id
                    WHERE p.resource_id=?""", (resource_id,)
@@ -1005,7 +1043,9 @@ class UniverseRepository:
             reason = payload.get("reason")
             if policy["availability_mode"] == AvailabilityMode.MANUAL_PUBLICATION_EVIDENCE_REQUIRED.value and not payload.get("publication_evidence_id"):
                 status, reason = "awaiting_review", "manual_publication_evidence_required"
-            current_complete = bool(payload.get("current_complete")) and status == "accepted" and payload.get("freshness_status") == FreshnessStatus.CURRENT.value
+            current_complete = self._effective_current_complete(
+                policy=policy, payload=payload, status=status,
+            )
             revision_id = f"urev_{uuid.uuid4().hex}"
             conn.execute("""INSERT INTO universe_revisions
                 (universe_revision_id,resource_id,logical_revision_key,revision_number,raw_resource_revision_id,source_published_at,source_effective_date,fetched_at,received_at,first_observed_at,available_at,ingested_at,status,reason,payload_sha256,normalized_payload_sha256,raw_payload_sha256,query_dimensions_json,source_record_reference,parser_evidence_fingerprint,schema_evidence_fingerprint,schema_fingerprint,parser_version,source_reference,publication_evidence_id,supersedes_revision_id,availability_mode,freshness_mode,freshness_status,current_complete,coverage_complete)
@@ -1055,18 +1095,12 @@ class UniverseRepository:
             effective_to = normalize_universe_timestamp(str(effective_to), "effective_to")
         if effective_from and effective_to and effective_from >= effective_to:
             raise ValueError("effective_from must be earlier than effective_to")
-        current_complete = (
-            payload.get("status", "accepted") == "accepted"
-            and bool(payload.get("current_complete", False))
-            and payload.get("freshness_status", FreshnessStatus.UNKNOWN.value) == FreshnessStatus.CURRENT.value
-            and payload.get("freshness_mode", FreshnessMode.UNKNOWN_WITHOUT_OFFICIAL_CADENCE.value)
-            in {FreshnessMode.OFFICIAL_CADENCE_WINDOW.value, FreshnessMode.LICENSED_REFERENCE.value}
-        )
         fingerprint = payload_fingerprint(payload)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             policy = conn.execute(
-                """SELECT p.availability_mode, p.enabled, p.resource_role, r.market, r.logical_resource_key
+                """SELECT p.availability_mode, p.enabled, p.resource_role, p.freshness_mode,
+                          p.completeness_policy, r.market, r.logical_resource_key
                    FROM universe_resource_policies p
                    JOIN data_resources r ON r.resource_id = p.resource_id
                    WHERE p.resource_id=?""",
@@ -1088,8 +1122,9 @@ class UniverseRepository:
             if policy["availability_mode"] == AvailabilityMode.MANUAL_PUBLICATION_EVIDENCE_REQUIRED.value and not publication_evidence_id:
                 status = "awaiting_review"
                 reason = "manual_publication_evidence_required"
-            if status != "accepted":
-                current_complete = False
+            current_complete = self._effective_current_complete(
+                policy=policy, payload=payload, status=str(status),
+            )
             if idempotency_key:
                 old = conn.execute("SELECT * FROM universe_ingestion_idempotency WHERE idempotency_key=?", (idempotency_key,)).fetchone()
                 if old:

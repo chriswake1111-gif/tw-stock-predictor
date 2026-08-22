@@ -174,6 +174,7 @@ def test_empty_complete_and_empty_blocked_lists_are_distinct(tmp_path):
             resource_id=resource_id, logical_revision_key="master", revision_number=1,
             payload=_resource_payload(venue=venue, status="accepted", reason=None,
                                       freshness_status="current", current_complete=True,
+                                      freshness_mode="official_cadence_window",
                                       coverage_complete=True, raw_resource_revision_id=raw_id,
                                       raw_payload_sha256=raw_hash),
             context=context, idempotency_key=f"empty-complete-{venue}",
