@@ -641,25 +641,36 @@ class UniverseRepository:
             except (json.JSONDecodeError, TypeError, KeyError):
                 raise ValueError("cursor_query_mismatch")
         with self.read_transaction() as conn:
-            clauses = [f"{self._cutoff_where('r')}", "r.status = 'accepted'"]
-            params: list[Any] = [cutoff, cutoff, cutoff, cutoff]
+            # Select the latest safe accepted reference first.  Search/list
+            # predicates must not change which revision is authoritative for
+            # an instrument; otherwise an older matching revision can be
+            # resurrected when the current name/type/status no longer
+            # matches the request.
+            source_clauses = [f"{self._cutoff_where('r')}", "r.status = 'accepted'"]
+            source_params: list[Any] = [cutoff, cutoff, cutoff, cutoff]
+            filters: list[str] = []
+            filter_params: list[Any] = []
             if venue_value:
-                clauses.append("i.venue = ?"); params.append(venue_value)
+                filters.append("anchor_venue = ?"); filter_params.append(venue_value)
             if security_type:
-                clauses.append("r.security_type = ?"); params.append(security_type)
+                filters.append("security_type = ?"); filter_params.append(security_type)
             if listing_value:
-                clauses.append("r.listing_status = ?"); params.append(listing_value)
+                filters.append("listing_status = ?"); filter_params.append(listing_value)
             if query:
-                clauses.append("(r.official_code LIKE ? OR COALESCE(r.canonical_symbol,'') LIKE ? OR COALESCE(r.display_name,'') LIKE ?)")
-                term = f"%{query.strip().upper()}%"; params += [term, term, term]
+                filters.append("(anchor_code LIKE ? OR canonical_key LIKE ? OR COALESCE(display_name,'') LIKE ?)")
+                term = f"%{query.strip().upper()}%"; filter_params += [term, term, term]
             cursor_clause = ""
             cursor_params: list[Any] = []
             if cursor_token is not None:
-                cursor_clause = " AND (anchor_venue > ? OR (anchor_venue = ? AND canonical_key > ?) OR (anchor_venue = ? AND canonical_key = ? AND instrument_id > ?))"
+                cursor_clause = "(anchor_venue > ? OR (anchor_venue = ? AND canonical_key > ?) OR (anchor_venue = ? AND canonical_key = ? AND instrument_id > ?))"
                 cursor_params = [
                     cursor_token.get("venue_key"), cursor_token.get("venue_key"), cursor_token.get("canonical_key") or "",
                     cursor_token.get("venue_key"), cursor_token.get("canonical_key") or "", cursor_token.get("instrument_id"),
                 ]
+            outer_clauses = [*filters]
+            if cursor_clause:
+                outer_clauses.append(cursor_clause)
+            outer_where = " AND ".join(outer_clauses) if outer_clauses else "1=1"
             base_rows = [dict(row) for row in conn.execute(
                 f"""
                 WITH ranked AS (
@@ -673,13 +684,15 @@ class UniverseRepository:
                            ) AS rn
                     FROM universe_instrument_revisions r
                     JOIN universe_instruments i ON i.instrument_id = r.instrument_id
-                    WHERE {' AND '.join(clauses)}
+                    WHERE {' AND '.join(source_clauses)}
+                ), latest AS (
+                    SELECT * FROM ranked WHERE rn = 1
                 )
-                SELECT * FROM ranked
-                WHERE rn = 1{cursor_clause}
+                SELECT * FROM latest
+                WHERE {outer_where}
                 ORDER BY anchor_venue ASC, canonical_key ASC, instrument_id ASC
                 LIMIT ?
-                """, params + cursor_params + [int(limit) + 1]
+                """, source_params + filter_params + cursor_params + [int(limit) + 1]
             ).fetchall()]
             selected = base_rows
             page_rows = selected[:int(limit)]
@@ -758,28 +771,47 @@ class UniverseRepository:
         return "available"
 
     def _latest_resource_statuses(self, conn: sqlite3.Connection, *, venues: list[str], cutoff: str) -> dict[str, str]:
-        """Read resource health for all requested venues in one bounded query."""
+        """Compose resource health per venue without cross-resource masking.
+
+        Each resource gets its own latest visible operational revision first.
+        Only then are those resource states reduced to the venue using the
+        locked status precedence.  A newer healthy resource therefore cannot
+        hide a blocker from a different resource in the same venue.
+        """
         scoped = list(dict.fromkeys(str(value) for value in venues))
         if not scoped:
             return {}
         placeholders = self._sql_placeholders(scoped)
         rows = [dict(row) for row in conn.execute(
             f"""
-            SELECT ur.*, p.freshness_mode AS policy_freshness_mode, dr.market AS resource_market
-            FROM universe_revisions ur
-            JOIN data_resources dr ON dr.resource_id = ur.resource_id
-            JOIN universe_resource_policies p ON p.resource_id = ur.resource_id
-            WHERE dr.market IN ({placeholders}) AND {self._operational_where('ur')}
-            ORDER BY dr.market, ur.ingested_at DESC,
-                     COALESCE(ur.available_at,'') DESC, ur.revision_number DESC,
-                     ur.universe_revision_id DESC
+            WITH ranked AS (
+                SELECT ur.*, p.freshness_mode AS policy_freshness_mode,
+                       dr.market AS resource_market,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY dr.market, ur.resource_id
+                           ORDER BY ur.ingested_at DESC,
+                                    COALESCE(ur.available_at,'') DESC,
+                                    ur.revision_number DESC,
+                                    ur.universe_revision_id DESC
+                       ) AS rn
+                FROM universe_revisions ur
+                JOIN data_resources dr ON dr.resource_id = ur.resource_id
+                JOIN universe_resource_policies p ON p.resource_id = ur.resource_id
+                WHERE dr.market IN ({placeholders}) AND {self._operational_where('ur')}
+            )
+            SELECT * FROM ranked WHERE rn = 1
+            ORDER BY resource_market, resource_id
             """, scoped + [cutoff]
         ).fetchall()]
-        latest_by_venue: dict[str, dict[str, Any]] = {}
+        statuses_by_venue: dict[str, list[str]] = {venue: [] for venue in scoped}
         for row in rows:
-            latest_by_venue.setdefault(str(row["resource_market"]), row)
+            venue = str(row["resource_market"])
+            statuses_by_venue.setdefault(venue, []).append(
+                self._resource_status_from_row(row, cutoff=cutoff)
+            )
+        precedence = {"needs_human_input": 3, "partial": 2, "available": 1, "insufficient_data": 0}
         return {
-            venue: self._resource_status_from_row(latest_by_venue.get(venue), cutoff=cutoff)
+            venue: max(statuses_by_venue.get(venue) or ["insufficient_data"], key=lambda status: precedence.get(status, 0))
             for venue in scoped
         }
 

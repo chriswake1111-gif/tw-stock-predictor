@@ -11,6 +11,16 @@ Phase 13 supplies neutral identity and data-quality context for Taiwan listed in
 
 Provider errors, partial observations and schema changes may therefore preserve an older reference while reporting a blocked operational state. Revocation is stronger than transport failure and never becomes a hidden fallback. The legacy `current` argument is internal compatibility only and cannot bypass the cutoff.
 
+List/search selects the latest safe accepted reference for each instrument before
+applying query, security-type, listing-status, cursor, or page predicates. This
+prevents an older matching revision from being resurrected when the latest
+reference no longer matches the requested filter. Resource health is resolved
+per `resource_id` at the same cutoff and then reduced to each venue using the
+`universe_status_matrix_v1` precedence (`needs_human_input` > `partial` >
+`available` > `insufficient_data`); a newer healthy resource cannot mask a
+blocker from another resource in that venue, while a corrected revision of the
+same resource may clear its own blocker.
+
 ## Identity and mapping
 
 Operational observations without a source publication instant are visible only
