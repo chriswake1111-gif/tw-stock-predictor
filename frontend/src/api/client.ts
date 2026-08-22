@@ -13,6 +13,8 @@ import type {
   SnapshotComparisonResponse,
   ResearchQueueDetail,
   ResearchQueueResponse,
+  UniverseListResponse,
+  UniverseResponse,
 } from "./types";
 
 type QueryValue = string | number | boolean | null | undefined;
@@ -140,5 +142,22 @@ export const evidenceApi = {
       `/api/v2/research/queue/${encodeURIComponent(itemId)}`,
       { comparison_cutoff: comparisonCutoff },
     ), signal);
+  },
+  universeInstrument(canonicalSymbol: string, knowledgeCutoffAt: string, signal?: AbortSignal) {
+    return fetchJson<UniverseResponse>(withQuery(
+      `/api/v2/universe/instruments/${encodeURIComponent(canonicalSymbol)}`,
+      { knowledge_cutoff_at: knowledgeCutoffAt },
+    ), signal);
+  },
+  universeResolve(officialCode: string, venue: string, knowledgeCutoffAt: string, signal?: AbortSignal) {
+    return fetchJson<UniverseResponse>(withQuery("/api/v2/universe/resolve", {
+      official_code: officialCode, venue, knowledge_cutoff_at: knowledgeCutoffAt,
+    }), signal);
+  },
+  universeInstruments(knowledgeCutoffAt: string, filters: { query?: string; venue?: string; listingStatus?: string; limit?: number } = {}, signal?: AbortSignal) {
+    return fetchJson<UniverseListResponse>(withQuery("/api/v2/universe/instruments", {
+      knowledge_cutoff_at: knowledgeCutoffAt, query: filters.query, venue: filters.venue,
+      listing_status: filters.listingStatus, limit: filters.limit,
+    }), signal);
   },
 };

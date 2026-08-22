@@ -11,6 +11,7 @@ PHASE8_REMEDIATION_MIGRATION = "20260810_10_phase8_review_remediation"
 PHASE10_MIGRATION = "20260811_13_phase10_first_review_remediation"
 PHASE12_BASE_MIGRATION = "20260813_14_evidence_model_v2_research_review_queue"
 PHASE12_MIGRATION = "20260813_15_phase12_first_review_remediation"
+PHASE13_MIGRATION = "20260821_16_phase13_universe_foundation"
 
 
 def test_phase8_migration_is_additive_rerunnable_and_fresh_parent_safe(tmp_path):
@@ -19,7 +20,7 @@ def test_phase8_migration_is_additive_rerunnable_and_fresh_parent_safe(tmp_path)
     second = apply_valuation_migration(str(db_path))
     assert PHASE8_MIGRATION in migration_runner.MIGRATION_IDS
     assert migration_runner.MIGRATION_ID == migration_runner.MIGRATION_IDS[-1]
-    assert migration_runner.MIGRATION_ID == PHASE12_MIGRATION
+    assert migration_runner.MIGRATION_ID == PHASE13_MIGRATION
     assert first["applied"] is True
     assert second["applied"] is False
     with sqlite3.connect(db_path) as conn:
@@ -52,7 +53,7 @@ def test_phase8_remediation_migration_is_safe_for_existing_phase8_database(
         conn.execute("INSERT INTO analysis_snapshot_idempotency_keys VALUES ('keep','fp','id','2026-01-01T00:00:00Z')")
     result = apply_valuation_migration(str(db_path))
     assert result["applied_migration_ids"] == [
-        PHASE10_MIGRATION, PHASE12_BASE_MIGRATION, PHASE12_MIGRATION,
+        PHASE10_MIGRATION, PHASE12_BASE_MIGRATION, PHASE12_MIGRATION, PHASE13_MIGRATION,
     ]
     with sqlite3.connect(db_path) as conn:
         assert conn.execute(
