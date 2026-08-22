@@ -118,9 +118,10 @@ def test_revocation_uses_instrument_revision_domain_and_fails_closed_across_look
     listed = repo.list_instruments(
         knowledge_cutoff_at="2026-08-21T00:07:00Z", venue="TPEX", limit=25,
     )
-    assert listed["items"]
-    assert listed["items"][0]["identity_reference"] is None
-    assert listed["items"][0]["status"] == "insufficient_data"
+    # List membership is now based on the same effective safe reference as
+    # exact/resolve.  A revoked-only instrument remains visible through venue
+    # health, but cannot consume an item page slot.
+    assert listed["items"] == []
     assert listed["per_venue_status"]["TPEX"] == "needs_human_input"
     assert revoked["status"] == "revoked"
 

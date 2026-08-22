@@ -152,20 +152,25 @@ class UniverseRepository:
         )"""
 
     @classmethod
-    def _visible_revoked_instrument_revision_ids(
+    def _effective_excluded_instrument_revision_ids(
         cls,
         conn: sqlite3.Connection,
         *,
         instrument_ids: list[str],
         cutoff: str,
     ) -> dict[str, set[str]]:
-        """Return instrument-revision IDs revoked by a visible event.
+        """Return all visible historical revisions superseded by a child.
 
         ``universe_instrument_revisions.supersedes_revision_id`` points to an
         ``instrument_revision_id`` (``uirev_*``), while the parent resource
         revision uses the separate ``universe_revision_id`` (``urev_*``)
         domain.  Historical eligibility must stay in the instrument-revision
         domain; mixing the two silently resurrects revoked identities.
+
+        Both accepted corrections and revoked events are chain edges.  A
+        visible child excludes its direct predecessor and every visible
+        predecessor ancestor, so an accepted correction followed by a revoke
+        cannot resurrect the original accepted row.
         """
         ids = list(dict.fromkeys(str(value) for value in instrument_ids))
         if not ids:
@@ -173,21 +178,31 @@ class UniverseRepository:
         placeholders = cls._sql_placeholders(ids)
         rows = conn.execute(
             f"""
-            SELECT r.instrument_id, r.supersedes_revision_id
+            SELECT r.instrument_id, r.instrument_revision_id, r.supersedes_revision_id
             FROM universe_instrument_revisions r
             WHERE r.instrument_id IN ({placeholders})
-              AND r.status = 'revoked'
+              AND r.status IN ('accepted', 'revoked')
               AND r.supersedes_revision_id IS NOT NULL
               AND {cls._cutoff_where('r')}
             """,
             ids + [cutoff, cutoff, cutoff, cutoff],
         ).fetchall()
-        revoked: dict[str, set[str]] = {}
+        edges: dict[str, dict[str, str | None]] = {}
         for row in rows:
-            revoked.setdefault(str(row["instrument_id"]), set()).add(
-                str(row["supersedes_revision_id"])
-            )
-        return revoked
+            edges.setdefault(str(row["instrument_id"]), {})[
+                str(row["instrument_revision_id"])
+            ] = str(row["supersedes_revision_id"])
+
+        excluded: dict[str, set[str]] = {}
+        for instrument_id, children in edges.items():
+            blocked: set[str] = set()
+            for parent in children.values():
+                current = parent
+                while current and current not in blocked:
+                    blocked.add(current)
+                    current = children.get(current)
+            excluded[instrument_id] = blocked
+        return excluded
 
     @staticmethod
     def _operational_where(alias: str = "r") -> str:
@@ -352,7 +367,7 @@ class UniverseRepository:
                      r.instrument_revision_id DESC
             """, ids + [cutoff, cutoff, cutoff, cutoff]
         ).fetchall()]
-        revoked = cls._visible_revoked_instrument_revision_ids(
+        excluded = cls._effective_excluded_instrument_revision_ids(
             conn, instrument_ids=ids, cutoff=cutoff,
         )
         candidates: dict[str, list[dict[str, Any]]] = {}
@@ -360,7 +375,7 @@ class UniverseRepository:
             candidates.setdefault(str(row["instrument_id"]), []).append(row)
         result: dict[str, dict[str, Any] | None] = {}
         for instrument_id in ids:
-            blocked = revoked.get(instrument_id, set())
+            blocked = excluded.get(instrument_id, set())
             safe = next(
                 (
                     row for row in candidates.get(instrument_id, [])
@@ -448,10 +463,10 @@ class UniverseRepository:
             )
             for row in rows
         ]
-        revoked_by_id = self._visible_revoked_instrument_revision_ids(
+        excluded_by_id = self._effective_excluded_instrument_revision_ids(
             conn, instrument_ids=[instrument_id], cutoff=cutoff,
         )
-        revoked_ids = revoked_by_id.get(str(instrument_id), set())
+        excluded_ids = excluded_by_id.get(str(instrument_id), set())
         for row in rows:
             parent = conn.execute(
                 "SELECT logical_revision_key FROM universe_revisions WHERE universe_revision_id=?",
@@ -477,19 +492,19 @@ class UniverseRepository:
                 """, (instrument_id, cutoff, cutoff, cutoff, cutoff)
             ).fetchone()
             value = self._row(partial)
-            if value and not revoked_ids:
+            if value and not excluded_ids:
                 value = self._apply_effective_master_mapping(
                     conn,
                     value,
                     cutoff=cutoff,
                     master_mappings=master_mappings,
                 )
-            if value and not revoked_ids:
+            if value and not excluded_ids:
                 parent = conn.execute("SELECT logical_revision_key FROM universe_revisions WHERE universe_revision_id=?", (value.get("universe_revision_id"),)).fetchone()
                 value["logical_revision_key"] = parent[0] if parent else None
-            return value if not revoked_ids else None
+            return value if not excluded_ids else None
         for row in rows:
-            if str(row.get("instrument_revision_id")) not in revoked_ids:
+            if str(row.get("instrument_revision_id")) not in excluded_ids:
                 return row
         return None
 
@@ -530,7 +545,7 @@ class UniverseRepository:
         for row in accepted_rows:
             accepted_by_id.setdefault(str(row["instrument_id"]), []).append(row)
 
-        revoked_by_id = self._visible_revoked_instrument_revision_ids(
+        excluded_by_id = self._effective_excluded_instrument_revision_ids(
             conn, instrument_ids=ids, cutoff=cutoff,
         )
         master_mappings = self._latest_master_mappings(
@@ -577,15 +592,15 @@ class UniverseRepository:
         for instrument_id in ids:
             accepted = accepted_by_id.get(instrument_id, [])
             if accepted:
-                revoked = revoked_by_id.get(instrument_id, set())
+                excluded = excluded_by_id.get(instrument_id, set())
                 result[instrument_id] = next(
-                    (row for row in accepted if str(row.get("instrument_revision_id")) not in revoked),
+                    (row for row in accepted if str(row.get("instrument_revision_id")) not in excluded),
                     None,
                 )
             else:
                 result[instrument_id] = (
                     None
-                    if revoked_by_id.get(instrument_id)
+                    if excluded_by_id.get(instrument_id)
                     else partial_by_id.get(instrument_id)
                 )
         return result
@@ -900,13 +915,11 @@ class UniverseRepository:
             except (json.JSONDecodeError, TypeError, KeyError):
                 raise ValueError("cursor_query_mismatch")
         with self.read_transaction() as conn:
-            # Select the latest safe accepted reference first.  Search/list
-            # predicates must not change which revision is authoritative for
-            # an instrument; otherwise an older matching revision can be
-            # resurrected when the current name/type/status no longer
-            # matches the request.
-            source_clauses = [f"{self._cutoff_where('r')}", "r.status = 'accepted'"]
-            source_params: list[Any] = [cutoff, cutoff, cutoff, cutoff]
+            # The recursive edge CTE removes every visible accepted correction
+            # ancestor and revoked target before ranking.  List membership,
+            # filters, ordering and cursors therefore operate on the same
+            # effective historical reference that the batch selector returns.
+            cutoff_predicate = self._cutoff_where("r")
             filters: list[str] = []
             filter_params: list[Any] = []
             if venue_value:
@@ -916,12 +929,12 @@ class UniverseRepository:
             if listing_value:
                 filters.append("listing_status = ?"); filter_params.append(listing_value)
             if query:
-                filters.append("(anchor_code LIKE ? OR canonical_key LIKE ? OR COALESCE(display_name,'') LIKE ?)")
+                filters.append("(anchor_code LIKE ? OR effective_canonical_key LIKE ? OR COALESCE(display_name,'') LIKE ?)")
                 term = f"%{query.strip().upper()}%"; filter_params += [term, term, term]
             cursor_clause = ""
             cursor_params: list[Any] = []
             if cursor_token is not None:
-                cursor_clause = "(anchor_venue > ? OR (anchor_venue = ? AND canonical_key > ?) OR (anchor_venue = ? AND canonical_key = ? AND instrument_id > ?))"
+                cursor_clause = "(anchor_venue > ? OR (anchor_venue = ? AND effective_canonical_key > ?) OR (anchor_venue = ? AND effective_canonical_key = ? AND instrument_id > ?))"
                 cursor_params = [
                     cursor_token.get("venue_key"), cursor_token.get("venue_key"), cursor_token.get("canonical_key") or "",
                     cursor_token.get("venue_key"), cursor_token.get("canonical_key") or "", cursor_token.get("instrument_id"),
@@ -932,26 +945,78 @@ class UniverseRepository:
             outer_where = " AND ".join(outer_clauses) if outer_clauses else "1=1"
             base_rows = [dict(row) for row in conn.execute(
                 f"""
-                WITH ranked AS (
+                WITH RECURSIVE visible_edges AS (
+                    SELECT r.instrument_id, r.instrument_revision_id AS child_revision_id,
+                           r.supersedes_revision_id AS parent_revision_id
+                    FROM universe_instrument_revisions r
+                    WHERE r.status IN ('accepted', 'revoked')
+                      AND r.supersedes_revision_id IS NOT NULL
+                      AND {cutoff_predicate}
+                ), excluded(instrument_id, instrument_revision_id) AS (
+                    SELECT instrument_id, parent_revision_id
+                    FROM visible_edges
+                    UNION
+                    SELECT e.instrument_id, e.parent_revision_id
+                    FROM visible_edges e
+                    JOIN excluded x
+                      ON x.instrument_id = e.instrument_id
+                     AND x.instrument_revision_id = e.child_revision_id
+                ), accepted_visible AS (
                     SELECT r.*, i.venue AS anchor_venue, i.official_code AS anchor_code,
                            i.identity_epoch, i.identity_binding_fingerprint,
-                           COALESCE(r.canonical_symbol,'') AS canonical_key,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY r.instrument_id
-                                ORDER BY r.revision_number DESC, COALESCE(r.available_at,'') DESC,
-                                         r.ingested_at DESC, r.instrument_revision_id DESC
-                           ) AS rn
+                           p.resource_role, p.completeness_policy,
+                           p.freshness_mode AS policy_freshness_mode
                     FROM universe_instrument_revisions r
                     JOIN universe_instruments i ON i.instrument_id = r.instrument_id
-                    WHERE {' AND '.join(source_clauses)}
+                    JOIN universe_resource_policies p ON p.resource_id = r.resource_id
+                    WHERE r.status = 'accepted'
+                      AND {cutoff_predicate}
+                      AND NOT EXISTS (
+                          SELECT 1 FROM excluded x
+                          WHERE x.instrument_id = r.instrument_id
+                            AND x.instrument_revision_id = r.instrument_revision_id
+                      )
+                ), master_ranked AS (
+                    SELECT a.instrument_id, a.canonical_symbol, a.mapping_basis,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY a.instrument_id
+                               ORDER BY a.revision_number DESC,
+                                        COALESCE(a.available_at,'') DESC,
+                                        a.ingested_at DESC, a.instrument_revision_id DESC
+                           ) AS master_rn
+                    FROM accepted_visible a
+                    WHERE a.resource_role = 'master_snapshot'
+                ), latest_master AS (
+                    SELECT instrument_id, canonical_symbol, mapping_basis
+                    FROM master_ranked
+                    WHERE master_rn = 1
+                ), ranked AS (
+                    SELECT a.*,
+                           CASE WHEN a.resource_role = 'master_snapshot'
+                                THEN a.canonical_symbol
+                                ELSE lm.canonical_symbol
+                           END AS effective_canonical_symbol,
+                           COALESCE(
+                               CASE WHEN a.resource_role = 'master_snapshot'
+                                    THEN a.canonical_symbol
+                                    ELSE lm.canonical_symbol
+                               END, ''
+                           ) AS effective_canonical_key,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY a.instrument_id
+                                ORDER BY a.revision_number DESC, COALESCE(a.available_at,'') DESC,
+                                         a.ingested_at DESC, a.instrument_revision_id DESC
+                           ) AS rn
+                    FROM accepted_visible a
+                    LEFT JOIN latest_master lm ON lm.instrument_id = a.instrument_id
                 ), latest AS (
                     SELECT * FROM ranked WHERE rn = 1
                 )
                 SELECT * FROM latest
                 WHERE {outer_where}
-                ORDER BY anchor_venue ASC, canonical_key ASC, instrument_id ASC
+                ORDER BY anchor_venue ASC, effective_canonical_key ASC, instrument_id ASC
                 LIMIT ?
-                """, source_params + filter_params + cursor_params + [int(limit) + 1]
+                """, ([cutoff] * 4) + ([cutoff] * 4) + filter_params + cursor_params + [int(limit) + 1]
             ).fetchall()]
             selected = base_rows
             page_rows = selected[:int(limit)]
@@ -972,7 +1037,7 @@ class UniverseRepository:
             next_cursor = json.dumps({"cutoff": cutoff, "venue": venue_value, "query": query or "",
                                       "security_type": security_type or "", "listing_status": listing_value or "",
                                       "order": "venue ASC, canonical_symbol ASC, instrument_id ASC",
-                                      "venue_key": last.get("anchor_venue"), "canonical_key": last.get("canonical_symbol") or "",
+                                      "venue_key": last.get("anchor_venue"), "canonical_key": last.get("effective_canonical_key") or "",
                                       "instrument_id": last.get("instrument_id")}, separators=(",", ":"))
         scoped = [venue_value] if venue_value else ["TWSE", "TPEX"]
         per_venue = {}
@@ -1388,6 +1453,42 @@ class UniverseRepository:
                 raise ValueError("corrected universe revision must supersede the latest revision")
             if previous is None and supersedes is not None:
                 raise ValueError("first universe revision cannot supersede another revision")
+            instrument_supersedes = None
+            if supersedes is not None:
+                parent = conn.execute(
+                    """
+                    SELECT ir.instrument_revision_id, ir.instrument_id,
+                           ir.resource_id, ur.logical_revision_key, ir.venue
+                    FROM universe_instrument_revisions ir
+                    JOIN universe_revisions ur
+                      ON ur.universe_revision_id = ir.universe_revision_id
+                    WHERE ir.universe_revision_id = ? AND ir.instrument_id = ?
+                    ORDER BY ir.instrument_revision_id DESC
+                    LIMIT 1
+                    """,
+                    (supersedes, instrument_id),
+                ).fetchone()
+                if parent is None:
+                    foreign_parent = conn.execute(
+                        """
+                        SELECT ir.instrument_id
+                        FROM universe_instrument_revisions ir
+                        WHERE ir.universe_revision_id = ?
+                        LIMIT 1
+                        """,
+                        (supersedes,),
+                    ).fetchone()
+                    if foreign_parent is not None:
+                        raise ValueError("supersedes revision belongs to another instrument")
+                    raise ValueError("supersedes revision has no normalized instrument row")
+                if (
+                    str(parent["resource_id"]) != str(resource_id)
+                    or str(parent["logical_revision_key"]) != str(logical_revision_key)
+                ):
+                    raise ValueError("supersedes revision is outside the logical source chain")
+                if str(parent["venue"]) != payload_venue.value:
+                    raise ValueError("supersedes revision belongs to another venue")
+                instrument_supersedes = str(parent["instrument_revision_id"])
             mapping_basis = payload.get("mapping_basis") if policy["resource_role"] == "master_snapshot" else None
             if policy["resource_role"] == "master_snapshot":
                 canonical_symbol = payload.get("canonical_symbol") or canonical_symbol_for(payload_venue, payload_code)
@@ -1427,11 +1528,6 @@ class UniverseRepository:
                 listing_status = ListingStatus.UNKNOWN.value
                 trading_state = TradingState.UNKNOWN.value
                 membership_state = MembershipState.PARTIAL.value if status == "partial" else MembershipState.BLOCKED.value
-            previous_instrument = conn.execute(
-                "SELECT instrument_revision_id FROM universe_instrument_revisions WHERE instrument_id=? ORDER BY revision_number DESC LIMIT 1",
-                (instrument_id,),
-            ).fetchone()
-            instrument_supersedes = previous_instrument["instrument_revision_id"] if previous_instrument else None
             revision_id = f"urev_{uuid.uuid4().hex}"
             conn.execute("""INSERT INTO universe_revisions
                     (universe_revision_id,resource_id,logical_revision_key,revision_number,raw_resource_revision_id,source_published_at,source_effective_date,fetched_at,received_at,first_observed_at,available_at,ingested_at,status,reason,payload_sha256,normalized_payload_sha256,raw_payload_sha256,query_dimensions_json,source_record_reference,parser_evidence_fingerprint,schema_evidence_fingerprint,schema_fingerprint,parser_version,source_reference,publication_evidence_id,supersedes_revision_id,availability_mode,freshness_mode,freshness_status,current_complete,coverage_complete)

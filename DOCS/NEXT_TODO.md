@@ -137,7 +137,7 @@
 - [x] Local/loopback exact-Origin/Host boundary, writes-disabled default, 1,800-second CSRF, strict DTO/body limits, and browser no-admin-secret guard implemented.
 - [x] Backup/restore validation and `/research` desktop/mobile workspace added.
 - [x] Phase 12 research review queue is merged to `main`; its read-only workflow and governance remain regression boundaries.
-- [x] Phase 13 Universe Foundation is implemented on its dedicated Draft PR branch; the eighth-review remediation is complete and ninth-review P1 remediation is in progress, while merge and Phase 14 remain blocked.
+- [x] Phase 13 Universe Foundation is implemented on its dedicated Draft PR branch; the tenth-review P1/P2 remediation is complete and the branch is awaiting the eleventh review, while merge and Phase 14 remain blocked.
 
 ## Evidence Model v2 Phase 13 — Universe Foundation
 
@@ -152,6 +152,7 @@
 - Registered freshness policy is authoritative: seeded TWSE/TPEx masters remain `unknown_without_official_cadence`, `freshness=unknown`, and `current_complete=false` even when an ingestion payload claims an official cadence or licensed reference.
 - Canonical `.TW`/`.TWO` mapping is generated only in approved master scope. Corroborating observations can preserve an existing master mapping but cannot create one independently; otherwise the result remains `canonical_mapping_unverified`.
 - Historical revocation targets `instrument_revision_id` (not the parent `universe_revision_id`) and removes the old identity from exact/canonical/resolve/list historical references until a corrected accepted revision is cutoff-visible. Master mapping carry-forward is likewise cutoff, publication-evidence and revocation safe.
+- Instrument supersession is derived only from the exact parent `universe_revision_id` in the same instrument/source/logical chain; interleaved sources never share a global instrument predecessor. The effective historical evaluator removes both accepted-correction ancestors and revoked targets transitively, and list pagination applies filters, canonical ordering and cursors only after that effective reference is established.
 
 ## Evidence Model V2 Phase 3 status (2026-08-01)
 
