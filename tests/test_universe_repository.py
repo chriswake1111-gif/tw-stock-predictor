@@ -103,7 +103,8 @@ def test_current_latest_block_does_not_fallback_and_dto_has_no_sensitive_fields(
     repo.add_revision(instrument_id=anchor["instrument_id"], resource_id="twse-universe-master", logical_revision_key="master",
                       revision_number=2, payload=_payload(status="revoked", reason="revoked", available_at="2026-08-22T00:00:00Z", ingested_at="2026-08-22T00:01:00Z", current_complete=False, freshness_status="blocked", supersedes_revision_id=first["universe_revision_id"]), context=context, idempotency_key="two")
     result = repo.get_by_canonical("2330.TW", knowledge_cutoff_at="2026-08-23T00:00:00Z", current=True)
-    assert result["status"] == "needs_human_input"
+    assert result["status"] == "insufficient_data"
+    assert "source_revision_revoked_without_corrected_revision" in result["reasons"]
     assert result["operational_freshness"]["latest_visible_state"] == "revoked"
     text = str(result)
     assert "idempotency_key" not in text and "payload_fingerprint" not in text and "payload_sha256" not in text

@@ -9,7 +9,7 @@ Phase 13 supplies neutral identity and data-quality context for Taiwan listed in
 1. The historical/reference channel selects the latest safe accepted identity/provenance visible at the cutoff.
 2. The operational channel selects the actual latest resource or instrument state visible at that cutoff.
 
-Provider errors, partial observations and schema changes may therefore preserve an older reference while reporting a blocked operational state. Revocation is stronger than transport failure and never becomes a hidden fallback. The legacy `current` argument is internal compatibility only and cannot bypass the cutoff.
+Provider errors, partial observations and schema changes may therefore preserve an older reference while reporting a blocked operational state. Revocation is stronger than transport failure: the visible revoke targets the immutable `instrument_revision_id` domain, and without a cutoff-visible corrected accepted revision the old identity is not returned as a safe historical reference. The legacy `current` argument is internal compatibility only and cannot bypass the cutoff.
 
 List/search selects the latest safe accepted reference for each instrument before
 applying query, security-type, listing-status, cursor, or page predicates. This
@@ -30,7 +30,7 @@ Operational observations without a source publication instant are visible only
 from their server-side ingested_at observation boundary. They remain blocked
 operational health and never become a historical identity reference.
 
-`universe_instruments` is an immutable anchor keyed by venue, source code and identity epoch. Same-code reuse requires explicit termination and no proven continuity; a successor gets a new anchor and append-only alias. `universe_symbol_mapping_v1` creates `.TW` or `.TWO` only for an approved master resource scope and verified identity. Corroborating/manual rows can preserve an existing master mapping but cannot create one independently; without master evidence the canonical field remains null and the result is `canonical_mapping_unverified`. `security_type=unknown` remains unknown.
+`universe_instruments` is an immutable anchor keyed by venue, source code and identity epoch. Same-code reuse requires explicit termination and no proven continuity; a successor gets a new anchor and append-only alias. `universe_symbol_mapping_v1` creates `.TW` or `.TWO` only for an approved master resource scope and verified identity. A carried mapping is effective only when the approved master is safe at the relevant knowledge cutoff: its availability and publication evidence must be visible, and it must not be targeted by a visible instrument-revision revoke. Corroborating/manual rows cannot inherit a future, unavailable or revoked master mapping; read-time projection reuses the same safe master channel, and without such evidence the canonical field remains null and the result is `canonical_mapping_unverified`. `security_type=unknown` remains unknown.
 
 ## Source boundary
 

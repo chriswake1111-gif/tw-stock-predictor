@@ -151,6 +151,44 @@ class UniverseRepository:
             )
         )"""
 
+    @classmethod
+    def _visible_revoked_instrument_revision_ids(
+        cls,
+        conn: sqlite3.Connection,
+        *,
+        instrument_ids: list[str],
+        cutoff: str,
+    ) -> dict[str, set[str]]:
+        """Return instrument-revision IDs revoked by a visible event.
+
+        ``universe_instrument_revisions.supersedes_revision_id`` points to an
+        ``instrument_revision_id`` (``uirev_*``), while the parent resource
+        revision uses the separate ``universe_revision_id`` (``urev_*``)
+        domain.  Historical eligibility must stay in the instrument-revision
+        domain; mixing the two silently resurrects revoked identities.
+        """
+        ids = list(dict.fromkeys(str(value) for value in instrument_ids))
+        if not ids:
+            return {}
+        placeholders = cls._sql_placeholders(ids)
+        rows = conn.execute(
+            f"""
+            SELECT r.instrument_id, r.supersedes_revision_id
+            FROM universe_instrument_revisions r
+            WHERE r.instrument_id IN ({placeholders})
+              AND r.status = 'revoked'
+              AND r.supersedes_revision_id IS NOT NULL
+              AND {cls._cutoff_where('r')}
+            """,
+            ids + [cutoff, cutoff, cutoff, cutoff],
+        ).fetchall()
+        revoked: dict[str, set[str]] = {}
+        for row in rows:
+            revoked.setdefault(str(row["instrument_id"]), set()).add(
+                str(row["supersedes_revision_id"])
+            )
+        return revoked
+
     @staticmethod
     def _operational_where(alias: str = "r") -> str:
         """Visibility for the current/resource channel.
@@ -278,50 +316,105 @@ class UniverseRepository:
             return mode, FreshnessStatus.UNKNOWN.value
         return mode, supplied_status
 
-    @staticmethod
-    def _latest_master_mapping(conn: sqlite3.Connection, *, instrument_id: str) -> dict[str, Any] | None:
-        """Return the latest effective approved master mapping, if any.
+    @classmethod
+    def _latest_master_mappings(
+        cls,
+        conn: sqlite3.Connection,
+        *,
+        instrument_ids: list[str],
+        cutoff: str,
+    ) -> dict[str, dict[str, Any] | None]:
+        """Return safe approved master mappings at one historical boundary.
 
         Corroborating/manual observations can enrich an existing anchored
         identity, but they cannot manufacture a ``.TW``/``.TWO`` mapping.  A
         latest accepted master row without a canonical mapping is therefore a
         deliberate fail-closed result rather than a reason to resurrect an
-        older mapping.
+        older mapping.  Availability, publication evidence and revocation are
+        evaluated with the same cutoff contract as historical references.
         """
+        ids = list(dict.fromkeys(str(value) for value in instrument_ids))
+        if not ids:
+            return {}
+        placeholders = cls._sql_placeholders(ids)
         rows = [dict(row) for row in conn.execute(
-            """
-            SELECT r.universe_revision_id, r.canonical_symbol, r.mapping_basis
+            f"""
+            SELECT r.instrument_id, r.instrument_revision_id, r.canonical_symbol,
+                   r.mapping_basis, r.revision_number, r.available_at, r.ingested_at
             FROM universe_instrument_revisions r
             JOIN universe_resource_policies p ON p.resource_id = r.resource_id
-            WHERE r.instrument_id = ?
+            WHERE r.instrument_id IN ({placeholders})
               AND r.status = 'accepted'
               AND p.resource_role = 'master_snapshot'
-            ORDER BY r.revision_number DESC, COALESCE(r.available_at,'' ) DESC,
-                     r.ingested_at DESC, r.instrument_revision_id DESC
-            """, (instrument_id,)
+              AND {cls._cutoff_where('r')}
+            ORDER BY r.instrument_id, r.revision_number DESC,
+                     COALESCE(r.available_at,'' ) DESC, r.ingested_at DESC,
+                     r.instrument_revision_id DESC
+            """, ids + [cutoff, cutoff, cutoff, cutoff]
         ).fetchall()]
-        if not rows:
-            return None
-        revoked = {
-            str(row[0]) for row in conn.execute(
-                """
-                SELECT supersedes_revision_id
-                FROM universe_instrument_revisions
-                WHERE instrument_id = ? AND status = 'revoked'
-                  AND supersedes_revision_id IS NOT NULL
-                """, (instrument_id,)
-            ).fetchall()
-        }
+        revoked = cls._visible_revoked_instrument_revision_ids(
+            conn, instrument_ids=ids, cutoff=cutoff,
+        )
+        candidates: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
-            if str(row.get("universe_revision_id")) in revoked:
-                continue
-            if row.get("canonical_symbol"):
-                return {
-                    "canonical_symbol": row["canonical_symbol"],
-                    "mapping_basis": row.get("mapping_basis"),
+            candidates.setdefault(str(row["instrument_id"]), []).append(row)
+        result: dict[str, dict[str, Any] | None] = {}
+        for instrument_id in ids:
+            blocked = revoked.get(instrument_id, set())
+            safe = next(
+                (
+                    row for row in candidates.get(instrument_id, [])
+                    if str(row["instrument_revision_id"]) not in blocked
+                ),
+                None,
+            )
+            result[instrument_id] = (
+                {
+                    "canonical_symbol": safe["canonical_symbol"],
+                    "mapping_basis": safe.get("mapping_basis"),
                 }
-            return None
-        return None
+                if safe and safe.get("canonical_symbol")
+                else None
+            )
+        return result
+
+    @classmethod
+    def _latest_master_mapping(
+        cls, conn: sqlite3.Connection, *, instrument_id: str, cutoff: str,
+    ) -> dict[str, Any] | None:
+        return cls._latest_master_mappings(
+            conn, instrument_ids=[instrument_id], cutoff=cutoff,
+        ).get(str(instrument_id))
+
+    @classmethod
+    def _apply_effective_master_mapping(
+        cls,
+        conn: sqlite3.Connection,
+        row: dict[str, Any],
+        *,
+        cutoff: str,
+        master_mappings: dict[str, dict[str, Any] | None] | None = None,
+    ) -> dict[str, Any]:
+        """Project only a cutoff-safe master mapping onto non-master rows."""
+        value = dict(row)
+        if value.get("resource_role") == "master_snapshot":
+            return value
+        mapping = (
+            master_mappings.get(str(value.get("instrument_id")))
+            if master_mappings is not None
+            else cls._latest_master_mapping(
+                conn, instrument_id=str(value.get("instrument_id")), cutoff=cutoff,
+            )
+        )
+        if mapping:
+            value["canonical_symbol"] = mapping["canonical_symbol"]
+            value["mapping_basis"] = mapping.get("mapping_basis")
+        else:
+            value["canonical_symbol"] = None
+            value["mapping_basis"] = None
+            if value.get("status") == "accepted" and not value.get("reason"):
+                value["reason"] = "canonical_mapping_unverified"
+        return value
 
     def _select_historical_reference(self, conn: sqlite3.Connection, *, instrument_id: str,
                                      cutoff: str) -> dict[str, Any] | None:
@@ -329,8 +422,8 @@ class UniverseRepository:
 
         Accepted rows remain the reference across a later provider/partial/schema
         observation. A visible revoke that targets that row removes it from the
-        eligible set; the public composition may still expose it as a historical
-        prior reference while the operational channel reports the revoke.
+        eligible set; with no corrected accepted revision, no prior row is
+        returned as a safe historical identity.
         """
         rows = [dict(row) for row in conn.execute(
             f"""
@@ -346,6 +439,19 @@ class UniverseRepository:
                      r.ingested_at DESC, r.instrument_revision_id DESC
             """, (instrument_id, cutoff, cutoff, cutoff, cutoff)
         ).fetchall()]
+        master_mappings = self._latest_master_mappings(
+            conn, instrument_ids=[instrument_id], cutoff=cutoff,
+        )
+        rows = [
+            self._apply_effective_master_mapping(
+                conn, row, cutoff=cutoff, master_mappings=master_mappings,
+            )
+            for row in rows
+        ]
+        revoked_by_id = self._visible_revoked_instrument_revision_ids(
+            conn, instrument_ids=[instrument_id], cutoff=cutoff,
+        )
+        revoked_ids = revoked_by_id.get(str(instrument_id), set())
         for row in rows:
             parent = conn.execute(
                 "SELECT logical_revision_key FROM universe_revisions WHERE universe_revision_id=?",
@@ -365,33 +471,27 @@ class UniverseRepository:
                        p.freshness_mode AS policy_freshness_mode
                 FROM universe_instrument_revisions r JOIN universe_instruments i ON i.instrument_id=r.instrument_id
                 JOIN universe_resource_policies p ON p.resource_id = r.resource_id
-                WHERE r.instrument_id=? AND r.status='partial' AND r.canonical_symbol IS NOT NULL AND {self._cutoff_where('r')}
+                WHERE r.instrument_id=? AND r.status='partial' AND {self._cutoff_where('r')}
                 ORDER BY r.revision_number DESC, COALESCE(r.available_at,'' ) DESC,
                          r.ingested_at DESC, r.instrument_revision_id DESC LIMIT 1
                 """, (instrument_id, cutoff, cutoff, cutoff, cutoff)
             ).fetchone()
             value = self._row(partial)
-            if value:
+            if value and not revoked_ids:
+                value = self._apply_effective_master_mapping(
+                    conn,
+                    value,
+                    cutoff=cutoff,
+                    master_mappings=master_mappings,
+                )
+            if value and not revoked_ids:
                 parent = conn.execute("SELECT logical_revision_key FROM universe_revisions WHERE universe_revision_id=?", (value.get("universe_revision_id"),)).fetchone()
                 value["logical_revision_key"] = parent[0] if parent else None
-            return value
-        visible_revokes = [dict(row) for row in conn.execute(
-            f"""
-            SELECT r.universe_revision_id, r.supersedes_revision_id, r.ingested_at
-            FROM universe_instrument_revisions r
-            WHERE r.instrument_id = ? AND r.status = 'revoked' AND {self._cutoff_where('r')}
-            """, (instrument_id, cutoff, cutoff, cutoff, cutoff)
-        ).fetchall()]
-        revoked_ids = {
-            row.get("supersedes_revision_id") for row in visible_revokes
-            if row.get("supersedes_revision_id")
-        }
+            return value if not revoked_ids else None
         for row in rows:
-            if row.get("universe_revision_id") not in revoked_ids:
+            if str(row.get("instrument_revision_id")) not in revoked_ids:
                 return row
-        # Keep a prior immutable identity available for a human-visible revoke;
-        # _compose_result marks it needs_human_input and never current_complete.
-        return rows[0]
+        return None
 
     @staticmethod
     def _sql_placeholders(values: list[str]) -> str:
@@ -430,19 +530,21 @@ class UniverseRepository:
         for row in accepted_rows:
             accepted_by_id.setdefault(str(row["instrument_id"]), []).append(row)
 
-        revoke_rows = [dict(row) for row in conn.execute(
-            f"""
-            SELECT r.instrument_id, r.supersedes_revision_id
-            FROM universe_instrument_revisions r
-            WHERE r.instrument_id IN ({placeholders})
-              AND r.status = 'revoked' AND {self._cutoff_where('r')}
-            """, ids + [cutoff, cutoff, cutoff, cutoff]
-        ).fetchall()]
-        revoked_by_id: dict[str, set[str]] = {}
-        for row in revoke_rows:
-            superseded = row.get("supersedes_revision_id")
-            if superseded:
-                revoked_by_id.setdefault(str(row["instrument_id"]), set()).add(str(superseded))
+        revoked_by_id = self._visible_revoked_instrument_revision_ids(
+            conn, instrument_ids=ids, cutoff=cutoff,
+        )
+        master_mappings = self._latest_master_mappings(
+            conn, instrument_ids=ids, cutoff=cutoff,
+        )
+        accepted_by_id = {
+            instrument_id: [
+                self._apply_effective_master_mapping(
+                    conn, row, cutoff=cutoff, master_mappings=master_mappings,
+                )
+                for row in rows_for_instrument
+            ]
+            for instrument_id, rows_for_instrument in accepted_by_id.items()
+        }
 
         partial_rows = [dict(row) for row in conn.execute(
             f"""
@@ -454,7 +556,7 @@ class UniverseRepository:
             JOIN universe_revisions ur ON ur.universe_revision_id = r.universe_revision_id
             JOIN universe_resource_policies p ON p.resource_id = r.resource_id
             WHERE r.instrument_id IN ({placeholders})
-              AND r.status = 'partial' AND r.canonical_symbol IS NOT NULL
+              AND r.status = 'partial'
               AND {self._cutoff_where('r')}
             ORDER BY r.instrument_id, r.revision_number DESC,
                      COALESCE(r.available_at,'') DESC, r.ingested_at DESC,
@@ -463,7 +565,13 @@ class UniverseRepository:
         ).fetchall()]
         partial_by_id: dict[str, dict[str, Any]] = {}
         for row in partial_rows:
-            partial_by_id.setdefault(str(row["instrument_id"]), row)
+            instrument_id = str(row["instrument_id"])
+            partial_by_id.setdefault(
+                instrument_id,
+                self._apply_effective_master_mapping(
+                    conn, row, cutoff=cutoff, master_mappings=master_mappings,
+                ),
+            )
 
         result: dict[str, dict[str, Any] | None] = {}
         for instrument_id in ids:
@@ -471,11 +579,15 @@ class UniverseRepository:
             if accepted:
                 revoked = revoked_by_id.get(instrument_id, set())
                 result[instrument_id] = next(
-                    (row for row in accepted if row.get("universe_revision_id") not in revoked),
-                    accepted[0],
+                    (row for row in accepted if str(row.get("instrument_revision_id")) not in revoked),
+                    None,
                 )
             else:
-                result[instrument_id] = partial_by_id.get(instrument_id)
+                result[instrument_id] = (
+                    None
+                    if revoked_by_id.get(instrument_id)
+                    else partial_by_id.get(instrument_id)
+                )
         return result
 
     def _select_operational_state(self, conn: sqlite3.Connection, *, instrument_id: str,
@@ -732,6 +844,17 @@ class UniverseRepository:
             instrument_id = candidates[0]["instrument_id"]
             reference = self._select_historical_reference(conn, instrument_id=instrument_id, cutoff=cutoff)
             operational = self._select_operational_state(conn, instrument_id=instrument_id, cutoff=cutoff, reference=reference)
+            # A canonical lookup is valid only when the effective historical
+            # reference still carries the requested, cutoff-safe mapping.  A
+            # stale persisted corroborating suffix must not resurrect a
+            # revoked or not-yet-visible master mapping.
+            if reference is None or reference.get("canonical_symbol") != canonical:
+                return self._compose_result(
+                    None,
+                    operational,
+                    cutoff=cutoff,
+                    missing_reason="canonical_mapping_unverified",
+                )
             return self._compose_result(reference, operational, cutoff=cutoff)
 
     def get_by_symbol(self, canonical_symbol: str, *, knowledge_cutoff_at: str, current: bool = False) -> dict[str, Any]:
@@ -1273,7 +1396,17 @@ class UniverseRepository:
                 # Non-master observations may only carry forward a mapping
                 # already established by an effective approved master row.
                 # Caller-supplied canonical symbols are intentionally ignored.
-                master_mapping = self._latest_master_mapping(conn, instrument_id=instrument_id)
+                # Carry-forward is bounded by the corroborating observation's
+                # knowledge boundary.  The observation must still have an
+                # explicit available instant; the server ingestion timestamp
+                # is when that observation became known to the repository.
+                master_mapping = (
+                    self._latest_master_mapping(
+                        conn, instrument_id=instrument_id, cutoff=ingested_at,
+                    )
+                    if status == "accepted" and available_at is not None
+                    else None
+                )
                 canonical_symbol = master_mapping["canonical_symbol"] if master_mapping else None
                 mapping_basis = master_mapping.get("mapping_basis") if master_mapping else None
                 if status == "accepted" and canonical_symbol is None:
