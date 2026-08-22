@@ -186,11 +186,18 @@ def test_manual_publication_evidence_uses_visibility_cutoff_and_approved_point(t
     db, repo = _repo(tmp_path)
     context = _context("manual-later")
     anchor = _anchor(repo, context)
+    # Manual observations may enrich a mapping, but the approved master scope
+    # must establish the canonical identity first.
+    repo.add_revision(
+        instrument_id=anchor["instrument_id"], resource_id="twse-universe-master",
+        logical_revision_key="master-2330", revision_number=1,
+        payload=_payload(), context=context, idempotency_key="manual-master",
+    )
     termination_raw_id, termination_raw_hash = raw_for(db, "twse-universe-termination")
     evidence = _publication_evidence(db, ingested_at="2026-08-22T00:00:00Z")
     repo.add_revision(
         instrument_id=anchor["instrument_id"], resource_id="twse-universe-termination",
-        logical_revision_key="termination-2330", revision_number=1,
+        logical_revision_key="termination-2330", revision_number=2,
         payload=_payload(
             available_at="2026-08-21T00:01:00Z",
             publication_evidence_id=evidence["publication_evidence_id"],
@@ -202,8 +209,8 @@ def test_manual_publication_evidence_uses_visibility_cutoff_and_approved_point(t
     )
     before = repo.get_by_canonical("2330.TW", knowledge_cutoff_at="2026-08-21T23:59:59Z")
     after = repo.get_by_canonical("2330.TW", knowledge_cutoff_at="2026-08-22T00:00:00Z")
-    assert before["status"] == "insufficient_data"
-    assert before["identity_reference"] is None
+    assert before["status"] == "partial"
+    assert before["identity_reference"]["canonical_symbol"] == "2330.TW"
     assert after["identity_reference"]["canonical_symbol"] == "2330.TW"
 
 

@@ -94,7 +94,7 @@ def test_historical_reference_and_operational_state_are_independent(tmp_path):
 
     before = repo.get_by_canonical("2330.TW", knowledge_cutoff_at="2026-08-21T00:03:30Z")
     assert before["provenance"]["operational_revision_id"] == first["universe_revision_id"]
-    assert before["status"] == "available"
+    assert before["status"] == "partial"
 
     future = repo.add_resource_revision(
         resource_id="twse-universe-master", logical_revision_key="master", revision_number=3,
@@ -133,7 +133,7 @@ def test_resource_failure_without_instrument_row_is_visible_per_venue(tmp_path, 
     assert result["items"]
     assert result["status"] == ("needs_human_input" if status == "schema_changed" else "partial")
     twse_only = repo.list_instruments(knowledge_cutoff_at="2026-08-21T00:05:00Z", venue="TWSE", limit=25)
-    assert twse_only["per_venue_status"]["TWSE"] == "available"
+    assert twse_only["per_venue_status"]["TWSE"] == "partial"
 
 
 def test_reverse_venue_failure_does_not_hide_healthy_venue(tmp_path):
@@ -159,7 +159,7 @@ def test_reverse_venue_failure_does_not_hide_healthy_venue(tmp_path):
         context=context, idempotency_key="reverse-twse",
     )
     result = repo.list_instruments(knowledge_cutoff_at="2026-08-21T00:05:00Z", limit=25)
-    assert result["per_venue_status"] == {"TWSE": "partial", "TPEX": "available"}
+    assert result["per_venue_status"] == {"TWSE": "partial", "TPEX": "partial"}
     assert result["status"] == "partial"
 
 
@@ -181,8 +181,8 @@ def test_empty_complete_and_empty_blocked_lists_are_distinct(tmp_path):
         )
     complete = repo.list_instruments(knowledge_cutoff_at="2026-08-21T00:05:00Z", limit=25)
     assert complete["items"] == []
-    assert complete["status"] == "available"
-    assert complete["per_venue_status"] == {"TWSE": "available", "TPEX": "available"}
+    assert complete["status"] == "partial"
+    assert complete["per_venue_status"] == {"TWSE": "partial", "TPEX": "partial"}
 
     blocked_db, blocked_repo = _repo(tmp_path / "blocked")
     blocked_context = _ctx("blocked")

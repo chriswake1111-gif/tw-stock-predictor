@@ -104,7 +104,7 @@ def test_latest_failure_without_available_at_is_visible_only_after_ingested_cuto
 
     before = repo.get_by_canonical("2330.TW", knowledge_cutoff_at="2026-08-21T00:03:30Z")
     assert before["provenance"]["operational_revision_id"] == first["universe_revision_id"]
-    assert before["status"] == "available"
+    assert before["status"] == "partial"
 
     after = repo.get_by_canonical("2330.TW", knowledge_cutoff_at="2026-08-21T00:05:00Z")
     assert after["identity_reference"]["instrument_id"] == anchor["instrument_id"]

@@ -193,7 +193,7 @@ def test_list_composes_both_venues_and_honors_explicit_venue_filter(tmp_path):
     assert {item["identity_reference"]["venue"] for item in all_venues["items"]} == {"TWSE", "TPEX"}
     tpex_only = repo.list_instruments(knowledge_cutoff_at="2026-08-21T00:05:00Z", venue="TPEX", limit=100)
     assert {item["identity_reference"]["venue"] for item in tpex_only["items"]} == {"TPEX"}
-    assert tpex_only["per_venue_status"] == {"TPEX": "available"}
+    assert tpex_only["per_venue_status"] == {"TPEX": "partial"}
 
 
 def test_list_filters_apply_after_latest_reference_selection(tmp_path):

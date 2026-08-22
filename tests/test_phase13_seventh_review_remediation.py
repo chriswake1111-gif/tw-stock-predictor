@@ -55,7 +55,7 @@ def test_operational_event_cannot_store_or_establish_master_completeness(tmp_pat
     assert result["per_venue_status"]["TPEX"] == "insufficient_data"
 
 
-def test_eligible_master_plus_accepted_event_is_available(tmp_path):
+def test_seeded_unknown_master_plus_accepted_event_remains_partial(tmp_path):
     db, repo = _repo(tmp_path)
     context, _, _ = _add_master(repo, db, code="6488", key="master-with-event")
     event = repo.add_resource_revision(
@@ -78,7 +78,7 @@ def test_eligible_master_plus_accepted_event_is_available(tmp_path):
     result = repo.list_instruments(
         knowledge_cutoff_at="2026-08-21T00:04:00Z", venue="TPEX", limit=25,
     )
-    assert result["per_venue_status"]["TPEX"] == "available"
+    assert result["per_venue_status"]["TPEX"] == "partial"
 
 
 @pytest.mark.parametrize(

@@ -241,7 +241,13 @@ class UniverseRepository:
         Event and corroborating resources can contribute operational blockers,
         but can never establish master completeness.
         """
-        freshness_mode = str(payload.get("freshness_mode") or policy["freshness_mode"])
+        # Freshness policy is registered/versioned evidence, not an ingestion
+        # claim.  In particular, a caller must not promote a seeded master
+        # whose cadence is still unknown by sending an official/licensed mode.
+        freshness_mode = str(policy["freshness_mode"])
+        freshness_status = str(payload.get("freshness_status") or FreshnessStatus.UNKNOWN.value)
+        if freshness_mode == FreshnessMode.UNKNOWN_WITHOUT_OFFICIAL_CADENCE.value:
+            freshness_status = FreshnessStatus.UNKNOWN.value
         return (
             status == "accepted"
             and str(policy["resource_role"]) == "master_snapshot"
@@ -250,9 +256,72 @@ class UniverseRepository:
                 FreshnessMode.OFFICIAL_CADENCE_WINDOW.value,
                 FreshnessMode.LICENSED_REFERENCE.value,
             }
-            and payload.get("freshness_status") == FreshnessStatus.CURRENT.value
+            and freshness_status == FreshnessStatus.CURRENT.value
             and bool(payload.get("coverage_complete", False))
         )
+
+    @staticmethod
+    def _effective_freshness_fields(*, policy: sqlite3.Row | dict[str, Any],
+                                    payload: dict[str, Any], status: str) -> tuple[str, str]:
+        """Return the registered freshness mode and its safe status.
+
+        Resource policy rows are immutable registry evidence.  Payload modes
+        are accepted as descriptive input only and are never persisted as a
+        policy override.  An accepted master under the seeded
+        ``unknown_without_official_cadence`` policy therefore remains
+        explicitly unknown even when a caller claims ``current`` or an
+        official cadence window.
+        """
+        mode = str(policy["freshness_mode"])
+        supplied_status = str(payload.get("freshness_status") or FreshnessStatus.UNKNOWN.value)
+        if status == "accepted" and mode == FreshnessMode.UNKNOWN_WITHOUT_OFFICIAL_CADENCE.value:
+            return mode, FreshnessStatus.UNKNOWN.value
+        return mode, supplied_status
+
+    @staticmethod
+    def _latest_master_mapping(conn: sqlite3.Connection, *, instrument_id: str) -> dict[str, Any] | None:
+        """Return the latest effective approved master mapping, if any.
+
+        Corroborating/manual observations can enrich an existing anchored
+        identity, but they cannot manufacture a ``.TW``/``.TWO`` mapping.  A
+        latest accepted master row without a canonical mapping is therefore a
+        deliberate fail-closed result rather than a reason to resurrect an
+        older mapping.
+        """
+        rows = [dict(row) for row in conn.execute(
+            """
+            SELECT r.universe_revision_id, r.canonical_symbol, r.mapping_basis
+            FROM universe_instrument_revisions r
+            JOIN universe_resource_policies p ON p.resource_id = r.resource_id
+            WHERE r.instrument_id = ?
+              AND r.status = 'accepted'
+              AND p.resource_role = 'master_snapshot'
+            ORDER BY r.revision_number DESC, COALESCE(r.available_at,'' ) DESC,
+                     r.ingested_at DESC, r.instrument_revision_id DESC
+            """, (instrument_id,)
+        ).fetchall()]
+        if not rows:
+            return None
+        revoked = {
+            str(row[0]) for row in conn.execute(
+                """
+                SELECT supersedes_revision_id
+                FROM universe_instrument_revisions
+                WHERE instrument_id = ? AND status = 'revoked'
+                  AND supersedes_revision_id IS NOT NULL
+                """, (instrument_id,)
+            ).fetchall()
+        }
+        for row in rows:
+            if str(row.get("universe_revision_id")) in revoked:
+                continue
+            if row.get("canonical_symbol"):
+                return {
+                    "canonical_symbol": row["canonical_symbol"],
+                    "mapping_basis": row.get("mapping_basis"),
+                }
+            return None
+        return None
 
     def _select_historical_reference(self, conn: sqlite3.Connection, *, instrument_id: str,
                                      cutoff: str) -> dict[str, Any] | None:
@@ -267,7 +336,8 @@ class UniverseRepository:
             f"""
             SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
                    i.first_observed_at AS anchor_first_observed_at,
-                   p.resource_role, p.completeness_policy
+                   p.resource_role, p.completeness_policy,
+                   p.freshness_mode AS policy_freshness_mode
             FROM universe_instrument_revisions r
             JOIN universe_instruments i ON i.instrument_id = r.instrument_id
             JOIN universe_resource_policies p ON p.resource_id = r.resource_id
@@ -291,7 +361,8 @@ class UniverseRepository:
                 f"""
                 SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
                        i.first_observed_at AS anchor_first_observed_at,
-                       p.resource_role, p.completeness_policy
+                       p.resource_role, p.completeness_policy,
+                       p.freshness_mode AS policy_freshness_mode
                 FROM universe_instrument_revisions r JOIN universe_instruments i ON i.instrument_id=r.instrument_id
                 JOIN universe_resource_policies p ON p.resource_id = r.resource_id
                 WHERE r.instrument_id=? AND r.status='partial' AND r.canonical_symbol IS NOT NULL AND {self._cutoff_where('r')}
@@ -414,7 +485,8 @@ class UniverseRepository:
             f"""
             SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
                    i.first_observed_at AS anchor_first_observed_at,
-                   p.resource_role, p.completeness_policy
+                   p.resource_role, p.completeness_policy,
+                   p.freshness_mode AS policy_freshness_mode
             FROM universe_instrument_revisions r
             JOIN universe_instruments i ON i.instrument_id = r.instrument_id
             JOIN universe_resource_policies p ON p.resource_id = r.resource_id
@@ -467,7 +539,8 @@ class UniverseRepository:
             f"""
             SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
                    i.first_observed_at AS anchor_first_observed_at,
-                   p.resource_role, p.completeness_policy
+                   p.resource_role, p.completeness_policy,
+                   p.freshness_mode AS policy_freshness_mode
             FROM universe_instrument_revisions r
             JOIN universe_instruments i ON i.instrument_id = r.instrument_id
             JOIN universe_resource_policies p ON p.resource_id = r.resource_id
@@ -578,7 +651,16 @@ class UniverseRepository:
             reasons.append(str(op["reason"]))
         if reference.get("canonical_symbol") is None:
             reasons.append("canonical_mapping_unverified")
+        policy_freshness_mode = completeness_source.get("policy_freshness_mode") or completeness_source.get("freshness_mode")
         freshness = completeness_source.get("freshness_status") or FreshnessStatus.UNKNOWN.value
+        if (
+            completeness_source.get("resource_role") == "master_snapshot"
+            and policy_freshness_mode == FreshnessMode.UNKNOWN_WITHOUT_OFFICIAL_CADENCE.value
+        ):
+            # Re-evaluate legacy rows against the registered policy at read
+            # time as well; persisted caller claims must never upgrade a
+            # seeded unknown-cadence master.
+            freshness = FreshnessStatus.UNKNOWN.value
         if status != "accepted" and freshness == FreshnessStatus.CURRENT.value:
             freshness = FreshnessStatus.BLOCKED.value
         if freshness == FreshnessStatus.STALE.value:
@@ -591,6 +673,10 @@ class UniverseRepository:
             and freshness == FreshnessStatus.CURRENT.value
             and completeness_source.get("resource_role") == "master_snapshot"
             and completeness_source.get("completeness_policy") == "accepted_master_complete"
+            and policy_freshness_mode in {
+                FreshnessMode.OFFICIAL_CADENCE_WINDOW.value,
+                FreshnessMode.LICENSED_REFERENCE.value,
+            }
         )
         result = evaluate_universe_status(self._reference(reference), freshness=freshness,
                                           current_complete=current_complete, reasons=tuple(reasons))
@@ -627,6 +713,7 @@ class UniverseRepository:
     def get_by_canonical(self, canonical_symbol: str, *, knowledge_cutoff_at: str,
                          current: bool = False) -> dict[str, Any]:
         venue, code = parse_canonical_symbol(canonical_symbol)
+        canonical = canonical_symbol_for(venue, code)
         cutoff = validate_knowledge_cutoff_at(knowledge_cutoff_at)
         with self.read_transaction() as conn:
             candidates = [dict(row) for row in conn.execute(
@@ -635,10 +722,10 @@ class UniverseRepository:
                        i.first_observed_at AS anchor_first_observed_at
                 FROM universe_instrument_revisions r
                 JOIN universe_instruments i ON i.instrument_id = r.instrument_id
-                WHERE i.venue = ? AND i.official_code = ? AND {self._cutoff_where('r')}
+                WHERE i.venue = ? AND i.official_code = ? AND r.canonical_symbol = ? AND {self._cutoff_where('r')}
                 ORDER BY r.revision_number DESC, COALESCE(r.available_at,'' ) DESC,
                          r.ingested_at DESC, r.instrument_revision_id DESC
-                """, (venue.value, code, cutoff, cutoff, cutoff, cutoff)
+                """, (venue.value, code, canonical, cutoff, cutoff, cutoff, cutoff)
             ).fetchall()]
             if not candidates:
                 return self._compose_result(None, None, cutoff=cutoff, missing_reason="instrument_not_found")
@@ -794,10 +881,11 @@ class UniverseRepository:
     def _latest_resource_statuses(self, conn: sqlite3.Connection, *, venues: list[str], cutoff: str) -> dict[str, str]:
         """Compose resource health per venue without cross-resource masking.
 
-        Each resource gets its own latest visible operational revision first.
+        Each logical feed gets its own latest visible operational revision first.
         Only then are those resource states reduced to the venue using the
-        locked status precedence.  A newer healthy resource therefore cannot
-        hide a blocker from a different resource in the same venue.
+        locked status precedence.  A newer healthy resource or logical feed
+        therefore cannot hide a blocker from a different feed in the same
+        venue.
         """
         scoped = list(dict.fromkeys(str(value) for value in venues))
         if not scoped:
@@ -810,7 +898,7 @@ class UniverseRepository:
                        p.resource_role, p.completeness_policy,
                        dr.market AS resource_market,
                        ROW_NUMBER() OVER (
-                           PARTITION BY dr.market, ur.resource_id
+                           PARTITION BY dr.market, ur.resource_id, ur.logical_revision_key
                             ORDER BY ur.revision_number DESC,
                                      COALESCE(ur.available_at,'') DESC,
                                      ur.ingested_at DESC,
@@ -857,16 +945,25 @@ class UniverseRepository:
             return "needs_human_input"
         if resource_role != "master_snapshot" and status == "accepted":
             return None
+        freshness_mode = latest.get("policy_freshness_mode") or latest.get("freshness_mode")
+        freshness_status = latest.get("freshness_status")
+        current_complete = bool(latest.get("current_complete"))
+        if (
+            resource_role == "master_snapshot"
+            and freshness_mode == FreshnessMode.UNKNOWN_WITHOUT_OFFICIAL_CADENCE.value
+        ):
+            freshness_status = FreshnessStatus.UNKNOWN.value
+            current_complete = False
         if (
             status != "accepted"
             or latest.get("available_at") is None
             or str(latest.get("available_at")) > cutoff
-            or latest.get("freshness_status") in {None, "unknown", "stale", "blocked"}
+            or freshness_status in {None, "unknown", "stale", "blocked"}
         ):
             return "partial"
         if latest.get("completeness_policy") != "accepted_master_complete":
             return "partial"
-        if not bool(latest.get("current_complete")):
+        if not current_complete:
             return "partial"
         return "available"
 
@@ -1046,6 +1143,9 @@ class UniverseRepository:
             current_complete = self._effective_current_complete(
                 policy=policy, payload=payload, status=status,
             )
+            freshness_mode, freshness_status = self._effective_freshness_fields(
+                policy=policy, payload=payload, status=status,
+            )
             revision_id = f"urev_{uuid.uuid4().hex}"
             conn.execute("""INSERT INTO universe_revisions
                 (universe_revision_id,resource_id,logical_revision_key,revision_number,raw_resource_revision_id,source_published_at,source_effective_date,fetched_at,received_at,first_observed_at,available_at,ingested_at,status,reason,payload_sha256,normalized_payload_sha256,raw_payload_sha256,query_dimensions_json,source_record_reference,parser_evidence_fingerprint,schema_evidence_fingerprint,schema_fingerprint,parser_version,source_reference,publication_evidence_id,supersedes_revision_id,availability_mode,freshness_mode,freshness_status,current_complete,coverage_complete)
@@ -1055,7 +1155,7 @@ class UniverseRepository:
                 status, reason, normalized_hash, provenance["normalized_payload_sha256"], provenance["raw_payload_sha256"], provenance["query_dimensions_json"],
                 provenance["source_record_reference"], provenance["parser_evidence_fingerprint"], provenance["schema_evidence_fingerprint"], provenance["schema_fingerprint"],
                 provenance["parser_version"], payload.get("source_reference"), payload.get("publication_evidence_id"), supersedes,
-                policy["availability_mode"], payload.get("freshness_mode", policy["freshness_mode"]), payload.get("freshness_status", FreshnessStatus.UNKNOWN.value),
+                policy["availability_mode"], freshness_mode, freshness_status,
                 int(current_complete), int(bool(payload.get("coverage_complete", False)))))
             conn.execute("INSERT INTO universe_ingestion_idempotency VALUES (?,?,?,?,?,?)", (key, normalized_hash, resource_id, revision_id, ctx.actor_id, ingested_at))
             row = conn.execute("SELECT * FROM universe_revisions WHERE universe_revision_id=?", (revision_id,)).fetchone()
@@ -1125,6 +1225,9 @@ class UniverseRepository:
             current_complete = self._effective_current_complete(
                 policy=policy, payload=payload, status=str(status),
             )
+            freshness_mode, freshness_status = self._effective_freshness_fields(
+                policy=policy, payload=payload, status=str(status),
+            )
             if idempotency_key:
                 old = conn.execute("SELECT * FROM universe_ingestion_idempotency WHERE idempotency_key=?", (idempotency_key,)).fetchone()
                 if old:
@@ -1162,11 +1265,19 @@ class UniverseRepository:
                 raise ValueError("corrected universe revision must supersede the latest revision")
             if previous is None and supersedes is not None:
                 raise ValueError("first universe revision cannot supersede another revision")
-            canonical_symbol = payload.get("canonical_symbol")
-            mapping_basis = payload.get("mapping_basis")
-            if canonical_symbol is None and policy["resource_role"] in {"master_snapshot", "corroborating_identity_observation"}:
-                canonical_symbol = canonical_symbol_for(payload_venue, payload_code)
-                mapping_basis = "approved_resource_scope"
+            mapping_basis = payload.get("mapping_basis") if policy["resource_role"] == "master_snapshot" else None
+            if policy["resource_role"] == "master_snapshot":
+                canonical_symbol = payload.get("canonical_symbol") or canonical_symbol_for(payload_venue, payload_code)
+                mapping_basis = mapping_basis or "approved_resource_scope"
+            else:
+                # Non-master observations may only carry forward a mapping
+                # already established by an effective approved master row.
+                # Caller-supplied canonical symbols are intentionally ignored.
+                master_mapping = self._latest_master_mapping(conn, instrument_id=instrument_id)
+                canonical_symbol = master_mapping["canonical_symbol"] if master_mapping else None
+                mapping_basis = master_mapping.get("mapping_basis") if master_mapping else None
+                if status == "accepted" and canonical_symbol is None:
+                    reason = "canonical_mapping_unverified"
             if canonical_symbol:
                 try:
                     canonical_venue, canonical_code = parse_canonical_symbol(canonical_symbol)
@@ -1192,11 +1303,11 @@ class UniverseRepository:
             conn.execute("""INSERT INTO universe_revisions
                     (universe_revision_id,resource_id,logical_revision_key,revision_number,raw_resource_revision_id,source_published_at,source_effective_date,fetched_at,received_at,first_observed_at,available_at,ingested_at,status,reason,payload_sha256,normalized_payload_sha256,raw_payload_sha256,query_dimensions_json,source_record_reference,parser_evidence_fingerprint,schema_evidence_fingerprint,schema_fingerprint,parser_version,source_reference,publication_evidence_id,supersedes_revision_id,availability_mode,freshness_mode,freshness_status,current_complete,coverage_complete)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
-                    revision_id, resource_id, logical_revision_key, int(revision_number), provenance["raw_resource_revision_id"], source_published_at, payload.get("source_effective_date"), fetched_at, received_at, first_observed_at, available_at, ingested_at, status, reason, fingerprint, provenance["normalized_payload_sha256"], provenance["raw_payload_sha256"], provenance["query_dimensions_json"], provenance["source_record_reference"], provenance["parser_evidence_fingerprint"], provenance["schema_evidence_fingerprint"], provenance["schema_fingerprint"], provenance["parser_version"], payload.get("source_reference"), publication_evidence_id, payload.get("supersedes_revision_id"), policy["availability_mode"], payload.get("freshness_mode", FreshnessMode.UNKNOWN_WITHOUT_OFFICIAL_CADENCE.value), payload.get("freshness_status", FreshnessStatus.UNKNOWN.value), int(current_complete), int(bool(payload.get("coverage_complete", False)))))
+                    revision_id, resource_id, logical_revision_key, int(revision_number), provenance["raw_resource_revision_id"], source_published_at, payload.get("source_effective_date"), fetched_at, received_at, first_observed_at, available_at, ingested_at, status, reason, fingerprint, provenance["normalized_payload_sha256"], provenance["raw_payload_sha256"], provenance["query_dimensions_json"], provenance["source_record_reference"], provenance["parser_evidence_fingerprint"], provenance["schema_evidence_fingerprint"], provenance["schema_fingerprint"], provenance["parser_version"], payload.get("source_reference"), publication_evidence_id, payload.get("supersedes_revision_id"), policy["availability_mode"], freshness_mode, freshness_status, int(current_complete), int(bool(payload.get("coverage_complete", False)))))
             conn.execute("""INSERT INTO universe_instrument_revisions
                     (instrument_revision_id,instrument_id,universe_revision_id,resource_id,revision_number,venue,official_code,canonical_symbol,mapping_basis,security_type,display_name,listing_status,trading_state,membership_state,source_effective_date,source_effective_at,source_published_at,first_observed_at,received_at,fetched_at,available_at,ingested_at,availability_mode,freshness_mode,freshness_status,current_complete,coverage_complete,status,reason,source_reference,payload_sha256,normalized_payload_sha256,raw_payload_sha256,raw_resource_revision_id,query_dimensions_json,source_record_reference,parser_evidence_fingerprint,schema_evidence_fingerprint,schema_fingerprint,parser_version,effective_from,effective_to,supersedes_revision_id)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
-                    f"uirev_{uuid.uuid4().hex}", instrument_id, revision_id, resource_id, int(revision_number), payload_venue.value, payload_code, canonical_symbol, mapping_basis, payload.get("security_type","unknown"), payload.get("display_name"), listing_status, trading_state, membership_state, payload.get("source_effective_date"), source_effective_at, source_published_at, first_observed_at, received_at, fetched_at, available_at, ingested_at, policy["availability_mode"], payload.get("freshness_mode", FreshnessMode.UNKNOWN_WITHOUT_OFFICIAL_CADENCE.value), payload.get("freshness_status", FreshnessStatus.UNKNOWN.value), int(current_complete), int(bool(payload.get("coverage_complete", False))), status, reason, payload.get("source_reference"), fingerprint, provenance["normalized_payload_sha256"], provenance["raw_payload_sha256"], provenance["raw_resource_revision_id"], provenance["query_dimensions_json"], provenance["source_record_reference"], provenance["parser_evidence_fingerprint"], provenance["schema_evidence_fingerprint"], provenance["schema_fingerprint"], provenance["parser_version"], effective_from, effective_to, instrument_supersedes))
+                    f"uirev_{uuid.uuid4().hex}", instrument_id, revision_id, resource_id, int(revision_number), payload_venue.value, payload_code, canonical_symbol, mapping_basis, payload.get("security_type","unknown"), payload.get("display_name"), listing_status, trading_state, membership_state, payload.get("source_effective_date"), source_effective_at, source_published_at, first_observed_at, received_at, fetched_at, available_at, ingested_at, policy["availability_mode"], freshness_mode, freshness_status, int(current_complete), int(bool(payload.get("coverage_complete", False))), status, reason, payload.get("source_reference"), fingerprint, provenance["normalized_payload_sha256"], provenance["raw_payload_sha256"], provenance["raw_resource_revision_id"], provenance["query_dimensions_json"], provenance["source_record_reference"], provenance["parser_evidence_fingerprint"], provenance["schema_evidence_fingerprint"], provenance["schema_fingerprint"], provenance["parser_version"], effective_from, effective_to, instrument_supersedes))
             if idempotency_key:
                 try:
                     conn.execute("INSERT INTO universe_ingestion_idempotency VALUES (?,?,?,?,?,?)", (idempotency_key, fingerprint, resource_id, revision_id, actor, ingested_at))
