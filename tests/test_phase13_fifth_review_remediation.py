@@ -108,5 +108,7 @@ def test_list_uses_bounded_set_queries_and_stable_cursor(tmp_path):
     page = repo.list_instruments(knowledge_cutoff_at="2026-08-21T00:05:00Z", limit=100)
     large_page_query_count = len(observed_sql)
     assert len(page["items"]) == 6
-    assert first_query_count <= 10
+    # The bounded candidate window adds one explicit DISTINCT/order query;
+    # total read statements remain constant and small for the page.
+    assert first_query_count <= 11
     assert large_page_query_count <= first_query_count + 1

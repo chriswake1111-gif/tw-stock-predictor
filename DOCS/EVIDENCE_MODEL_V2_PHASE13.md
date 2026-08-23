@@ -38,10 +38,12 @@ latest visible listing event is an accepted termination and the successor anchor
 is itself visible. Before that boundary the old epoch remains reproducible; after
 it, the old epoch cannot compete because it has a larger revision number. The
 selector is scoped by venue and preserves leading-zero source codes, so sequential
-code reuse cannot expose duplicate canonical keys or cross-venue collisions. The
-list path keeps effective epoch selection in a recursive SQL CTE and applies
-listing-status filtering before `LIMIT limit+1`; it does not materialize a
-universe-sized Python ID set or `IN (...)` predicate.
+code reuse cannot expose duplicate canonical keys or cross-venue collisions.
+List/search first keyset-selects a bounded window of `(venue, official_code)`
+groups in canonical order, then applies the recursive epoch/event CTE only to
+that window. Filtered pages advance through additional bounded windows instead
+of evaluating the full Universe before `LIMIT limit+1`; no universe-sized Python
+ID set or `IN (...)` predicate is constructed.
 
 Cutoff-visible lifecycle and operational event tables are composed into the same
 read transaction as the reference and freshness channels. `listed` and

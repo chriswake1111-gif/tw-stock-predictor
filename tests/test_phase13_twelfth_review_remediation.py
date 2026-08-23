@@ -130,3 +130,65 @@ def test_list_epoch_selection_does_not_materialize_python_universe(tmp_path, mon
     )
     assert len(page["items"]) == 1
     assert page["next_cursor"]
+
+
+def test_epoch_page_work_stays_bounded_as_universe_grows(tmp_path):
+    """Measure candidate/epoch VM work, not merely SQL statement count.
+
+    The venue-health query is intentionally independent and may inspect its
+    resource feeds.  This regression isolates the candidate DISTINCT window
+    and the recursive epoch query and proves their SQLite VM work does not
+    grow with the number of unrelated Universe anchors for a fixed limit.
+    """
+
+    def measure(anchor_count: int) -> tuple[int, list[str]]:
+        db_dir = tmp_path / f"bounded-{anchor_count}"
+        db_dir.mkdir()
+        db, repo = _repo(db_dir)
+        context = _ctx(f"bounded-growth-{anchor_count}")
+        for offset in range(anchor_count):
+            _add_instrument(repo, db, code=f"{7400 + offset:04d}", context=context)
+
+        original_connect = repo._connect
+        observations: list[list[object]] = []
+        current: list[object | None] = [None]
+
+        def measured_connect():
+            connection = original_connect()
+
+            def trace(statement: str):
+                normalized = statement.lstrip().upper()
+                if normalized.startswith("SELECT DISTINCT VENUE, OFFICIAL_CODE"):
+                    entry: list[object] = ["candidate", 0, statement]
+                    observations.append(entry)
+                    current[0] = entry
+                elif normalized.startswith("WITH RECURSIVE"):
+                    entry = ["epoch", 0, statement]
+                    observations.append(entry)
+                    current[0] = entry
+                else:
+                    current[0] = None
+
+            def progress() -> int:
+                if current[0] is not None:
+                    current[0][1] = int(current[0][1]) + 1  # type: ignore[index]
+                return 0
+
+            connection.set_trace_callback(trace)
+            connection.set_progress_handler(progress, 100)
+            return connection
+
+        repo._connect = measured_connect  # type: ignore[method-assign]
+        page = repo.list_instruments(
+            knowledge_cutoff_at="2026-08-21T00:05:00Z", limit=1,
+        )
+        assert len(page["items"]) == 1
+        assert page["next_cursor"]
+        kinds = [str(entry[0]) for entry in observations]
+        assert kinds == ["candidate", "epoch"]
+        assert "LIMIT 4" in str(observations[0][2]).upper()
+        return sum(int(entry[1]) for entry in observations), kinds
+
+    small_steps, _ = measure(40)
+    large_steps, _ = measure(400)
+    assert large_steps <= small_steps * 2

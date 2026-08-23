@@ -441,15 +441,23 @@ class UniverseRepository:
     @classmethod
     def _list_epoch_cte(
         cls, *, cutoff: str, venue: str | None,
+        candidate_groups: list[tuple[str, str]] | None = None,
     ) -> tuple[str, list[Any]]:
-        """Build the SQL-only effective epoch selector used by list/search.
+        """Build the effective epoch selector for one bounded candidate page.
 
         Exact/resolve lookups retain the Python helper above for their bounded
-        single-key path.  List/search instead keeps epoch candidates inside
-        SQLite so it never constructs a universe-sized Python ``IN`` list.
+        single-key path.  List/search supplies a bounded set of
+        ``(venue, official_code)`` groups selected in canonical order.  The
+        recursive epoch walk is then restricted to that set, so event history
+        work is proportional to the page window rather than the full Universe.
         """
+        bounded_groups = list(candidate_groups or [])
+        if not bounded_groups:
+            raise ValueError("candidate_groups are required for bounded list selection")
+        values = ", ".join("(?, ?)" for _ in bounded_groups)
+        candidate_params: list[Any] = [value for group in bounded_groups for value in group]
         anchor_clauses = ["i.first_observed_at <= ?"]
-        params: list[Any] = [cutoff]
+        params: list[Any] = [*candidate_params, cutoff]
         if venue:
             anchor_clauses.append("i.venue = ?")
             params.append(venue)
@@ -463,11 +471,17 @@ class UniverseRepository:
         )"""
         params.extend([cutoff] * 4)
         cte = f"""
+            candidate_groups(venue, official_code) AS (
+                VALUES {values}
+            ),
             eligible_anchors AS (
                 SELECT i.instrument_id, i.venue, i.official_code,
                        i.identity_epoch, i.first_observed_at,
                        i.identity_binding_fingerprint
                 FROM universe_instruments i
+                JOIN candidate_groups candidate
+                  ON candidate.venue = i.venue
+                 AND candidate.official_code = i.official_code
                 WHERE {' AND '.join(anchor_clauses)}
             ),
             visible_lifecycle AS (
@@ -1322,6 +1336,46 @@ class UniverseRepository:
                               knowledge_cutoff_at: str, current: bool = False) -> dict[str, Any]:
         return self.resolve(official_code=official_code, venue=venue, knowledge_cutoff_at=knowledge_cutoff_at, current=current)
 
+    @staticmethod
+    def _list_candidate_groups(
+        conn: sqlite3.Connection,
+        *,
+        cutoff: str,
+        venue: str | None,
+        after_venue: str | None,
+        after_code: str | None,
+        limit: int,
+    ) -> list[tuple[str, str]]:
+        """Select one bounded canonical-order window of identity groups.
+
+        ``idx_universe_instruments_code`` matches the DISTINCT/order columns,
+        allowing SQLite to stop after the requested lookahead window.  Epoch
+        and event resolution is deliberately deferred until these groups are
+        known; filtered pages can request another bounded window as needed.
+        """
+        clauses = ["first_observed_at <= ?"]
+        params: list[Any] = [cutoff]
+        if venue:
+            clauses.append("venue = ?")
+            params.append(venue)
+            if after_code is not None:
+                clauses.append("official_code > ?")
+                params.append(after_code)
+        elif after_venue is not None and after_code is not None:
+            clauses.append("(venue > ? OR (venue = ? AND official_code > ?))")
+            params.extend([after_venue, after_venue, after_code])
+        rows = conn.execute(
+            f"""
+            SELECT DISTINCT venue, official_code
+            FROM universe_instruments
+            WHERE {' AND '.join(clauses)}
+            ORDER BY venue ASC, official_code ASC
+            LIMIT ?
+            """,
+            params + [int(limit)],
+        ).fetchall()
+        return [(str(row["venue"]), str(row["official_code"])) for row in rows]
+
     def list_instruments(self, *, knowledge_cutoff_at: str, query: str | None = None,
                          venue: UniverseVenue | str | None = None, security_type: str | None = None,
                          listing_status: ListingStatus | str | None = None, limit: int = 25,
@@ -1348,13 +1402,18 @@ class UniverseRepository:
                 cursor_token = token
             except (json.JSONDecodeError, TypeError, KeyError):
                 raise ValueError("cursor_query_mismatch")
+        candidate_after_venue: str | None = None
+        candidate_after_code: str | None = None
+        if cursor_token is not None:
+            candidate_after_venue = str(
+                cursor_token.get("candidate_venue") or cursor_token.get("venue_key") or ""
+            ) or None
+            candidate_after_code = cursor_token.get("candidate_code")
+            if candidate_after_code is None:
+                legacy_key = str(cursor_token.get("canonical_key") or "")
+                candidate_after_code = legacy_key.split(".", 1)[0] if "." in legacy_key else ""
+
         with self.read_transaction() as conn:
-            # Epoch selection remains inside SQLite for list/search.  This
-            # avoids materializing every anchor/event in Python and avoids an
-            # IN predicate proportional to the complete Universe.
-            epoch_cte, epoch_params = self._list_epoch_cte(
-                cutoff=cutoff, venue=venue_value,
-            )
             cutoff_predicate = self._cutoff_where("r")
             filters: list[str] = []
             filter_params: list[Any] = []
@@ -1367,106 +1426,129 @@ class UniverseRepository:
             if query:
                 filters.append("(anchor_code LIKE ? OR effective_canonical_key LIKE ? OR COALESCE(display_name,'') LIKE ?)")
                 term = f"%{query.strip().upper()}%"; filter_params += [term, term, term]
-            cursor_clause = ""
-            cursor_params: list[Any] = []
-            if cursor_token is not None:
-                cursor_clause = "(anchor_venue > ? OR (anchor_venue = ? AND effective_canonical_key > ?) OR (anchor_venue = ? AND effective_canonical_key = ? AND instrument_id > ?))"
-                cursor_params = [
-                    cursor_token.get("venue_key"), cursor_token.get("venue_key"), cursor_token.get("canonical_key") or "",
-                    cursor_token.get("venue_key"), cursor_token.get("canonical_key") or "", cursor_token.get("instrument_id"),
-                ]
-            outer_clauses = [*filters]
-            if cursor_clause:
-                outer_clauses.append(cursor_clause)
-            outer_where = " AND ".join(outer_clauses) if outer_clauses else "1=1"
-            base_rows = [dict(row) for row in conn.execute(
-                f"""
-                WITH RECURSIVE {epoch_cte}
-                visible_edges AS (
-                    SELECT r.instrument_id, r.instrument_revision_id AS child_revision_id,
-                           r.supersedes_revision_id AS parent_revision_id
-                    FROM universe_instrument_revisions r
-                    JOIN effective_anchors ea ON ea.instrument_id = r.instrument_id
-                    WHERE r.status IN ('accepted', 'revoked')
-                      AND r.supersedes_revision_id IS NOT NULL
-                      AND {cutoff_predicate}
-                ), excluded(instrument_id, instrument_revision_id) AS (
-                    SELECT instrument_id, parent_revision_id
-                    FROM visible_edges
-                    UNION
-                    SELECT e.instrument_id, e.parent_revision_id
-                    FROM visible_edges e
-                    JOIN excluded x
-                      ON x.instrument_id = e.instrument_id
-                     AND x.instrument_revision_id = e.child_revision_id
-                ), accepted_visible AS (
-                    SELECT r.*, ea.venue AS anchor_venue, ea.official_code AS anchor_code,
-                           ea.identity_epoch, ea.identity_binding_fingerprint,
-                           p.resource_role, p.completeness_policy,
-                           p.freshness_mode AS policy_freshness_mode
-                    FROM universe_instrument_revisions r
-                    JOIN effective_anchors ea ON ea.instrument_id = r.instrument_id
-                    JOIN universe_resource_policies p ON p.resource_id = r.resource_id
-                    WHERE r.status = 'accepted'
-                      AND {cutoff_predicate}
-                      AND NOT EXISTS (
-                          SELECT 1 FROM excluded x
-                          WHERE x.instrument_id = r.instrument_id
-                            AND x.instrument_revision_id = r.instrument_revision_id
-                      )
-                ), master_ranked AS (
-                    SELECT a.instrument_id, a.canonical_symbol, a.mapping_basis,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY a.instrument_id
-                               ORDER BY a.revision_number DESC,
-                                        COALESCE(a.available_at,'') DESC,
-                                        a.ingested_at DESC, a.instrument_revision_id DESC
-                           ) AS master_rn
-                    FROM accepted_visible a
-                    WHERE a.resource_role = 'master_snapshot'
-                ), latest_master AS (
-                    SELECT instrument_id, canonical_symbol, mapping_basis
-                    FROM master_ranked
-                    WHERE master_rn = 1
-                ), ranked AS (
-                    SELECT a.*,
-                           CASE WHEN a.resource_role = 'master_snapshot'
-                                THEN a.canonical_symbol
-                                ELSE lm.canonical_symbol
-                           END AS effective_canonical_symbol,
-                           COALESCE(
+            outer_where = " AND ".join(filters) if filters else "1=1"
+            # A fixed lookahead window keeps epoch/event work bounded for a
+            # fixed page size.  Filtered pages advance by another bounded
+            # window only when the current one does not yield enough rows.
+            window_size = min(256, max(int(limit) + 1, int(limit) * 4))
+            selected_rows: list[dict[str, Any]] = []
+            exhausted = False
+            while len(selected_rows) < int(limit) + 1 and not exhausted:
+                candidate_groups = self._list_candidate_groups(
+                    conn,
+                    cutoff=cutoff,
+                    venue=venue_value,
+                    after_venue=candidate_after_venue,
+                    after_code=candidate_after_code,
+                    limit=window_size,
+                )
+                if not candidate_groups:
+                    break
+                last_candidate = candidate_groups[-1]
+                candidate_after_venue, candidate_after_code = last_candidate
+                if len(candidate_groups) < window_size:
+                    exhausted = True
+                epoch_cte, epoch_params = self._list_epoch_cte(
+                    cutoff=cutoff, venue=venue_value,
+                    candidate_groups=candidate_groups,
+                )
+                window_rows = [dict(row) for row in conn.execute(
+                    f"""
+                    WITH RECURSIVE {epoch_cte}
+                    visible_edges AS (
+                        SELECT r.instrument_id, r.instrument_revision_id AS child_revision_id,
+                               r.supersedes_revision_id AS parent_revision_id
+                        FROM universe_instrument_revisions r
+                        JOIN effective_anchors ea ON ea.instrument_id = r.instrument_id
+                        WHERE r.status IN ('accepted', 'revoked')
+                          AND r.supersedes_revision_id IS NOT NULL
+                          AND {cutoff_predicate}
+                    ), excluded(instrument_id, instrument_revision_id) AS (
+                        SELECT instrument_id, parent_revision_id
+                        FROM visible_edges
+                        UNION
+                        SELECT e.instrument_id, e.parent_revision_id
+                        FROM visible_edges e
+                        JOIN excluded x
+                          ON x.instrument_id = e.instrument_id
+                         AND x.instrument_revision_id = e.child_revision_id
+                    ), accepted_visible AS (
+                        SELECT r.*, ea.venue AS anchor_venue, ea.official_code AS anchor_code,
+                               ea.identity_epoch, ea.identity_binding_fingerprint,
+                               p.resource_role, p.completeness_policy,
+                               p.freshness_mode AS policy_freshness_mode
+                        FROM universe_instrument_revisions r
+                        JOIN effective_anchors ea ON ea.instrument_id = r.instrument_id
+                        JOIN universe_resource_policies p ON p.resource_id = r.resource_id
+                        WHERE r.status = 'accepted'
+                          AND {cutoff_predicate}
+                          AND NOT EXISTS (
+                              SELECT 1 FROM excluded x
+                              WHERE x.instrument_id = r.instrument_id
+                                AND x.instrument_revision_id = r.instrument_revision_id
+                          )
+                    ), master_ranked AS (
+                        SELECT a.instrument_id, a.canonical_symbol, a.mapping_basis,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY a.instrument_id
+                                   ORDER BY a.revision_number DESC,
+                                            COALESCE(a.available_at,'') DESC,
+                                            a.ingested_at DESC, a.instrument_revision_id DESC
+                               ) AS master_rn
+                        FROM accepted_visible a
+                        WHERE a.resource_role = 'master_snapshot'
+                    ), latest_master AS (
+                        SELECT instrument_id, canonical_symbol, mapping_basis
+                        FROM master_ranked
+                        WHERE master_rn = 1
+                    ), ranked AS (
+                        SELECT a.*,
                                CASE WHEN a.resource_role = 'master_snapshot'
                                     THEN a.canonical_symbol
                                     ELSE lm.canonical_symbol
-                               END, ''
-                           ) AS effective_canonical_key,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY a.instrument_id
-                                ORDER BY a.revision_number DESC, COALESCE(a.available_at,'') DESC,
-                                         a.ingested_at DESC, a.instrument_revision_id DESC
-                           ) AS rn
-                    FROM accepted_visible a
-                    LEFT JOIN latest_master lm ON lm.instrument_id = a.instrument_id
-                ), latest AS (
-                    SELECT * FROM ranked WHERE rn = 1
-                ), latest_with_listing AS (
-                    SELECT latest.*,
-                           CASE
-                             WHEN ll.lifecycle_event_id IS NULL THEN latest.listing_status
-                             WHEN ll.status = 'accepted' THEN
-                               CASE WHEN ll.event_type = 'terminated' THEN 'delisted' ELSE 'listed' END
-                             ELSE 'unknown'
-                           END AS effective_listing_status
-                    FROM latest
-                    LEFT JOIN latest_lifecycle ll ON ll.instrument_id = latest.instrument_id
-                )
-                SELECT * FROM latest_with_listing
-                WHERE {outer_where}
-                ORDER BY anchor_venue ASC, effective_canonical_key ASC, instrument_id ASC
-                LIMIT ?
-                """, epoch_params + ([cutoff] * 4) + ([cutoff] * 4) + filter_params + cursor_params + [int(limit) + 1]
-            ).fetchall()]
-            selected = base_rows
+                               END AS effective_canonical_symbol,
+                               COALESCE(
+                                   CASE WHEN a.resource_role = 'master_snapshot'
+                                        THEN a.canonical_symbol
+                                        ELSE lm.canonical_symbol
+                                   END, ''
+                               ) AS effective_canonical_key,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY a.instrument_id
+                                    ORDER BY a.revision_number DESC, COALESCE(a.available_at,'') DESC,
+                                             a.ingested_at DESC, a.instrument_revision_id DESC
+                               ) AS rn
+                        FROM accepted_visible a
+                        LEFT JOIN latest_master lm ON lm.instrument_id = a.instrument_id
+                    ), latest AS (
+                        SELECT * FROM ranked WHERE rn = 1
+                    ), latest_with_listing AS (
+                        SELECT latest.*,
+                               CASE
+                                 WHEN ll.lifecycle_event_id IS NULL THEN latest.listing_status
+                                 WHEN ll.status = 'accepted' THEN
+                                   CASE WHEN ll.event_type = 'terminated' THEN 'delisted' ELSE 'listed' END
+                                 ELSE 'unknown'
+                               END AS effective_listing_status
+                        FROM latest
+                        LEFT JOIN latest_lifecycle ll ON ll.instrument_id = latest.instrument_id
+                    )
+                    SELECT * FROM latest_with_listing
+                    WHERE {outer_where}
+                    ORDER BY anchor_venue ASC, effective_canonical_key ASC, instrument_id ASC
+                    LIMIT ?
+                    """,
+                    epoch_params + ([cutoff] * 4) + ([cutoff] * 4) + filter_params + [len(candidate_groups)],
+                ).fetchall()]
+                selected_rows.extend(window_rows)
+            selected = sorted(
+                selected_rows,
+                key=lambda row: (
+                    row.get("anchor_venue") or "",
+                    row.get("effective_canonical_key") or "",
+                    row.get("instrument_id") or "",
+                ),
+            )
             page_rows = selected[:int(limit)]
             instrument_ids = [str(row["instrument_id"]) for row in page_rows]
             references = self._select_historical_references_batch(
@@ -1490,6 +1572,7 @@ class UniverseRepository:
                                       "security_type": security_type or "", "listing_status": listing_value or "",
                                       "order": "venue ASC, canonical_symbol ASC, instrument_id ASC",
                                       "venue_key": last.get("anchor_venue"), "canonical_key": last.get("effective_canonical_key") or "",
+                                      "candidate_venue": last.get("anchor_venue"), "candidate_code": last.get("anchor_code"),
                                       "instrument_id": last.get("instrument_id")}, separators=(",", ":"))
         scoped = [venue_value] if venue_value else ["TWSE", "TPEX"]
         per_venue = {}
