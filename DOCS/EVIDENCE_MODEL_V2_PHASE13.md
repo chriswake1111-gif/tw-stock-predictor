@@ -39,11 +39,18 @@ is itself visible. Before that boundary the old epoch remains reproducible; afte
 it, the old epoch cannot compete because it has a larger revision number. The
 selector is scoped by venue and preserves leading-zero source codes, so sequential
 code reuse cannot expose duplicate canonical keys or cross-venue collisions.
-List/search first keyset-selects a bounded window of `(venue, official_code)`
-groups in canonical order, then applies the recursive epoch/event CTE only to
-that window. Filtered pages advance through additional bounded windows instead
-of evaluating the full Universe before `LIMIT limit+1`; no universe-sized Python
-ID set or `IN (...)` predicate is constructed.
+List/search preserves the public key `(venue, effective canonical symbol,
+instrument_id)`, with an unresolved/null canonical sorting before mapped symbols
+inside each venue. A conservative non-recursive prefilter separates possible
+null-mapping identities from deterministic mapped identities and applies query,
+security-type and listing-status candidate predicates before expensive work.
+Only a bounded public-order candidate window enters the recursive
+epoch/revision/event CTE; zero-match filters therefore execute no recursive
+effective-state query, while sparse matches resolve only their bounded candidate
+groups. The CTE remains authoritative and removes prefilter false positives, so
+an older matching revision cannot replace the effective state. Cursor continuation
+uses the actual public key, and no universe-sized Python ID set or `IN (...)`
+predicate is constructed.
 
 Cutoff-visible lifecycle and operational event tables are composed into the same
 read transaction as the reference and freshness channels. `listed` and

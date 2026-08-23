@@ -158,8 +158,12 @@ def test_epoch_page_work_stays_bounded_as_universe_grows(tmp_path):
 
             def trace(statement: str):
                 normalized = statement.lstrip().upper()
-                if normalized.startswith("SELECT DISTINCT VENUE, OFFICIAL_CODE"):
-                    entry: list[object] = ["candidate", 0, statement]
+                if "UNIVERSE_CANDIDATE_NULL_V2" in normalized:
+                    entry: list[object] = ["candidate_null", 0, statement]
+                    observations.append(entry)
+                    current[0] = entry
+                elif "UNIVERSE_CANDIDATE_MAPPED_V2" in normalized:
+                    entry = ["candidate_mapped", 0, statement]
                     observations.append(entry)
                     current[0] = entry
                 elif normalized.startswith("WITH RECURSIVE"):
@@ -180,14 +184,19 @@ def test_epoch_page_work_stays_bounded_as_universe_grows(tmp_path):
 
         repo._connect = measured_connect  # type: ignore[method-assign]
         page = repo.list_instruments(
-            knowledge_cutoff_at="2026-08-21T00:05:00Z", limit=1,
+            knowledge_cutoff_at="2026-08-21T00:05:00Z", venue="TWSE", limit=1,
         )
         assert len(page["items"]) == 1
         assert page["next_cursor"]
         kinds = [str(entry[0]) for entry in observations]
-        assert kinds == ["candidate", "epoch"]
-        assert "LIMIT 4" in str(observations[0][2]).upper()
-        return sum(int(entry[1]) for entry in observations), kinds
+        assert kinds == ["candidate_null", "candidate_mapped", "epoch"]
+        assert "LIMIT 4" in str(observations[1][2]).upper()
+        bounded_steps = sum(
+            int(entry[1])
+            for entry in observations
+            if entry[0] in {"candidate_mapped", "epoch"}
+        )
+        return bounded_steps, kinds
 
     small_steps, _ = measure(40)
     large_steps, _ = measure(400)
