@@ -7,7 +7,7 @@ import hashlib
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Iterator
 
 from src.domain.universe import (
@@ -205,6 +205,300 @@ class UniverseRepository:
         return excluded
 
     @staticmethod
+    def _event_visible_at_cutoff(row: dict[str, Any], *, cutoff: str) -> bool:
+        """Apply the event's source/observation boundary without inventing time.
+
+        ``effective_at`` is authoritative when supplied.  A date-only event is
+        deliberately not applied during that same calendar date because the
+        source did not prove an intraday instant.  Events without source timing
+        use their explicit ``available_at`` observation boundary.
+        """
+        available_at = row.get("available_at")
+        ingested_at = row.get("ingested_at")
+        if not available_at or not ingested_at or str(available_at) > cutoff or str(ingested_at) > cutoff:
+            return False
+        effective_at = row.get("effective_at")
+        if effective_at:
+            return str(effective_at) <= cutoff
+        event_date = row.get("event_date")
+        if event_date:
+            return str(cutoff)[:10] > str(event_date)[:10]
+        return True
+
+    @staticmethod
+    def _event_sort_key(row: dict[str, Any]) -> tuple[str, int, str, str, str]:
+        effective_at = row.get("effective_at")
+        event_date = row.get("event_date")
+        if effective_at:
+            boundary, precision = str(effective_at), 2
+        elif event_date:
+            boundary, precision = str(event_date)[:10], 1
+        else:
+            boundary, precision = str(row.get("available_at") or ""), 0
+        return (
+            boundary,
+            precision,
+            str(row.get("available_at") or ""),
+            str(row.get("ingested_at") or ""),
+            str(row.get("lifecycle_event_id") or row.get("operational_event_id") or ""),
+        )
+
+    @classmethod
+    def _latest_visible_event(
+        cls,
+        rows: list[dict[str, Any]],
+        *,
+        cutoff: str,
+    ) -> dict[str, Any] | None:
+        visible = [
+            row for row in rows
+            if cls._event_visible_at_cutoff(row, cutoff=cutoff)
+        ]
+        return max(visible, key=cls._event_sort_key) if visible else None
+
+    @classmethod
+    def _compose_event_state(
+        cls,
+        lifecycle_rows: list[dict[str, Any]],
+        operational_rows: list[dict[str, Any]],
+        *,
+        cutoff: str,
+    ) -> dict[str, Any]:
+        """Compose listing and trading channels from cutoff-visible events.
+
+        Listing lifecycle events never change trading state; operational events
+        never change listing status.  A visible non-accepted latest event is
+        fail-closed to ``unknown`` rather than silently resurrecting an older
+        event state.
+        """
+        listing_event = cls._latest_visible_event(
+            [row for row in lifecycle_rows if row.get("event_type") in {"listed", "terminated"}],
+            cutoff=cutoff,
+        )
+        operational_candidates = list(operational_rows)
+        # ``resumed`` is a source-backed trading transition, not a listing
+        # transition.  Keep it in the operational channel without inventing a
+        # separate event table row.
+        operational_candidates.extend(
+            {
+                **row,
+                "trading_state": "normal",
+                "operational_event_id": row.get("lifecycle_event_id"),
+                "event_source": "lifecycle",
+            }
+            for row in lifecycle_rows
+            if row.get("event_type") == "resumed"
+        )
+        operational_event = cls._latest_visible_event(
+            operational_candidates,
+            cutoff=cutoff,
+        )
+        state: dict[str, Any] = {}
+        if listing_event:
+            state["lifecycle_event_id"] = listing_event.get("lifecycle_event_id")
+            state["lifecycle_event_type"] = listing_event.get("event_type")
+            state["lifecycle_event_status"] = listing_event.get("status")
+            state["lifecycle_event_available_at"] = listing_event.get("available_at")
+            state["lifecycle_event_effective_at"] = listing_event.get("effective_at")
+            state["lifecycle_event_date"] = listing_event.get("event_date")
+            if listing_event.get("status") == "accepted":
+                state["listing_status"] = (
+                    ListingStatus.DELISTED.value
+                    if listing_event.get("event_type") == "terminated"
+                    else ListingStatus.LISTED.value
+                )
+            else:
+                state["listing_status"] = ListingStatus.UNKNOWN.value
+                state.setdefault("event_reasons", []).append("lifecycle_event_not_accepted")
+        if operational_event:
+            state["operational_event_id"] = operational_event.get("operational_event_id")
+            state["operational_event_source"] = operational_event.get("event_source", "operational")
+            state["operational_event_status"] = operational_event.get("status")
+            state["operational_event_available_at"] = operational_event.get("available_at")
+            state["operational_event_effective_at"] = operational_event.get("effective_at")
+            if operational_event.get("status") == "accepted":
+                state["trading_state"] = operational_event.get("trading_state") or TradingState.UNKNOWN.value
+            else:
+                state["trading_state"] = TradingState.UNKNOWN.value
+                state.setdefault("event_reasons", []).append("operational_event_not_accepted")
+        return state
+
+    @classmethod
+    def _effective_epoch_instrument_ids(
+        cls,
+        conn: sqlite3.Connection,
+        *,
+        cutoff: str,
+        venue: str | None = None,
+        official_code: str | None = None,
+        event_rows_out: dict[str, dict[str, list[dict[str, Any]]]] | None = None,
+    ) -> set[str]:
+        """Select one effective identity epoch per venue/code at a cutoff.
+
+        A later epoch can compete only after its immediate predecessor's latest
+        cutoff-visible listing event is an accepted termination.  This keeps a
+        future or not-yet-proven code reuse from displacing the old epoch and
+        prevents an old high revision number from winning after reuse.
+        """
+        clauses = ["first_observed_at <= ?"]
+        params: list[Any] = [cutoff]
+        if venue:
+            clauses.append("venue = ?")
+            params.append(venue)
+        if official_code:
+            clauses.append("official_code = ?")
+            params.append(official_code)
+        joined_rows = [dict(row) for row in conn.execute(
+            f"WITH event_rows AS ("
+            "SELECT instrument_id, 'lifecycle' AS event_source, lifecycle_event_id, "
+            "NULL AS operational_event_id, event_type, NULL AS trading_state, event_date, "
+            "effective_at, available_at, ingested_at, source_reference, status, reason "
+            "FROM universe_lifecycle_events "
+            "UNION ALL "
+            "SELECT instrument_id, 'operational' AS event_source, NULL AS lifecycle_event_id, "
+            "operational_event_id, NULL AS event_type, trading_state, NULL AS event_date, "
+            "effective_at, available_at, ingested_at, source_reference, status, reason "
+            "FROM universe_operational_state_events) "
+            "SELECT i.instrument_id, i.venue, i.official_code, i.identity_epoch, i.first_observed_at, "
+            "e.event_source, e.lifecycle_event_id, e.operational_event_id, e.event_type, "
+            "e.trading_state, e.event_date, e.effective_at, e.available_at, e.ingested_at, "
+            "e.source_reference, e.status, e.reason "
+            f"FROM universe_instruments i "
+            f"LEFT JOIN event_rows e ON e.instrument_id = i.instrument_id "
+            f"WHERE {' AND '.join('i.' + clause for clause in clauses)} "
+            "ORDER BY i.venue, i.official_code, i.identity_epoch, e.available_at, e.ingested_at, "
+            "COALESCE(e.lifecycle_event_id, e.operational_event_id)",
+            params,
+        ).fetchall()]
+        anchors_by_id: dict[str, dict[str, Any]] = {}
+        event_by_id: dict[str, dict[str, list[dict[str, Any]]]] = {}
+        for row in joined_rows:
+            instrument_id = str(row["instrument_id"])
+            anchors_by_id.setdefault(
+                instrument_id,
+                {
+                    "instrument_id": instrument_id,
+                    "venue": row["venue"],
+                    "official_code": row["official_code"],
+                    "identity_epoch": row["identity_epoch"],
+                    "first_observed_at": row["first_observed_at"],
+                },
+            )
+            event_id = row.get("lifecycle_event_id") or row.get("operational_event_id")
+            if event_id:
+                event = {
+                    key: row[key]
+                    for key in (
+                        "event_source", "lifecycle_event_id", "operational_event_id", "event_type", "trading_state", "event_date", "effective_at",
+                        "available_at", "ingested_at", "source_reference", "status", "reason",
+                    )
+                }
+                channel = "lifecycle" if row.get("event_source") == "lifecycle" else "operational"
+                existing_events = event_by_id.setdefault(
+                    instrument_id, {"lifecycle": [], "operational": []}
+                )[channel]
+                if not any(
+                    str(existing.get("lifecycle_event_id") or existing.get("operational_event_id")) == str(event_id)
+                    for existing in existing_events
+                ):
+                    existing_events.append(event)
+        anchors = list(anchors_by_id.values())
+        if not anchors:
+            return set()
+        if event_rows_out is not None:
+            event_rows_out.update(event_by_id)
+        grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for row in anchors:
+            grouped.setdefault((str(row["venue"]), str(row["official_code"])), []).append(row)
+        selected: set[str] = set()
+        for rows in grouped.values():
+            rows.sort(key=lambda row: int(row["identity_epoch"]))
+            current = rows[0]
+            for candidate in rows[1:]:
+                if int(candidate["identity_epoch"]) != int(current["identity_epoch"]) + 1:
+                    continue
+                predecessor_events = event_by_id.get(str(current["instrument_id"]), {}).get("lifecycle", [])
+                latest_listing = cls._latest_visible_event(
+                    [row for row in predecessor_events if row.get("event_type") in {"listed", "terminated"}],
+                    cutoff=cutoff,
+                )
+                if latest_listing and latest_listing.get("status") == "accepted" and latest_listing.get("event_type") == "terminated":
+                    current = candidate
+            selected.add(str(current["instrument_id"]))
+        return selected
+
+    @classmethod
+    def _select_event_states_batch(
+        cls,
+        conn: sqlite3.Connection,
+        *,
+        instrument_ids: list[str],
+        cutoff: str,
+    ) -> dict[str, dict[str, Any]]:
+        ids = list(dict.fromkeys(str(value) for value in instrument_ids))
+        if not ids:
+            return {}
+        placeholders = cls._sql_placeholders(ids)
+        lifecycle_by_id: dict[str, list[dict[str, Any]]] = {instrument_id: [] for instrument_id in ids}
+        operational_by_id: dict[str, list[dict[str, Any]]] = {instrument_id: [] for instrument_id in ids}
+        for row in conn.execute(
+            f"""
+            SELECT instrument_id, 'lifecycle' AS event_source,
+                   lifecycle_event_id, NULL AS operational_event_id,
+                   event_type, NULL AS trading_state, event_date, effective_at,
+                   available_at, ingested_at, source_reference, status, reason
+            FROM universe_lifecycle_events
+            WHERE instrument_id IN ({placeholders})
+            UNION ALL
+            SELECT instrument_id, 'operational' AS event_source,
+                   NULL AS lifecycle_event_id, operational_event_id,
+                   NULL AS event_type, trading_state, NULL AS event_date, effective_at,
+                   available_at, ingested_at, source_reference, status, reason
+            FROM universe_operational_state_events
+            WHERE instrument_id IN ({placeholders})
+            """,
+            ids + ids,
+        ).fetchall():
+            value = dict(row)
+            instrument_id = str(value["instrument_id"])
+            if value.get("event_source") == "lifecycle":
+                lifecycle_by_id.setdefault(instrument_id, []).append(value)
+            else:
+                operational_by_id.setdefault(instrument_id, []).append(value)
+        return {
+            instrument_id: cls._compose_event_state(
+                lifecycle_by_id.get(instrument_id, []),
+                operational_by_id.get(instrument_id, []),
+                cutoff=cutoff,
+            )
+            for instrument_id in ids
+        }
+
+    @classmethod
+    def _apply_event_state_to_row(
+        cls,
+        row: dict[str, Any] | None,
+        *,
+        event_state: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        value = dict(row)
+        for key in (
+            "listing_status", "trading_state", "lifecycle_event_id",
+            "lifecycle_event_type", "lifecycle_event_status",
+            "lifecycle_event_available_at", "lifecycle_event_effective_at",
+            "lifecycle_event_date", "operational_event_id",
+            "operational_event_source", "operational_event_status",
+            "operational_event_available_at", "operational_event_effective_at",
+        ):
+            if key in event_state:
+                value[key] = event_state[key]
+        if event_state.get("event_reasons"):
+            value["event_reasons"] = list(event_state["event_reasons"])
+        return value
+
+    @staticmethod
     def _operational_where(alias: str = "r") -> str:
         """Visibility for the current/resource channel.
 
@@ -270,6 +564,17 @@ class UniverseRepository:
                 "operational_resource_id": revision.get("operational_resource_id"),
                 "operational_revision_id": revision.get("operational_revision_id"),
                 "operational_ingested_at": revision.get("operational_ingested_at"),
+                "lifecycle_event_id": revision.get("lifecycle_event_id"),
+                "lifecycle_event_type": revision.get("lifecycle_event_type"),
+                "lifecycle_event_status": revision.get("lifecycle_event_status"),
+                "lifecycle_event_available_at": revision.get("lifecycle_event_available_at"),
+                "lifecycle_event_effective_at": revision.get("lifecycle_event_effective_at"),
+                "lifecycle_event_date": revision.get("lifecycle_event_date"),
+                "operational_event_id": revision.get("operational_event_id"),
+                "operational_event_source": revision.get("operational_event_source"),
+                "operational_event_status": revision.get("operational_event_status"),
+                "operational_event_available_at": revision.get("operational_event_available_at"),
+                "operational_event_effective_at": revision.get("operational_event_effective_at"),
             },
             "reasons": [revision["reason"]] if revision.get("reason") else [],
         }
@@ -463,6 +768,13 @@ class UniverseRepository:
             )
             for row in rows
         ]
+        event_state = self._select_event_states_batch(
+            conn, instrument_ids=[instrument_id], cutoff=cutoff,
+        ).get(str(instrument_id), {})
+        rows = [
+            self._apply_event_state_to_row(row, event_state=event_state) or row
+            for row in rows
+        ]
         excluded_by_id = self._effective_excluded_instrument_revision_ids(
             conn, instrument_ids=[instrument_id], cutoff=cutoff,
         )
@@ -500,6 +812,8 @@ class UniverseRepository:
                     master_mappings=master_mappings,
                 )
             if value and not excluded_ids:
+                value = self._apply_event_state_to_row(value, event_state=event_state)
+            if value and not excluded_ids:
                 parent = conn.execute("SELECT logical_revision_key FROM universe_revisions WHERE universe_revision_id=?", (value.get("universe_revision_id"),)).fetchone()
                 value["logical_revision_key"] = parent[0] if parent else None
             return value if not excluded_ids else None
@@ -513,7 +827,8 @@ class UniverseRepository:
         return ",".join("?" for _ in values)
 
     def _select_historical_references_batch(
-        self, conn: sqlite3.Connection, *, instrument_ids: list[str], cutoff: str
+        self, conn: sqlite3.Connection, *, instrument_ids: list[str], cutoff: str,
+        event_states: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, dict[str, Any] | None]:
         """Select historical references for a page with bounded set queries.
 
@@ -603,7 +918,17 @@ class UniverseRepository:
                     if excluded_by_id.get(instrument_id)
                     else partial_by_id.get(instrument_id)
                 )
-        return result
+        if event_states is None:
+            event_states = self._select_event_states_batch(
+                conn, instrument_ids=ids, cutoff=cutoff,
+            )
+        return {
+            instrument_id: self._apply_event_state_to_row(
+                row,
+                event_state=event_states.get(instrument_id, {}),
+            )
+            for instrument_id, row in result.items()
+        }
 
     def _select_operational_state(self, conn: sqlite3.Connection, *, instrument_id: str,
                                   cutoff: str, reference: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -750,6 +1075,7 @@ class UniverseRepository:
             return dto
         op = operational or reference
         reasons: list[str] = []
+        reasons.extend(str(reason) for reason in reference.get("event_reasons", []) if reason)
         status = str(op.get("status") or "unknown")
         completeness_source = op
         if status == "accepted" and op.get("resource_role") != "master_snapshot":
@@ -843,20 +1169,12 @@ class UniverseRepository:
         canonical = canonical_symbol_for(venue, code)
         cutoff = validate_knowledge_cutoff_at(knowledge_cutoff_at)
         with self.read_transaction() as conn:
-            candidates = [dict(row) for row in conn.execute(
-                f"""
-                SELECT r.*, i.venue, i.official_code, i.identity_epoch, i.identity_binding_fingerprint,
-                       i.first_observed_at AS anchor_first_observed_at
-                FROM universe_instrument_revisions r
-                JOIN universe_instruments i ON i.instrument_id = r.instrument_id
-                WHERE i.venue = ? AND i.official_code = ? AND r.canonical_symbol = ? AND {self._cutoff_where('r')}
-                ORDER BY r.revision_number DESC, COALESCE(r.available_at,'' ) DESC,
-                         r.ingested_at DESC, r.instrument_revision_id DESC
-                """, (venue.value, code, canonical, cutoff, cutoff, cutoff, cutoff)
-            ).fetchall()]
-            if not candidates:
+            effective_ids = self._effective_epoch_instrument_ids(
+                conn, cutoff=cutoff, venue=venue.value, official_code=code,
+            )
+            if not effective_ids:
                 return self._compose_result(None, None, cutoff=cutoff, missing_reason="instrument_not_found")
-            instrument_id = candidates[0]["instrument_id"]
+            instrument_id = sorted(effective_ids)[0]
             reference = self._select_historical_reference(conn, instrument_id=instrument_id, cutoff=cutoff)
             operational = self._select_operational_state(conn, instrument_id=instrument_id, cutoff=cutoff, reference=reference)
             # A canonical lookup is valid only when the effective historical
@@ -919,6 +1237,45 @@ class UniverseRepository:
             # ancestor and revoked target before ranking.  List membership,
             # filters, ordering and cursors therefore operate on the same
             # effective historical reference that the batch selector returns.
+            epoch_event_rows: dict[str, dict[str, list[dict[str, Any]]]] = {}
+            effective_epoch_ids = sorted(
+                self._effective_epoch_instrument_ids(
+                    conn, cutoff=cutoff, venue=venue_value,
+                    event_rows_out=epoch_event_rows,
+                )
+            )
+            epoch_event_states = {
+                instrument_id: self._compose_event_state(
+                    rows.get("lifecycle", []),
+                    rows.get("operational", []),
+                    cutoff=cutoff,
+                )
+                for instrument_id, rows in epoch_event_rows.items()
+            }
+            if listing_value and effective_epoch_ids:
+                # Listing-status filters operate on the same composed event
+                # state returned in each public item, not on the stale raw
+                # revision column before lifecycle events are applied.
+                effective_references = self._select_historical_references_batch(
+                    conn,
+                    instrument_ids=effective_epoch_ids,
+                    cutoff=cutoff,
+                    event_states=epoch_event_states,
+                )
+                effective_epoch_ids = [
+                    instrument_id
+                    for instrument_id in effective_epoch_ids
+                    if (
+                        effective_references.get(instrument_id)
+                        and effective_references[instrument_id].get("listing_status") == listing_value
+                    )
+                ]
+            if effective_epoch_ids:
+                effective_epoch_predicate = (
+                    f"r.instrument_id IN ({self._sql_placeholders(effective_epoch_ids)})"
+                )
+            else:
+                effective_epoch_predicate = "0=1"
             cutoff_predicate = self._cutoff_where("r")
             filters: list[str] = []
             filter_params: list[Any] = []
@@ -926,8 +1283,9 @@ class UniverseRepository:
                 filters.append("anchor_venue = ?"); filter_params.append(venue_value)
             if security_type:
                 filters.append("security_type = ?"); filter_params.append(security_type)
-            if listing_value:
-                filters.append("listing_status = ?"); filter_params.append(listing_value)
+            # ``listing_value`` has already been applied to the composed
+            # cutoff-visible lifecycle state above; filtering the raw revision
+            # column here would incorrectly drop a termination overlay.
             if query:
                 filters.append("(anchor_code LIKE ? OR effective_canonical_key LIKE ? OR COALESCE(display_name,'') LIKE ?)")
                 term = f"%{query.strip().upper()}%"; filter_params += [term, term, term]
@@ -970,6 +1328,7 @@ class UniverseRepository:
                     JOIN universe_instruments i ON i.instrument_id = r.instrument_id
                     JOIN universe_resource_policies p ON p.resource_id = r.resource_id
                     WHERE r.status = 'accepted'
+                      AND {effective_epoch_predicate}
                       AND {cutoff_predicate}
                       AND NOT EXISTS (
                           SELECT 1 FROM excluded x
@@ -1016,12 +1375,17 @@ class UniverseRepository:
                 WHERE {outer_where}
                 ORDER BY anchor_venue ASC, effective_canonical_key ASC, instrument_id ASC
                 LIMIT ?
-                """, ([cutoff] * 4) + ([cutoff] * 4) + filter_params + cursor_params + [int(limit) + 1]
+                """, ([cutoff] * 4) + effective_epoch_ids + ([cutoff] * 4) + filter_params + cursor_params + [int(limit) + 1]
             ).fetchall()]
             selected = base_rows
             page_rows = selected[:int(limit)]
             instrument_ids = [str(row["instrument_id"]) for row in page_rows]
-            references = self._select_historical_references_batch(conn, instrument_ids=instrument_ids, cutoff=cutoff)
+            references = self._select_historical_references_batch(
+                conn,
+                instrument_ids=instrument_ids,
+                cutoff=cutoff,
+                event_states=epoch_event_states,
+            )
             operational = self._select_operational_states_batch(
                 conn, instrument_ids=instrument_ids, references=references, cutoff=cutoff,
             )
@@ -1263,8 +1627,19 @@ class UniverseRepository:
             if same:
                 if continuity_proven:
                     return {**dict(same), "created": False, "continuity_reused": True}
-                terminated = conn.execute("SELECT 1 FROM universe_lifecycle_events WHERE instrument_id=? AND event_type='terminated' AND status='accepted' LIMIT 1", (same["instrument_id"],)).fetchone()
-                if not terminated:
+                lifecycle_rows = [dict(row) for row in conn.execute(
+                    "SELECT * FROM universe_lifecycle_events WHERE instrument_id=?",
+                    (same["instrument_id"],),
+                ).fetchall()]
+                latest_listing = self._latest_visible_event(
+                    [row for row in lifecycle_rows if row.get("event_type") in {"listed", "terminated"}],
+                    cutoff=utc_now_timestamp(),
+                )
+                if not (
+                    latest_listing
+                    and latest_listing.get("status") == "accepted"
+                    and latest_listing.get("event_type") == "terminated"
+                ):
                     raise UniverseIdentityCollision("identity_collision")
                 epoch = int(same["identity_epoch"]) + 1
             binding = identity_binding_fingerprint(venue_value, code, epoch, source_identity)
@@ -1558,13 +1933,21 @@ class UniverseRepository:
         available = normalize_universe_timestamp(available_at, "available_at")
         ingested = normalize_universe_timestamp(ingested_at, "ingested_at")
         effective = normalize_universe_timestamp(effective_at, "effective_at") if effective_at else None
+        normalized_event_date = None
+        if event_date:
+            try:
+                normalized_event_date = date.fromisoformat(str(event_date)).isoformat()
+            except ValueError as exc:
+                raise ValueError("event_date must be an ISO-8601 date") from exc
+        if status not in {"accepted", "revoked", "awaiting_review"}:
+            raise ValueError("unsupported lifecycle event status")
         if not source_reference.strip() or not reason.strip():
             raise ValueError("source_reference and reason are required")
         event_id = f"ulife_{uuid.uuid4().hex}"
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute("INSERT INTO universe_lifecycle_events VALUES (?,?,?,?,?,?,?,?,?,?)",
-                         (event_id, instrument_id, event_type, event_date, effective, available, ingested, source_reference.strip(), status, reason.strip()))
+                         (event_id, instrument_id, event_type, normalized_event_date, effective, available, ingested, source_reference.strip(), status, reason.strip()))
             write_universe_audit(ctx, command="add_lifecycle_event", outcome="created",
                                  channel="historical", reason=event_type)
             return {**dict(conn.execute("SELECT * FROM universe_lifecycle_events WHERE lifecycle_event_id=?", (event_id,)).fetchone()), "actor_id": ctx.actor_id}
@@ -1579,6 +1962,8 @@ class UniverseRepository:
         available = normalize_universe_timestamp(available_at, "available_at")
         ingested = normalize_universe_timestamp(ingested_at, "ingested_at")
         effective = normalize_universe_timestamp(effective_at, "effective_at") if effective_at else None
+        if status not in {"accepted", "revoked", "awaiting_review"}:
+            raise ValueError("unsupported operational event status")
         if not source_reference.strip() or not reason.strip():
             raise ValueError("source_reference and reason are required")
         event_id = f"uoper_{uuid.uuid4().hex}"

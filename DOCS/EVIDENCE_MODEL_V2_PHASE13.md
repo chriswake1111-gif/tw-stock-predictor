@@ -32,6 +32,23 @@ operational health and never become a historical identity reference.
 
 `universe_instruments` is an immutable anchor keyed by venue, source code and identity epoch. Same-code reuse requires explicit termination and no proven continuity; a successor gets a new anchor and append-only alias. `universe_symbol_mapping_v1` creates `.TW` or `.TWO` only for an approved master resource scope and verified identity. A carried mapping is effective only when the approved master is safe at the relevant knowledge cutoff: its availability and publication evidence must be visible, and it must not be targeted by a visible instrument-revision revoke. Corroborating/manual rows cannot inherit a future, unavailable or revoked master mapping; read-time projection reuses the same safe master channel, and without such evidence the canonical field remains null and the result is `canonical_mapping_unverified`. `security_type=unknown` remains unknown.
 
+Canonical, code-plus-venue and list reads use one cutoff-bound identity-epoch
+selector. A later epoch becomes effective only when its immediate predecessor's
+latest visible listing event is an accepted termination and the successor anchor
+is itself visible. Before that boundary the old epoch remains reproducible; after
+it, the old epoch cannot compete because it has a larger revision number. The
+selector is scoped by venue and preserves leading-zero source codes, so sequential
+code reuse cannot expose duplicate canonical keys or cross-venue collisions.
+
+Cutoff-visible lifecycle and operational event tables are composed into the same
+read transaction as the reference and freshness channels. `listed` and
+`terminated` events affect `listing_status` only; operational events and a
+source-backed `resumed` event affect `trading_state` only. Date-only events are
+not applied during the same calendar date because no intraday instant is proven.
+Event provenance is returned without raw payloads, credentials or idempotency
+secrets, and a non-accepted latest event fails closed to `unknown` rather than
+resurrecting an older state.
+
 Instrument-level `supersedes_revision_id` is derived from the exact parent `universe_revision_id` being corrected or revoked, mapped to the normalized instrument revision for the same instrument, resource and logical revision chain. A first revision in a new source/logical chain has no implicit global instrument predecessor. Historical eligibility uses one cutoff-visible chain evaluator: accepted corrections and revoked events both exclude their direct targets and all visible ancestors, so an older accepted revision cannot be resurrected after a correction/revocation sequence. List/search uses the same effective reference before filters, canonical ordering, cursor binding and `LIMIT limit+1`; blocked or unmapped rows do not consume safe identity page slots, while venue resource health remains independently visible.
 
 ## Source boundary
