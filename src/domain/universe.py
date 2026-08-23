@@ -90,7 +90,16 @@ ACTIONABLE_HUMAN_REASONS = frozenset(
         "source_schema_review_required",
         "source_revision_revoked_without_corrected_revision",
         "canonical_mapping_unverified",
+    }
+)
+
+# These conditions remain fail-closed, but are not operator-actionable under
+# the authoritative Phase 13 status contract.  They must resolve to ``partial``
+# rather than changing the human-input precedence.
+NON_ACTIONABLE_BLOCKING_REASONS = frozenset(
+    {
         "availability_unproven",
+        "event_state_blocked",
     }
 )
 
@@ -261,6 +270,8 @@ def universe_status_matrix_v1(value: UniverseStatusInput | dict[str, Any]) -> di
         status = UniverseStatus.INSUFFICIENT_DATA.value
     elif any(reason in ACTIONABLE_HUMAN_REASONS for reason in reasons):
         status = UniverseStatus.NEEDS_HUMAN_INPUT.value
+    elif any(reason in NON_ACTIONABLE_BLOCKING_REASONS for reason in reasons):
+        status = UniverseStatus.PARTIAL.value
     elif value.current_complete and value.operational_freshness == FreshnessStatus.CURRENT.value:
         status = UniverseStatus.AVAILABLE.value
     else:
@@ -288,7 +299,7 @@ def compose_universe_status(items: Iterable[dict[str, Any]], scoped_venues: Iter
 
 
 __all__ = [
-    "ACTIONABLE_HUMAN_REASONS", "AvailabilityMode", "FreshnessMode", "FreshnessStatus",
+    "ACTIONABLE_HUMAN_REASONS", "NON_ACTIONABLE_BLOCKING_REASONS", "AvailabilityMode", "FreshnessMode", "FreshnessStatus",
     "ListingStatus", "MappingPolicyVersion", "MembershipState", "ResourceRole",
     "TradingState", "UniverseIdentityBinding", "UniverseRevisionInput", "UniverseStatus",
     "UniverseStatusInput", "UniverseVenue", "canonical_symbol_for", "coerce_venue", "compose_universe_status",

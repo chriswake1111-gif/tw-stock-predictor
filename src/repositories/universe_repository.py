@@ -16,6 +16,7 @@ from src.domain.universe import (
     FreshnessStatus,
     ListingStatus,
     MembershipState,
+    NON_ACTIONABLE_BLOCKING_REASONS,
     TradingState,
     UniverseVenue,
     canonical_symbol_for,
@@ -309,7 +310,12 @@ class UniverseRepository:
                 )
             else:
                 state["listing_status"] = ListingStatus.UNKNOWN.value
-                state.setdefault("event_reasons", []).append("lifecycle_event_not_accepted")
+                state["event_state_blocked"] = True
+                reason = {
+                    "awaiting_review": "source_revision_awaiting_review",
+                    "revoked": "source_revision_revoked_without_corrected_revision",
+                }.get(str(listing_event.get("status")))
+                state.setdefault("event_reasons", []).append(reason or "event_state_blocked")
         if operational_event:
             state["operational_event_id"] = operational_event.get("operational_event_id")
             state["operational_event_source"] = operational_event.get("event_source", "operational")
@@ -320,7 +326,12 @@ class UniverseRepository:
                 state["trading_state"] = operational_event.get("trading_state") or TradingState.UNKNOWN.value
             else:
                 state["trading_state"] = TradingState.UNKNOWN.value
-                state.setdefault("event_reasons", []).append("operational_event_not_accepted")
+                state["event_state_blocked"] = True
+                reason = {
+                    "awaiting_review": "source_revision_awaiting_review",
+                    "revoked": "source_revision_revoked_without_corrected_revision",
+                }.get(str(operational_event.get("status")))
+                state.setdefault("event_reasons", []).append(reason or "event_state_blocked")
         return state
 
     @classmethod
@@ -428,6 +439,108 @@ class UniverseRepository:
         return selected
 
     @classmethod
+    def _list_epoch_cte(
+        cls, *, cutoff: str, venue: str | None,
+    ) -> tuple[str, list[Any]]:
+        """Build the SQL-only effective epoch selector used by list/search.
+
+        Exact/resolve lookups retain the Python helper above for their bounded
+        single-key path.  List/search instead keeps epoch candidates inside
+        SQLite so it never constructs a universe-sized Python ``IN`` list.
+        """
+        anchor_clauses = ["i.first_observed_at <= ?"]
+        params: list[Any] = [cutoff]
+        if venue:
+            anchor_clauses.append("i.venue = ?")
+            params.append(venue)
+        event_visibility = """(
+            e.available_at <= ? AND e.ingested_at <= ? AND (
+                (e.effective_at IS NOT NULL AND e.effective_at <= ?)
+                OR (e.effective_at IS NULL AND e.event_date IS NOT NULL
+                    AND substr(?, 1, 10) > substr(e.event_date, 1, 10))
+                OR (e.effective_at IS NULL AND e.event_date IS NULL)
+            )
+        )"""
+        params.extend([cutoff] * 4)
+        cte = f"""
+            eligible_anchors AS (
+                SELECT i.instrument_id, i.venue, i.official_code,
+                       i.identity_epoch, i.first_observed_at,
+                       i.identity_binding_fingerprint
+                FROM universe_instruments i
+                WHERE {' AND '.join(anchor_clauses)}
+            ),
+            visible_lifecycle AS (
+                SELECT e.instrument_id, e.lifecycle_event_id, e.event_type,
+                       e.event_date, e.effective_at, e.available_at,
+                       e.ingested_at, e.status, e.reason,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY e.instrument_id
+                           ORDER BY CASE WHEN e.effective_at IS NOT NULL THEN e.effective_at
+                                         WHEN e.event_date IS NOT NULL THEN substr(e.event_date,1,10)
+                                         ELSE e.available_at END DESC,
+                                    CASE WHEN e.effective_at IS NOT NULL THEN 2
+                                         WHEN e.event_date IS NOT NULL THEN 1 ELSE 0 END DESC,
+                                    e.available_at DESC, e.ingested_at DESC,
+                                    e.lifecycle_event_id DESC
+                       ) AS rn
+                FROM universe_lifecycle_events e
+                WHERE e.event_type IN ('listed','terminated')
+                  AND {event_visibility}
+            ),
+            latest_lifecycle AS (
+                SELECT instrument_id, lifecycle_event_id, event_type,
+                       event_date, effective_at, available_at, ingested_at,
+                       status, reason
+                FROM visible_lifecycle
+                WHERE rn = 1
+            ),
+            epoch_starts AS (
+                SELECT a.*
+                FROM eligible_anchors a
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM eligible_anchors prior
+                    WHERE prior.venue = a.venue
+                      AND prior.official_code = a.official_code
+                      AND prior.identity_epoch < a.identity_epoch
+                )
+            ),
+            epoch_chain(instrument_id, venue, official_code, identity_epoch,
+                        first_observed_at, identity_binding_fingerprint) AS (
+                SELECT instrument_id, venue, official_code, identity_epoch,
+                       first_observed_at, identity_binding_fingerprint
+                FROM epoch_starts
+                UNION ALL
+                SELECT next.instrument_id, next.venue, next.official_code,
+                       next.identity_epoch, next.first_observed_at,
+                       next.identity_binding_fingerprint
+                FROM epoch_chain current_epoch
+                JOIN eligible_anchors next
+                  ON next.venue = current_epoch.venue
+                 AND next.official_code = current_epoch.official_code
+                 AND next.identity_epoch = current_epoch.identity_epoch + 1
+                JOIN latest_lifecycle termination
+                  ON termination.instrument_id = current_epoch.instrument_id
+                 AND termination.event_type = 'terminated'
+                 AND termination.status = 'accepted'
+            ),
+            effective_epochs AS (
+                SELECT venue, official_code, MAX(identity_epoch) AS identity_epoch
+                FROM epoch_chain
+                GROUP BY venue, official_code
+            ),
+            effective_anchors AS (
+                SELECT a.*
+                FROM eligible_anchors a
+                JOIN effective_epochs e
+                  ON e.venue = a.venue
+                 AND e.official_code = a.official_code
+                 AND e.identity_epoch = a.identity_epoch
+            ),
+        """
+        return cte, params
+
+    @classmethod
     def _select_event_states_batch(
         cls,
         conn: sqlite3.Connection,
@@ -491,6 +604,7 @@ class UniverseRepository:
             "lifecycle_event_date", "operational_event_id",
             "operational_event_source", "operational_event_status",
             "operational_event_available_at", "operational_event_effective_at",
+            "event_state_blocked",
         ):
             if key in event_state:
                 value[key] = event_state[key]
@@ -1124,6 +1238,8 @@ class UniverseRepository:
             bool(completeness_source.get("current_complete"))
             and status == "accepted"
             and freshness == FreshnessStatus.CURRENT.value
+            and not bool(reference.get("event_state_blocked"))
+            and not any(reason in NON_ACTIONABLE_BLOCKING_REASONS for reason in reasons)
             and completeness_source.get("resource_role") == "master_snapshot"
             and completeness_source.get("completeness_policy") == "accepted_master_complete"
             and policy_freshness_mode in {
@@ -1233,49 +1349,12 @@ class UniverseRepository:
             except (json.JSONDecodeError, TypeError, KeyError):
                 raise ValueError("cursor_query_mismatch")
         with self.read_transaction() as conn:
-            # The recursive edge CTE removes every visible accepted correction
-            # ancestor and revoked target before ranking.  List membership,
-            # filters, ordering and cursors therefore operate on the same
-            # effective historical reference that the batch selector returns.
-            epoch_event_rows: dict[str, dict[str, list[dict[str, Any]]]] = {}
-            effective_epoch_ids = sorted(
-                self._effective_epoch_instrument_ids(
-                    conn, cutoff=cutoff, venue=venue_value,
-                    event_rows_out=epoch_event_rows,
-                )
+            # Epoch selection remains inside SQLite for list/search.  This
+            # avoids materializing every anchor/event in Python and avoids an
+            # IN predicate proportional to the complete Universe.
+            epoch_cte, epoch_params = self._list_epoch_cte(
+                cutoff=cutoff, venue=venue_value,
             )
-            epoch_event_states = {
-                instrument_id: self._compose_event_state(
-                    rows.get("lifecycle", []),
-                    rows.get("operational", []),
-                    cutoff=cutoff,
-                )
-                for instrument_id, rows in epoch_event_rows.items()
-            }
-            if listing_value and effective_epoch_ids:
-                # Listing-status filters operate on the same composed event
-                # state returned in each public item, not on the stale raw
-                # revision column before lifecycle events are applied.
-                effective_references = self._select_historical_references_batch(
-                    conn,
-                    instrument_ids=effective_epoch_ids,
-                    cutoff=cutoff,
-                    event_states=epoch_event_states,
-                )
-                effective_epoch_ids = [
-                    instrument_id
-                    for instrument_id in effective_epoch_ids
-                    if (
-                        effective_references.get(instrument_id)
-                        and effective_references[instrument_id].get("listing_status") == listing_value
-                    )
-                ]
-            if effective_epoch_ids:
-                effective_epoch_predicate = (
-                    f"r.instrument_id IN ({self._sql_placeholders(effective_epoch_ids)})"
-                )
-            else:
-                effective_epoch_predicate = "0=1"
             cutoff_predicate = self._cutoff_where("r")
             filters: list[str] = []
             filter_params: list[Any] = []
@@ -1283,9 +1362,8 @@ class UniverseRepository:
                 filters.append("anchor_venue = ?"); filter_params.append(venue_value)
             if security_type:
                 filters.append("security_type = ?"); filter_params.append(security_type)
-            # ``listing_value`` has already been applied to the composed
-            # cutoff-visible lifecycle state above; filtering the raw revision
-            # column here would incorrectly drop a termination overlay.
+            if listing_value:
+                filters.append("effective_listing_status = ?"); filter_params.append(listing_value)
             if query:
                 filters.append("(anchor_code LIKE ? OR effective_canonical_key LIKE ? OR COALESCE(display_name,'') LIKE ?)")
                 term = f"%{query.strip().upper()}%"; filter_params += [term, term, term]
@@ -1303,10 +1381,12 @@ class UniverseRepository:
             outer_where = " AND ".join(outer_clauses) if outer_clauses else "1=1"
             base_rows = [dict(row) for row in conn.execute(
                 f"""
-                WITH RECURSIVE visible_edges AS (
+                WITH RECURSIVE {epoch_cte}
+                visible_edges AS (
                     SELECT r.instrument_id, r.instrument_revision_id AS child_revision_id,
                            r.supersedes_revision_id AS parent_revision_id
                     FROM universe_instrument_revisions r
+                    JOIN effective_anchors ea ON ea.instrument_id = r.instrument_id
                     WHERE r.status IN ('accepted', 'revoked')
                       AND r.supersedes_revision_id IS NOT NULL
                       AND {cutoff_predicate}
@@ -1320,15 +1400,14 @@ class UniverseRepository:
                       ON x.instrument_id = e.instrument_id
                      AND x.instrument_revision_id = e.child_revision_id
                 ), accepted_visible AS (
-                    SELECT r.*, i.venue AS anchor_venue, i.official_code AS anchor_code,
-                           i.identity_epoch, i.identity_binding_fingerprint,
+                    SELECT r.*, ea.venue AS anchor_venue, ea.official_code AS anchor_code,
+                           ea.identity_epoch, ea.identity_binding_fingerprint,
                            p.resource_role, p.completeness_policy,
                            p.freshness_mode AS policy_freshness_mode
                     FROM universe_instrument_revisions r
-                    JOIN universe_instruments i ON i.instrument_id = r.instrument_id
+                    JOIN effective_anchors ea ON ea.instrument_id = r.instrument_id
                     JOIN universe_resource_policies p ON p.resource_id = r.resource_id
                     WHERE r.status = 'accepted'
-                      AND {effective_epoch_predicate}
                       AND {cutoff_predicate}
                       AND NOT EXISTS (
                           SELECT 1 FROM excluded x
@@ -1370,12 +1449,22 @@ class UniverseRepository:
                     LEFT JOIN latest_master lm ON lm.instrument_id = a.instrument_id
                 ), latest AS (
                     SELECT * FROM ranked WHERE rn = 1
+                ), latest_with_listing AS (
+                    SELECT latest.*,
+                           CASE
+                             WHEN ll.lifecycle_event_id IS NULL THEN latest.listing_status
+                             WHEN ll.status = 'accepted' THEN
+                               CASE WHEN ll.event_type = 'terminated' THEN 'delisted' ELSE 'listed' END
+                             ELSE 'unknown'
+                           END AS effective_listing_status
+                    FROM latest
+                    LEFT JOIN latest_lifecycle ll ON ll.instrument_id = latest.instrument_id
                 )
-                SELECT * FROM latest
+                SELECT * FROM latest_with_listing
                 WHERE {outer_where}
                 ORDER BY anchor_venue ASC, effective_canonical_key ASC, instrument_id ASC
                 LIMIT ?
-                """, ([cutoff] * 4) + effective_epoch_ids + ([cutoff] * 4) + filter_params + cursor_params + [int(limit) + 1]
+                """, epoch_params + ([cutoff] * 4) + ([cutoff] * 4) + filter_params + cursor_params + [int(limit) + 1]
             ).fetchall()]
             selected = base_rows
             page_rows = selected[:int(limit)]
@@ -1384,7 +1473,6 @@ class UniverseRepository:
                 conn,
                 instrument_ids=instrument_ids,
                 cutoff=cutoff,
-                event_states=epoch_event_states,
             )
             operational = self._select_operational_states_batch(
                 conn, instrument_ids=instrument_ids, references=references, cutoff=cutoff,

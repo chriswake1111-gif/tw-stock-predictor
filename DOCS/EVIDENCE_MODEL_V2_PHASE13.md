@@ -38,7 +38,10 @@ latest visible listing event is an accepted termination and the successor anchor
 is itself visible. Before that boundary the old epoch remains reproducible; after
 it, the old epoch cannot compete because it has a larger revision number. The
 selector is scoped by venue and preserves leading-zero source codes, so sequential
-code reuse cannot expose duplicate canonical keys or cross-venue collisions.
+code reuse cannot expose duplicate canonical keys or cross-venue collisions. The
+list path keeps effective epoch selection in a recursive SQL CTE and applies
+listing-status filtering before `LIMIT limit+1`; it does not materialize a
+universe-sized Python ID set or `IN (...)` predicate.
 
 Cutoff-visible lifecycle and operational event tables are composed into the same
 read transaction as the reference and freshness channels. `listed` and
@@ -47,7 +50,11 @@ source-backed `resumed` event affect `trading_state` only. Date-only events are
 not applied during the same calendar date because no intraday instant is proven.
 Event provenance is returned without raw payloads, credentials or idempotency
 secrets, and a non-accepted latest event fails closed to `unknown` rather than
-resurrecting an older state.
+resurrecting an older state. Awaiting-review events map to
+`source_revision_awaiting_review`; applicable revoked events use
+`source_revision_revoked_without_corrected_revision`; other blockers remain
+non-actionable `partial`. The actionable allowlist is exactly the five LUK-15
+reasons, while `availability_unproven` remains fail-closed but is not actionable.
 
 Instrument-level `supersedes_revision_id` is derived from the exact parent `universe_revision_id` being corrected or revoked, mapped to the normalized instrument revision for the same instrument, resource and logical revision chain. A first revision in a new source/logical chain has no implicit global instrument predecessor. Historical eligibility uses one cutoff-visible chain evaluator: accepted corrections and revoked events both exclude their direct targets and all visible ancestors, so an older accepted revision cannot be resurrected after a correction/revocation sequence. List/search uses the same effective reference before filters, canonical ordering, cursor binding and `LIMIT limit+1`; blocked or unmapped rows do not consume safe identity page slots, while venue resource health remains independently visible.
 
