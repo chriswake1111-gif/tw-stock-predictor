@@ -1349,14 +1349,36 @@ class UniverseRepository:
     ) -> tuple[list[str], list[Any]]:
         """Build a conservative, non-recursive candidate prefilter.
 
-        The predicates are deliberately supersets of the final effective-state
-        predicates.  They may admit a stale historical match, but can never
-        exclude a possible current match.  The bounded epoch/revision/event CTE
+        The predicates are deliberately conservative supersets of the final
+        effective-state predicates.  A visible accepted revision is eligible
+        for candidate work only while it has no visible direct correction or
+        revocation child.  This is enough to exclude every ancestor in a
+        supersession chain without recursively walking the Universe: every
+        obsolete ancestor has a visible direct child, while cutoff-invisible
+        children remain harmless.  The bounded epoch/revision/event CTE
         remains authoritative and applies the exact filters afterwards.
+
+        Lifecycle candidates use the same non-recursive latest-event ordering
+        as ``latest_lifecycle``.  An old listed/terminated event therefore
+        cannot keep admitting an instrument whose effective listing state is
+        already represented by a newer visible event.
         """
         clauses: list[str] = []
         params: list[Any] = []
-        cutoff_where = cls._cutoff_where("candidate_revision")
+        revision_cutoff_where = cls._cutoff_where("candidate_revision")
+        child_cutoff_where = cls._cutoff_where("candidate_child")
+        effective_revision_where = f"""(
+            candidate_revision.status = 'accepted'
+            AND {revision_cutoff_where}
+            AND NOT EXISTS (
+                SELECT 1
+                FROM universe_instrument_revisions candidate_child
+                WHERE candidate_child.instrument_id = candidate_revision.instrument_id
+                  AND candidate_child.supersedes_revision_id = candidate_revision.instrument_revision_id
+                  AND candidate_child.status IN ('accepted', 'revoked')
+                  AND {child_cutoff_where}
+            )
+        )"""
         if query:
             term = f"%{query.strip().upper()}%"
             clauses.append(
@@ -1366,31 +1388,30 @@ class UniverseRepository:
                         SELECT 1
                         FROM universe_instrument_revisions candidate_revision
                         WHERE candidate_revision.instrument_id = i.instrument_id
-                          AND candidate_revision.status = 'accepted'
                           AND (
                               COALESCE(candidate_revision.canonical_symbol, '') LIKE ?
                               OR COALESCE(candidate_revision.display_name, '') LIKE ?
                           )
-                          AND {cutoff_where}
+                          AND {effective_revision_where}
                     )
                 )"""
             )
-            params.extend([term, term, term, cutoff, cutoff, cutoff, cutoff])
+            params.extend([term, term, term, *([cutoff] * 8)])
         if security_type:
             clauses.append(
                 f"""EXISTS (
                     SELECT 1
                     FROM universe_instrument_revisions candidate_revision
                     WHERE candidate_revision.instrument_id = i.instrument_id
-                      AND candidate_revision.status = 'accepted'
                       AND candidate_revision.security_type = ?
-                      AND {cutoff_where}
+                      AND {effective_revision_where}
                 )"""
             )
-            params.extend([security_type, cutoff, cutoff, cutoff, cutoff])
+            params.extend([security_type, *([cutoff] * 8)])
         if listing_status:
             event_visibility = """(
-                candidate_event.available_at <= ?
+                candidate_event.available_at IS NOT NULL
+                AND candidate_event.available_at <= ?
                 AND candidate_event.ingested_at <= ?
                 AND (
                     (candidate_event.effective_at IS NOT NULL
@@ -1406,28 +1427,72 @@ class UniverseRepository:
                     )
                 )
             )"""
+            newer_event_visibility = event_visibility.replace(
+                "candidate_event", "newer_event"
+            )
+            newer_event_predicate = """(
+                (
+                    CASE WHEN newer_event.effective_at IS NOT NULL THEN newer_event.effective_at
+                         WHEN newer_event.event_date IS NOT NULL THEN substr(newer_event.event_date, 1, 10)
+                         ELSE newer_event.available_at END,
+                    CASE WHEN newer_event.effective_at IS NOT NULL THEN 2
+                         WHEN newer_event.event_date IS NOT NULL THEN 1 ELSE 0 END,
+                    newer_event.available_at,
+                    newer_event.ingested_at,
+                    newer_event.lifecycle_event_id
+                ) > (
+                    CASE WHEN candidate_event.effective_at IS NOT NULL THEN candidate_event.effective_at
+                         WHEN candidate_event.event_date IS NOT NULL THEN substr(candidate_event.event_date, 1, 10)
+                         ELSE candidate_event.available_at END,
+                    CASE WHEN candidate_event.effective_at IS NOT NULL THEN 2
+                         WHEN candidate_event.event_date IS NOT NULL THEN 1 ELSE 0 END,
+                    candidate_event.available_at,
+                    candidate_event.ingested_at,
+                    candidate_event.lifecycle_event_id
+                )
+            )"""
+            if listing_status == "listed":
+                latest_event_match = (
+                    "candidate_event.status = 'accepted' "
+                    "AND candidate_event.event_type = 'listed'"
+                )
+            elif listing_status == "delisted":
+                latest_event_match = (
+                    "candidate_event.status = 'accepted' "
+                    "AND candidate_event.event_type = 'terminated'"
+                )
+            else:
+                latest_event_match = "candidate_event.status <> 'accepted'"
             clauses.append(
                 f"""(
                     EXISTS (
                         SELECT 1
                         FROM universe_instrument_revisions candidate_revision
                         WHERE candidate_revision.instrument_id = i.instrument_id
-                          AND candidate_revision.status = 'accepted'
                           AND candidate_revision.listing_status = ?
-                          AND {cutoff_where}
+                          AND {effective_revision_where}
                     )
                     OR EXISTS (
                         SELECT 1
                         FROM universe_lifecycle_events candidate_event
                         WHERE candidate_event.instrument_id = i.instrument_id
                           AND candidate_event.event_type IN ('listed', 'terminated')
+                          AND {latest_event_match}
                           AND {event_visibility}
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM universe_lifecycle_events newer_event
+                              WHERE newer_event.instrument_id = candidate_event.instrument_id
+                                AND newer_event.event_type IN ('listed', 'terminated')
+                                AND {newer_event_visibility}
+                                AND {newer_event_predicate}
+                          )
                     )
                 )"""
             )
             params.extend(
-                [listing_status, cutoff, cutoff, cutoff, cutoff]
-                + [cutoff, cutoff, cutoff, cutoff]
+                [listing_status, *([cutoff] * 8)]
+                + [cutoff] * 8
             )
         return clauses, params
 
