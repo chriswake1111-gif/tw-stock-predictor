@@ -44,10 +44,13 @@ instrument_id)`, with an unresolved/null canonical sorting before mapped symbols
 inside each venue. A conservative non-recursive prefilter separates possible
 null-mapping identities from deterministic mapped identities and applies query,
 security-type and listing-status candidate predicates before expensive work.
-Visible accepted revisions with a cutoff-visible correction/revocation child
-are excluded before candidate admission, and listing candidates use the latest
-visible lifecycle event ordering, so obsolete history cannot stream false
-positives into recursive work.
+For each anchor it first selects the same highest-ranked accepted leaf used by
+the final effective reference (excluding visible correction/revocation
+ancestors), then applies the same latest lifecycle overlay. Independent
+corroborating/resource chains therefore cannot admit an obsolete name or
+security type, and a revision-side listing state cannot bypass a newer listed
+or terminated event. These effective predicates prevent cross-chain and event
+overlay false positives from streaming into recursive work.
 Only a bounded public-order candidate window enters the recursive
 epoch/revision/event CTE; zero-match filters therefore execute no recursive
 effective-state query, while sparse matches resolve only their bounded candidate

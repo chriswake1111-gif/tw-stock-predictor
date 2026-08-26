@@ -1347,67 +1347,109 @@ class UniverseRepository:
         security_type: str | None,
         listing_status: str | None,
     ) -> tuple[list[str], list[Any]]:
-        """Build a conservative, non-recursive candidate prefilter.
+        """Build a non-recursive effective-reference candidate prefilter.
 
-        The predicates are deliberately conservative supersets of the final
-        effective-state predicates.  A visible accepted revision is eligible
-        for candidate work only while it has no visible direct correction or
-        revocation child.  This is enough to exclude every ancestor in a
-        supersession chain without recursively walking the Universe: every
-        obsolete ancestor has a visible direct child, while cutoff-invisible
-        children remain harmless.  The bounded epoch/revision/event CTE
-        remains authoritative and applies the exact filters afterwards.
-
-        Lifecycle candidates use the same non-recursive latest-event ordering
-        as ``latest_lifecycle``.  An old listed/terminated event therefore
-        cannot keep admitting an instrument whose effective listing state is
-        already represented by a newer visible event.
+        The final list CTE first removes visible correction/revocation
+        ancestors, then selects one highest-ranked accepted reference per
+        instrument and finally overlays the latest lifecycle event.  A
+        prefilter that merely checks *any* live leaf is still a false-positive
+        stream when an independent corroborating/resource chain carries an
+        old name or security type.  The correlated predicates below mirror
+        that selection with direct-child checks plus the same ranking tuple,
+        and apply the lifecycle overlay before a candidate reaches the
+        recursive epoch CTE.  This keeps the expensive recursive work bounded
+        while preserving exact result filtering downstream.
         """
         clauses: list[str] = []
         params: list[Any] = []
-        revision_cutoff_where = cls._cutoff_where("candidate_revision")
-        child_cutoff_where = cls._cutoff_where("candidate_child")
-        effective_revision_where = f"""(
-            candidate_revision.status = 'accepted'
-            AND {revision_cutoff_where}
+        selected_cutoff_where = cls._cutoff_where("selected_revision")
+        selected_child_cutoff_where = cls._cutoff_where("selected_child")
+        better_cutoff_where = cls._cutoff_where("better_revision")
+        better_child_cutoff_where = cls._cutoff_where("better_child")
+        selected_leaf_where = f"""
+            selected_revision.status = 'accepted'
+            AND {selected_cutoff_where}
             AND NOT EXISTS (
                 SELECT 1
-                FROM universe_instrument_revisions candidate_child
-                WHERE candidate_child.instrument_id = candidate_revision.instrument_id
-                  AND candidate_child.supersedes_revision_id = candidate_revision.instrument_revision_id
-                  AND candidate_child.status IN ('accepted', 'revoked')
-                  AND {child_cutoff_where}
+                FROM universe_instrument_revisions selected_child
+                WHERE selected_child.instrument_id = selected_revision.instrument_id
+                  AND selected_child.supersedes_revision_id = selected_revision.instrument_revision_id
+                  AND selected_child.status IN ('accepted', 'revoked')
+                  AND {selected_child_cutoff_where}
             )
-        )"""
+        """
+        better_leaf_where = f"""
+            better_revision.status = 'accepted'
+            AND {better_cutoff_where}
+            AND NOT EXISTS (
+                SELECT 1
+                FROM universe_instrument_revisions better_child
+                WHERE better_child.instrument_id = better_revision.instrument_id
+                  AND better_child.supersedes_revision_id = better_revision.instrument_revision_id
+                  AND better_child.status IN ('accepted', 'revoked')
+                  AND {better_child_cutoff_where}
+            )
+        """
+        better_rank = """
+            (
+                better_revision.revision_number > selected_revision.revision_number
+                OR (
+                    better_revision.revision_number = selected_revision.revision_number
+                    AND COALESCE(better_revision.available_at, '') > COALESCE(selected_revision.available_at, '')
+                )
+                OR (
+                    better_revision.revision_number = selected_revision.revision_number
+                    AND COALESCE(better_revision.available_at, '') = COALESCE(selected_revision.available_at, '')
+                    AND better_revision.ingested_at > selected_revision.ingested_at
+                )
+                OR (
+                    better_revision.revision_number = selected_revision.revision_number
+                    AND COALESCE(better_revision.available_at, '') = COALESCE(selected_revision.available_at, '')
+                    AND better_revision.ingested_at = selected_revision.ingested_at
+                    AND better_revision.instrument_revision_id > selected_revision.instrument_revision_id
+                )
+            )
+        """
+        selected_reference_where = f"""
+            EXISTS (
+                SELECT 1
+                FROM universe_instrument_revisions selected_revision
+                JOIN universe_resource_policies selected_policy
+                  ON selected_policy.resource_id = selected_revision.resource_id
+                WHERE selected_revision.instrument_id = i.instrument_id
+                  AND {selected_leaf_where}
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM universe_instrument_revisions better_revision
+                      JOIN universe_resource_policies better_policy
+                        ON better_policy.resource_id = better_revision.resource_id
+                      WHERE better_revision.instrument_id = selected_revision.instrument_id
+                        AND {better_leaf_where}
+                        AND {better_rank}
+                  )
+        """
+        selected_reference_end = ")"
         if query:
             term = f"%{query.strip().upper()}%"
             clauses.append(
                 f"""(
                     i.official_code LIKE ?
-                    OR EXISTS (
-                        SELECT 1
-                        FROM universe_instrument_revisions candidate_revision
-                        WHERE candidate_revision.instrument_id = i.instrument_id
+                    OR {selected_reference_where}
                           AND (
-                              COALESCE(candidate_revision.canonical_symbol, '') LIKE ?
-                              OR COALESCE(candidate_revision.display_name, '') LIKE ?
+                              COALESCE(selected_revision.canonical_symbol, '') LIKE ?
+                              OR COALESCE(selected_revision.display_name, '') LIKE ?
                           )
-                          AND {effective_revision_where}
-                    )
+                        {selected_reference_end}
                 )"""
             )
-            params.extend([term, term, term, *([cutoff] * 8)])
+            params.extend([term, *([cutoff] * 16), term, term])
         if security_type:
             clauses.append(
-                f"""EXISTS (
-                    SELECT 1
-                    FROM universe_instrument_revisions candidate_revision
-                    WHERE candidate_revision.instrument_id = i.instrument_id
-                      AND candidate_revision.security_type = ?
-                      AND {effective_revision_where}
-                )"""
+                f"""{selected_reference_where}
+                      AND selected_revision.security_type = ?
+                    {selected_reference_end}"""
             )
-            params.extend([security_type, *([cutoff] * 8)])
+            params.extend([*([cutoff] * 16), security_type])
         if listing_status:
             event_visibility = """(
                 candidate_event.available_at IS NOT NULL
@@ -1427,73 +1469,34 @@ class UniverseRepository:
                     )
                 )
             )"""
-            newer_event_visibility = event_visibility.replace(
-                "candidate_event", "newer_event"
-            )
-            newer_event_predicate = """(
-                (
-                    CASE WHEN newer_event.effective_at IS NOT NULL THEN newer_event.effective_at
-                         WHEN newer_event.event_date IS NOT NULL THEN substr(newer_event.event_date, 1, 10)
-                         ELSE newer_event.available_at END,
-                    CASE WHEN newer_event.effective_at IS NOT NULL THEN 2
-                         WHEN newer_event.event_date IS NOT NULL THEN 1 ELSE 0 END,
-                    newer_event.available_at,
-                    newer_event.ingested_at,
-                    newer_event.lifecycle_event_id
-                ) > (
-                    CASE WHEN candidate_event.effective_at IS NOT NULL THEN candidate_event.effective_at
-                         WHEN candidate_event.event_date IS NOT NULL THEN substr(candidate_event.event_date, 1, 10)
-                         ELSE candidate_event.available_at END,
-                    CASE WHEN candidate_event.effective_at IS NOT NULL THEN 2
-                         WHEN candidate_event.event_date IS NOT NULL THEN 1 ELSE 0 END,
-                    candidate_event.available_at,
-                    candidate_event.ingested_at,
-                    candidate_event.lifecycle_event_id
-                )
-            )"""
-            if listing_status == "listed":
-                latest_event_match = (
-                    "candidate_event.status = 'accepted' "
-                    "AND candidate_event.event_type = 'listed'"
-                )
-            elif listing_status == "delisted":
-                latest_event_match = (
-                    "candidate_event.status = 'accepted' "
-                    "AND candidate_event.event_type = 'terminated'"
-                )
-            else:
-                latest_event_match = "candidate_event.status <> 'accepted'"
             clauses.append(
-                f"""(
-                    EXISTS (
-                        SELECT 1
-                        FROM universe_instrument_revisions candidate_revision
-                        WHERE candidate_revision.instrument_id = i.instrument_id
-                          AND candidate_revision.listing_status = ?
-                          AND {effective_revision_where}
-                    )
-                    OR EXISTS (
-                        SELECT 1
-                        FROM universe_lifecycle_events candidate_event
-                        WHERE candidate_event.instrument_id = i.instrument_id
-                          AND candidate_event.event_type IN ('listed', 'terminated')
-                          AND {latest_event_match}
-                          AND {event_visibility}
-                          AND NOT EXISTS (
-                              SELECT 1
-                              FROM universe_lifecycle_events newer_event
-                              WHERE newer_event.instrument_id = candidate_event.instrument_id
-                                AND newer_event.event_type IN ('listed', 'terminated')
-                                AND {newer_event_visibility}
-                                AND {newer_event_predicate}
-                          )
-                    )
-                )"""
+                f"""{selected_reference_where}
+                      AND COALESCE(
+                          (
+                              SELECT CASE
+                                  WHEN candidate_event.status = 'accepted' THEN
+                                      CASE WHEN candidate_event.event_type = 'terminated' THEN 'delisted' ELSE 'listed' END
+                                  ELSE 'unknown'
+                              END
+                              FROM universe_lifecycle_events candidate_event
+                              WHERE candidate_event.instrument_id = selected_revision.instrument_id
+                                AND candidate_event.event_type IN ('listed', 'terminated')
+                                AND {event_visibility}
+                              ORDER BY CASE WHEN candidate_event.effective_at IS NOT NULL THEN candidate_event.effective_at
+                                            WHEN candidate_event.event_date IS NOT NULL THEN substr(candidate_event.event_date, 1, 10)
+                                            ELSE candidate_event.available_at END DESC,
+                                       CASE WHEN candidate_event.effective_at IS NOT NULL THEN 2
+                                            WHEN candidate_event.event_date IS NOT NULL THEN 1 ELSE 0 END DESC,
+                                       candidate_event.available_at DESC,
+                                       candidate_event.ingested_at DESC,
+                                       candidate_event.lifecycle_event_id DESC
+                              LIMIT 1
+                          ),
+                          selected_revision.listing_status
+                      ) = ?
+                    {selected_reference_end}"""
             )
-            params.extend(
-                [listing_status, *([cutoff] * 8)]
-                + [cutoff] * 8
-            )
+            params.extend([*([cutoff] * 16), *([cutoff] * 4), listing_status])
         return clauses, params
 
     @classmethod
