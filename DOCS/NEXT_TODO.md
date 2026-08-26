@@ -136,8 +136,24 @@
 - [x] Actual-latest no-fallback selection, one shared cutoff/read transaction, and Phase 11 query-time comparison integrated.
 - [x] Local/loopback exact-Origin/Host boundary, writes-disabled default, 1,800-second CSRF, strict DTO/body limits, and browser no-admin-secret guard implemented.
 - [x] Backup/restore validation and `/research` desktop/mobile workspace added.
-- [ ] Phase 12 remains in Draft PR review state and is not merged to `main`.
-- [ ] Phase 13 has not started and requires separate explicit authorization after Phase 12 closure.
+- [x] Phase 12 research review queue is merged to `main`; its read-only workflow and governance remain regression boundaries.
+- [x] Phase 13 Universe Foundation is implemented on its dedicated Draft PR branch. Its as-of identity, source-governance, public-order pagination and bounded effective-state selection remain subject to the active review/merge gates; Phase 14 stays blocked until those gates close.
+
+## Evidence Model v2 Phase 13 — Universe Foundation
+
+- Universe identity is an immutable venue/code/identity-epoch context.  Same-code reuse requires explicit termination and no continuity evidence before allocating a new epoch; aliases are append-only and never inferred from name similarity.
+- `universe_symbol_mapping_v1` is a project canonical convention (`.TW` / `.TWO`) and never changes v1 `normalize_symbol`. Unknown security type is retained as `unknown`, not coerced to ordinary share.
+- The exact status policy is `universe_status_matrix_v1`: no safe reference is `insufficient_data`; actionable governance reasons are `needs_human_input`; non-actionable stale/unknown/provider failures are `partial`; only proven current complete data is `available`.
+- Universe reads are historical/as-of and current-operational channels.  A latest blocking revision never falls back to an older revision as current.  Public DTOs contain no prices, quotes, turnover, ranking, recommendation, Rule Trace, raw payload, secrets, locks, idempotency key, or fingerprint.
+- Phase 13 resources are limited to approved TWSE `t187ap03_L`/newlisting/termination and TPEx master/delisted/operational roles. TPEx `company.html` / `company/otcSearch` remains manual corroborating evidence until its machine contract is independently verified; the compatibility resource row is not a new-ingestion collector/parser contract. `tpex_mainboard_quotes` is documentation-only and excluded from registry, collectors, raw revisions, hashes, fixtures, API and frontend.
+- Runtime ingestion writes use `UNIVERSE_INGESTION_WRITES_ENABLED=false` by default and a centralized actor/run/lock/audit guard. Migration seed is the only normal registry seed; read constructors and GET routes are side-effect-free.
+- `universe_ingestion_idempotency` permanently binds every key to a payload fingerprint and revision.  Backup/restore includes Universe anchors, policies, revisions, events and idempotency bindings.
+- Venue health selects the latest cutoff-visible state per `(resource_id, logical_revision_key)` before applying deterministic status precedence; same-feed corrections clear only that feed, while optional corroborating/manual sources stay neutral and zero-row observations remain visible.
+- Registered freshness policy is authoritative: seeded TWSE/TPEx masters remain `unknown_without_official_cadence`, `freshness=unknown`, and `current_complete=false` even when an ingestion payload claims an official cadence or licensed reference.
+- Canonical `.TW`/`.TWO` mapping is generated only in approved master scope. Corroborating observations can preserve an existing master mapping but cannot create one independently; otherwise the result remains `canonical_mapping_unverified`.
+- Historical revocation targets `instrument_revision_id` (not the parent `universe_revision_id`) and removes the old identity from exact/canonical/resolve/list historical references until a corrected accepted revision is cutoff-visible. Master mapping carry-forward is likewise cutoff, publication-evidence and revocation safe.
+- Instrument supersession is derived only from the exact parent `universe_revision_id` in the same instrument/source/logical chain; interleaved sources never share a global instrument predecessor. The effective historical evaluator removes both accepted-correction ancestors and revoked targets transitively, and list pagination applies filters, canonical ordering and cursors only after that effective reference is established.
+- Phase 13 composes a cutoff-visible identity epoch per venue/code and applies lifecycle/operational events to exact, resolve and list state without date-only intraday inference. The actionable allowlist remains the authoritative five reasons and event governance fails closed. List/search prefilters possible matches without recursion, traverses null and mapped canonical lanes in the advertised public order, and limits recursive epoch/revision/event work to bounded candidate groups; Phase 14 remains blocked pending review and merge gates.
 
 ## Evidence Model V2 Phase 3 status (2026-08-01)
 

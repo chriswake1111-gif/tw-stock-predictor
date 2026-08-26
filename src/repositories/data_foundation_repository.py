@@ -579,6 +579,15 @@ class DataFoundationRepository:
         )
         clauses = []
         parameters: list[Any] = [cutoff, cutoff, cutoff, cutoff, cutoff, cutoff]
+        phase13_registry_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='universe_resource_policies'"
+        ).fetchone() is not None
+        if phase13_registry_exists:
+            # Phase 13 has its own neutral status/API contract; keep legacy
+            # Phase 10 provider-health output backward-compatible.
+            clauses.append(
+                "NOT EXISTS (SELECT 1 FROM universe_resource_policies up WHERE up.resource_id = r.resource_id)"
+            )
         if provider_id:
             clauses.append("r.provider_id = ?")
             parameters.append(provider_id.strip().lower())

@@ -10,7 +10,7 @@ def test_phase12_migration_is_additive_rerunnable_and_fresh_parent_safe(tmp_path
     db = tmp_path / "missing" / "phase12.db"
     first = apply_valuation_migration(str(db))
     second = apply_valuation_migration(str(db))
-    assert first["migration_id"] == "20260813_15_phase12_first_review_remediation"
+    assert first["migration_id"] == "20260821_16_phase13_universe_foundation"
     assert "20260813_14_evidence_model_v2_research_review_queue" in first["applied_migration_ids"]
     assert MIGRATION_ID == first["migration_id"]
     assert second["applied"] is False
@@ -65,7 +65,7 @@ def test_phase12_reviewed_head_database_upgrades_without_checksum_rewrite(tmp_pa
         apply_valuation_migration(str(db))
     result = apply_valuation_migration(str(db))
     assert result["applied_migration_ids"] == [
-        "20260813_15_phase12_first_review_remediation"
+        "20260821_16_phase13_universe_foundation"
     ]
     with sqlite3.connect(db) as conn:
         with pytest.raises(sqlite3.IntegrityError, match="symbol must be canonical"):

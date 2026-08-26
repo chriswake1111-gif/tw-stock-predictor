@@ -9,15 +9,16 @@ from src.repositories.migration_runner import apply_valuation_migration
 PHASE10_MIGRATION = "20260811_13_phase10_first_review_remediation"
 PHASE12_BASE_MIGRATION = "20260813_14_evidence_model_v2_research_review_queue"
 PHASE12_MIGRATION = "20260813_15_phase12_first_review_remediation"
+PHASE13_MIGRATION = "20260821_16_phase13_universe_foundation"
 
 
 def test_phase10_migration_is_additive_rerunnable_and_fresh_parent_safe(tmp_path):
     db_path = tmp_path / "missing" / "phase10.db"
     first = apply_valuation_migration(str(db_path))
     second = apply_valuation_migration(str(db_path))
-    assert migration_runner.MIGRATION_ID == PHASE12_MIGRATION
+    assert migration_runner.MIGRATION_ID == PHASE13_MIGRATION
     assert PHASE10_MIGRATION in first["applied_migration_ids"]
-    assert first["applied_migration_ids"][-1] == PHASE12_MIGRATION
+    assert first["applied_migration_ids"][-1] == PHASE13_MIGRATION
     assert second["applied"] is False
     with sqlite3.connect(db_path) as conn:
         tables = {
@@ -95,7 +96,7 @@ def test_raw_revision_metadata_identity_upgrade_preserves_foreign_keys(tmp_path)
         )
     result = apply_valuation_migration(str(db_path))
     assert result["applied_migration_ids"] == [
-        PHASE10_MIGRATION, PHASE12_BASE_MIGRATION, PHASE12_MIGRATION,
+        PHASE10_MIGRATION, PHASE12_BASE_MIGRATION, PHASE12_MIGRATION, PHASE13_MIGRATION,
     ]
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -124,7 +125,7 @@ def test_phase10_migration_upgrades_current_main_schema_without_rewrite(
         )
     result = apply_valuation_migration(str(db_path))
     assert result["applied_migration_ids"] == [
-        PHASE10_MIGRATION, PHASE12_BASE_MIGRATION, PHASE12_MIGRATION,
+        PHASE10_MIGRATION, PHASE12_BASE_MIGRATION, PHASE12_MIGRATION, PHASE13_MIGRATION,
     ]
     with sqlite3.connect(db_path) as conn:
         assert conn.execute(

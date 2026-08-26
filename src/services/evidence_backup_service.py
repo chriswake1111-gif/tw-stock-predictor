@@ -20,6 +20,14 @@ IRREPLACEABLE_TABLES = (
     "synthesis_profile_revisions",
     "synthesis_profile_approvals",
     "analysis_snapshots",
+    "universe_resource_policies",
+    "universe_instruments",
+    "universe_revisions",
+    "universe_instrument_revisions",
+    "universe_identity_alias_events",
+    "universe_lifecycle_events",
+    "universe_operational_state_events",
+    "universe_ingestion_idempotency",
 )
 
 
@@ -75,13 +83,29 @@ class EvidenceBackupService:
                 if table in table_names
             }
             operational = {
-                table: conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+                table: conn.execute(
+                    f'''SELECT COUNT(*) FROM "{table}"'''
+                    + (''' WHERE resource_id NOT IN (SELECT resource_id FROM universe_resource_policies)'''
+                       if table == "data_resources" and "universe_resource_policies" in table_names else "")
+                    + (''' WHERE provider_id NOT IN (SELECT DISTINCT r.provider_id FROM data_resources r JOIN universe_resource_policies up ON up.resource_id = r.resource_id)'''
+                       if table == "data_providers" and "universe_resource_policies" in table_names else "")
+                ).fetchone()[0]
                 for table in (
                     "data_providers", "data_resources", "ingestion_runs",
                     "ingestion_run_items", "raw_resource_revisions",
                     "data_quality_issues", "trading_calendar_revisions",
                     "snapshot_dependency_checks", "resource_publication_evidence",
                     "ingestion_lock_recovery_events", "ingestion_resource_locks",
+                )
+                if table in table_names
+            }
+            universe_foundation = {
+                table: conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+                for table in (
+                    "universe_resource_policies", "universe_instruments", "universe_revisions",
+                    "universe_instrument_revisions", "universe_identity_alias_events",
+                    "universe_lifecycle_events", "universe_operational_state_events",
+                    "universe_ingestion_idempotency",
                 )
                 if table in table_names
             }
@@ -110,6 +134,20 @@ class EvidenceBackupService:
                     raise RuntimeError(
                         f"workflow foreign key check failed: {workflow_violations[:3]}"
                     )
+            universe_tables = [
+                "universe_resource_policies", "universe_instruments", "universe_revisions",
+                "universe_instrument_revisions", "universe_identity_alias_events",
+                "universe_lifecycle_events", "universe_operational_state_events",
+                "universe_ingestion_idempotency",
+            ]
+            universe_violations = [
+                row for table in universe_tables if table in table_names
+                for row in conn.execute(f"PRAGMA foreign_key_check({table})").fetchall()
+            ]
+            if universe_violations:
+                raise RuntimeError(
+                    f"universe foreign key check failed: {universe_violations[:3]}"
+                )
         if integrity != "ok":
             raise RuntimeError(f"SQLite integrity check failed: {integrity}")
         return {
@@ -117,5 +155,6 @@ class EvidenceBackupService:
             "integrity_check": integrity,
             "irreplaceable_counts": counts,
             "operational_provenance_counts": operational,
+            "universe_foundation_counts": universe_foundation,
             "research_workflow_counts": workflow,
         }

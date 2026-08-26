@@ -17,6 +17,49 @@ export type EvaluationOrigin =
 export type EvidenceLevel = "A" | "B" | "C" | "U";
 export type UnknownRecord = Record<string, unknown>;
 
+export interface UniverseOperationalFreshness {
+  freshness: "current" | "stale" | "unknown" | "blocked" | string;
+  current_complete: boolean;
+  freshness_mode?: string | null;
+  availability_mode?: string | null;
+  latest_visible_state?: string | null;
+  reasons: string[];
+}
+
+export interface UniverseIdentityReference {
+  instrument_id: string | null;
+  canonical_symbol: string | null;
+  official_code: string | null;
+  venue: "TWSE" | "TPEX" | string | null;
+  display_name?: string | null;
+  security_type?: string | null;
+  listing_status?: string | null;
+  trading_state?: string | null;
+  membership_state?: string | null;
+  source_reference?: string | null;
+  mapping_basis?: string | null;
+}
+
+export interface UniverseResponse {
+  status: "available" | "partial" | "needs_human_input" | "insufficient_data";
+  status_policy_version: "universe_status_matrix_v1";
+  knowledge_cutoff_at: string;
+  cutoff_policy: UnknownRecord;
+  identity_reference: UniverseIdentityReference | null;
+  operational_freshness: UniverseOperationalFreshness;
+  effective?: UnknownRecord;
+  provenance?: UnknownRecord;
+  reasons: string[];
+}
+
+export interface UniverseListResponse extends UniverseResponse {
+  items: UniverseResponse[];
+  per_venue_status: Record<string, string>;
+  next_cursor: string | null;
+  order: string;
+  limit: number;
+}
+
 export interface RuleTrace extends UnknownRecord {
   rule_id: string;
   rule_version?: string;
