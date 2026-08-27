@@ -3,9 +3,9 @@
 ## Status
 
 This document records the LUK-29 Phase 14 Implementation scope and the latest
-Second Code Review remediation. The implementation is isolated from the Phase
+Third Code Review remediation. The implementation is isolated from the Phase
 13 baseline `be8e931038bf818cf7d9f578e18fa91b8f068cd4` and remains in one Draft
-PR for the Third Code Review gate. It is not a merge, deployment, production
+PR for the Fourth Code Review gate. It is not a merge, deployment, production
 activation, or Phase 15 authorization.
 
 ## Purpose and boundary
@@ -67,6 +67,16 @@ table used by the operator retry state machine:
 - `source_observation_state`
 - `eod_ingestion_command_reservations`
 
+Migration `20260828_20_phase14_third_code_review_remediation` is additive and
+leaves Migrations 18 and 19 immutable. It performs a data-preserving,
+versioned rebuild of the two Phase 14 idempotency tables so that
+`idempotency_key` remains the command identity while `payload_fingerprint` is
+content identity scoped by resource and logical/raw evidence. A different
+command key may submit the same approved content in the same logical scope or
+an independent resource scope; the service reuses the existing raw/source/
+classification/observation evidence and creates no correction revision. The
+same command key with different content remains fail-closed.
+
 Raw evidence remains bound to the existing Phase 10 `raw_resource_revisions` identity and SHA-256 provenance. EOD records, corrections, revocations, and the completed idempotency ledger are append-only and immutable; a correction must explicitly supersede the latest revision in its logical chain. The additive command-reservation table is a durable `reserved -> running -> completed` / `running -> reserved` state machine that binds a key and payload before side effects. Raw revision, source/classification evidence, source-observed rows, normalized observations, the legacy EOD ledger, Phase 10 run/item, and terminal run state are committed in one SQLite transaction. Failure cleanup releases the lock, records the failed run/audit outcome, and returns the reservation to retryable `reserved` state. Focused tests cover correction-before/after-cutoff, late-D1 versus D2 selection, latest blockers/revokes without fallback, classifier determinism and exact fixtures, source-observed/public-eligibility separation, atomic failure recovery, same-key concurrency, backup/restore, availability/ingestion visibility, and Phase 13 identity epoch reuse.
 
 The operator ingestion service is disabled unless explicitly enabled. Public reads never migrate or write the database. Evidence backup/restore validation includes all six EOD tables and their foreign-key dependencies, and post-restore repository/service checks preserve correction and revocation lineage, D-first/no-fallback semantics, current latest-blocking, Phase 13 identity epochs, command reservation state, and zero-volume raw retention/public ineligibility.
@@ -84,4 +94,8 @@ The `/eod-close` page is a neutral, read-only surface with current/as-of selecti
 
 ## Review boundary
 
-The Draft PR is the only requested external change. First and Second Code Review remediations are implemented on the same Draft PR; exact-head CI and the Third Code Review, merge, deployment, production activation, and Phase 15 remain separate gates. No Phase 15 work is included in this implementation.
+The Draft PR is the only requested external change. First, Second, and Third
+Code Review remediations are implemented on the same Draft PR; exact-head CI
+and the Fourth Code Review, merge, deployment, production activation, and
+Phase 15 remain separate gates. No Phase 15 work is included in this
+implementation.

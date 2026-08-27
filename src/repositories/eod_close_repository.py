@@ -168,6 +168,83 @@ class EodCloseRepository:
                 (idempotency_key,),
             ).fetchone())
 
+    def ingestion_content_idempotency(
+        self,
+        *,
+        resource_id: str,
+        payload_fingerprint: str,
+        logical_revision_key: str,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[str, Any] | None:
+        """Find prior content evidence within the same resource/logical scope."""
+        resource = _required(resource_id, "resource_id")
+        fingerprint = _required(payload_fingerprint, "payload_fingerprint").lower()
+        logical_key = _required(logical_revision_key, "logical_revision_key")
+        with self._connection(connection) as conn:
+            return self._row(conn.execute(
+                """SELECT i.*
+                   FROM eod_ingestion_idempotency i
+                   JOIN raw_resource_revisions raw
+                     ON raw.raw_resource_revision_id = i.raw_resource_revision_id
+                   WHERE i.resource_id = ?
+                     AND i.payload_fingerprint = ?
+                     AND raw.logical_revision_key = ?
+                   ORDER BY i.created_at ASC, i.idempotency_key ASC LIMIT 1""",
+                (resource, fingerprint, logical_key),
+            ).fetchone())
+
+    def source_snapshot_by_id(
+        self,
+        source_snapshot_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[str, Any] | None:
+        with self._connection(connection) as conn:
+            return self._row(conn.execute(
+                "SELECT * FROM eod_close_source_snapshots WHERE source_snapshot_id = ?",
+                (_required(source_snapshot_id, "source_snapshot_id"),),
+            ).fetchone())
+
+    def observations_for_source_snapshot(
+        self,
+        *,
+        source_snapshot_id: str,
+        raw_resource_revision_id: str,
+        connection: sqlite3.Connection | None = None,
+    ) -> list[dict[str, Any]]:
+        with self._connection(connection) as conn:
+            return [dict(row) for row in conn.execute(
+                """SELECT * FROM eod_close_observations
+                   WHERE source_snapshot_id = ? AND raw_resource_revision_id = ?
+                   ORDER BY official_code, trade_date, revision_number,
+                            close_observation_id""",
+                (
+                    _required(source_snapshot_id, "source_snapshot_id"),
+                    _required(raw_resource_revision_id, "raw_resource_revision_id"),
+                ),
+            ).fetchall()]
+
+    def classification_for_raw_revision(
+        self,
+        *,
+        official_code: str,
+        raw_resource_revision_id: str,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[str, Any] | None:
+        with self._connection(connection) as conn:
+            return self._row(conn.execute(
+                """SELECT * FROM eod_product_classification_evidence
+                   WHERE resource_id = ? AND official_code = ?
+                     AND raw_resource_revision_id = ?
+                   ORDER BY revision_number DESC,
+                            classification_evidence_id DESC LIMIT 1""",
+                (
+                    CLASSIFICATION_RESOURCE_ID,
+                    _required(official_code, "official_code"),
+                    _required(raw_resource_revision_id, "raw_resource_revision_id"),
+                ),
+            ).fetchone())
+
     @staticmethod
     def _command_row(
         conn: sqlite3.Connection, idempotency_key: str
@@ -235,13 +312,6 @@ class EodCloseRepository:
                     source_published_at=published,
                 )
                 return {**existing, "created": False}
-            same = conn.execute(
-                "SELECT idempotency_key FROM eod_ingestion_command_reservations "
-                "WHERE payload_fingerprint = ?",
-                (fingerprint,),
-            ).fetchone()
-            if same:
-                raise EodEvidenceConflict("payload_fingerprint_already_bound")
             now = utc_now_timestamp()
             conn.execute(
                 """INSERT INTO eod_ingestion_command_reservations (
@@ -893,7 +963,7 @@ class EodCloseRepository:
     ) -> dict[str, Any]:
         fields = {
             "idempotency_key": _required(payload.get("idempotency_key"), "idempotency_key"),
-            "payload_fingerprint": _required(payload.get("payload_fingerprint"), "payload_fingerprint"),
+            "payload_fingerprint": _required(payload.get("payload_fingerprint"), "payload_fingerprint").lower(),
             "resource_id": _required(payload.get("resource_id"), "resource_id"),
             "raw_resource_revision_id": _required(payload.get("raw_resource_revision_id"), "raw_resource_revision_id"),
             "source_snapshot_id": payload.get("source_snapshot_id"),
@@ -933,11 +1003,21 @@ class EodCloseRepository:
                     raise EodEvidenceConflict("idempotency_key_reused")
                 return {**dict(existing), "created": False}
             same = conn.execute(
-                "SELECT * FROM eod_ingestion_idempotency WHERE payload_fingerprint = ?",
-                (fields["payload_fingerprint"],),
+                """SELECT * FROM eod_ingestion_idempotency
+                   WHERE resource_id = ?
+                     AND raw_resource_revision_id = ?
+                     AND payload_fingerprint = ?
+                   ORDER BY created_at ASC, idempotency_key ASC LIMIT 1""",
+                (
+                    fields["resource_id"],
+                    fields["raw_resource_revision_id"],
+                    fields["payload_fingerprint"],
+                ),
             ).fetchone()
             if same:
-                raise EodEvidenceConflict("payload_fingerprint_already_bound")
+                if same["source_snapshot_id"] != fields["source_snapshot_id"]:
+                    raise EodEvidenceConflict("content_idempotency_scope_conflict")
+                return {**dict(same), "created": False}
             columns = ",".join(fields)
             placeholders = ",".join("?" for _ in fields)
             conn.execute(

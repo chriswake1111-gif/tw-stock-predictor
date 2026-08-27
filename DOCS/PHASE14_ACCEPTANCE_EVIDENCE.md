@@ -2,7 +2,7 @@
 
 ## Scope
 
-This evidence file covers the Phase 14 Implementation and the latest Second
+This evidence file covers the Phase 14 Implementation and the latest Third
 Code Review remediation. Baseline: `be8e931038bf818cf7d9f578e18fa91b8f068cd4`.
 The implementation must remain in one Draft PR through the review gates before
 any merge or deployment. Phase 15 is not started.
@@ -16,7 +16,7 @@ any merge or deployment. Phase 15 is not started.
 | AC-08–AC-10 | Exact TWSE ISIN classification URL/labels, product classifier, stock-only eligibility, unsupported-product handling, and currency/unit gate are implemented in `src/collectors/twse_isin_classification_collector.py` and `src/domain/eod_close.py`. |
 | AC-11–AC-16 | The currentness, source-date, volume/close, zero-volume, suspension, partial-proof, and status-precedence policies are implemented in `src/services/eod_close_service.py` and `src/domain/eod_close.py`; non-available close values are null. |
 | AC-17–AC-21 | The repository performs cutoff-visible identity/classification reads and date-first exact-D as-of selection without earlier-date fallback in `src/repositories/eod_close_repository.py`. |
-| AC-22–AC-25 | Phase 10 raw provenance, append-only EOD source/classification/observation chains, explicit supersession, immutable SQL triggers, a durable command-reservation state machine, and the distinct operator-command idempotency ledger are implemented in the EOD repository and ingestion service. |
+| AC-22–AC-25 | Phase 10 raw provenance, append-only EOD source/classification/observation chains, explicit supersession, immutable SQL triggers, a durable command-reservation state machine, scoped content-idempotency reuse, and the distinct operator-command idempotency ledger are implemented in the EOD repository and ingestion service. |
 | AC-26–AC-29 | GET-only current/as-of routes, 422/503 handling, absence of a `trade_date` query parameter, stable DTO redaction, and query-only public reads are covered by `src/api/routes/v2_eod_close.py` and API tests. |
 | AC-30–AC-31 | The `/eod-close` frontend page, API client/types, neutral disclosure, backend-only GET calls, and non-available null rendering are covered by the frontend unit test. |
 | AC-32–AC-34 | Evidence backup/restore includes the six EOD tables, including command reservations; the Phase 14 repository/service tests cover migration, lineage, idempotency, atomic failure recovery, classifier fixtures, as-of blocker behavior, backup/restore, and Phase 10/13 regression boundaries. |
@@ -68,16 +68,37 @@ keeps Migration 18 immutable:
   and public context composition. Fixed fixtures cover `認購權證`, `認售權證`,
   `臺灣存託憑證`, and preferred CFI evidence.
 
+## Third Code Review remediation evidence
+
+The Third Code Review identified a P2 scope error: Migration 19 globally
+unique-bound `payload_fingerprint` in both Phase 14 idempotency tables. The
+remediation is additive and leaves Migrations 18 and 19 immutable:
+
+- `migrations/20260828_20_phase14_third_code_review_remediation.sql` performs a
+  data-preserving versioned rebuild that retains unique `idempotency_key`
+  command identity and removes only the global fingerprint ownership. Scoped
+  indexes preserve lookup efficiency.
+- Command reservations now allow independent keys to submit the same payload,
+  while the same key with a different payload, resource, or source parameter
+  remains fail-closed.
+- Price and classification ingestion reuse the existing raw/source/evidence
+  chain when the resource, logical/raw scope, schema, normalized content, and
+  row evidence match. No new raw revision, source/classification revision,
+  observation correction, or legacy ledger row is created for the reuse path.
+- Focused tests cover rerunnable Migration 20, same-fingerprint independent
+  command/resource scopes, price and classification evidence reuse, and
+  resource/raw-revision content-idempotency boundaries.
+
 ## Validation record
 
 The following results were obtained in the remediation worktree after the
-Second Code Review changes:
+Third Code Review changes:
 
 | Check | Result |
 | --- | --- |
-| Second Code Review remediation tests | `21 passed` |
-| Phase 14 backend plus Phase 13 migration regression tests | `73 passed` |
-| Full Python suite excluding `tests/test_api.py` | `627 passed, 1 warning` |
+| Third Code Review remediation tests | `5 passed` |
+| Phase 14 backend plus Phase 13 migration regression tests | `78 passed, 1 warning` |
+| Full Python suite excluding `tests/test_api.py` | `632 passed, 1 warning` |
 | Legacy `tests/test_api.py` isolation | `1 passed, 2 failed`; the two existing `/api/analysis` tests could not open the local yfinance cache database in this environment. No Phase 14 test failed. |
 | Python compile gate | passed for all changed Python modules |
 | Frontend typecheck | passed |

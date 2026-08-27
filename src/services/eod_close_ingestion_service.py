@@ -131,14 +131,6 @@ class EodCloseIngestionService:
         if not self.enabled:
             raise EodIngestionDisabled("EOD ingestion writes require explicit operator enablement")
 
-    def _check_idempotency(self, key: str | None, fingerprint: str) -> dict[str, Any] | None:
-        if not key:
-            return None
-        existing = self.repository.ingestion_idempotency(key)
-        if existing and existing["payload_fingerprint"] != fingerprint:
-            raise ValueError("idempotency_key_reused")
-        return existing
-
     def _inject_failure(self, point: str) -> None:
         if self.failure_injector is not None:
             self.failure_injector(point)
@@ -434,6 +426,176 @@ class EodCloseIngestionService:
             "ambiguous": DataHealthStatus.AWAITING_REVIEW,
         }.get(parsed_status, DataHealthStatus.UNKNOWN)
 
+    def _reuse_price_content(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        parsed: Any,
+        raw_payload_sha256: str,
+        logical_revision_key: str,
+        idempotency_key: str | None,
+        actor_id: str,
+        command_received: str,
+    ) -> dict[str, Any] | None:
+        existing = self.repository.ingestion_content_idempotency(
+            resource_id=parsed.resource_id,
+            payload_fingerprint=raw_payload_sha256,
+            logical_revision_key=logical_revision_key,
+            connection=conn,
+        )
+        if existing is None:
+            return None
+        raw_id = str(existing["raw_resource_revision_id"])
+        raw_revision = self.foundation.raw_revision(raw_id, connection=conn)
+        source_id = existing.get("source_snapshot_id")
+        source = (
+            self.repository.source_snapshot_by_id(source_id, connection=conn)
+            if source_id
+            else None
+        )
+        if (
+            raw_revision is None
+            or raw_revision["resource_id"] != parsed.resource_id
+            or str(raw_revision["raw_payload_sha256"]).lower() != raw_payload_sha256
+            or raw_revision["logical_revision_key"] != logical_revision_key
+            or raw_revision["schema_fingerprint"] != parsed.schema_fingerprint
+            or source is None
+            or source["resource_id"] != parsed.resource_id
+            or source["raw_resource_revision_id"] != raw_id
+            or source["logical_revision_key"] != logical_revision_key
+            or source["normalized_payload_sha256"] != parsed.normalized_payload_sha256
+        ):
+            raise EodEvidenceConflict("content_idempotency_evidence_mismatch")
+
+        observations = self.repository.observations_for_source_snapshot(
+            source_snapshot_id=source["source_snapshot_id"],
+            raw_resource_revision_id=raw_id,
+            connection=conn,
+        )
+        expected = {
+            (row.official_code, row.trade_date): row
+            for row in parsed.rows
+        }
+        actual = {
+            (str(row["official_code"]), row["trade_date"]): row
+            for row in observations
+        }
+        if len(expected) != len(parsed.rows) or set(expected) != set(actual):
+            raise EodEvidenceConflict("content_idempotency_observation_mismatch")
+        observation_ids: list[str] = []
+        for key, parsed_row in expected.items():
+            stored = actual[key]
+            if stored["row_fingerprint"] != parsed_row.row_fingerprint:
+                raise EodEvidenceConflict("content_idempotency_observation_mismatch")
+            observation_ids.append(str(stored["close_observation_id"]))
+        command = None
+        if idempotency_key:
+            command = self.repository.add_ingestion_idempotency({
+                "idempotency_key": idempotency_key,
+                "payload_fingerprint": raw_payload_sha256,
+                "resource_id": parsed.resource_id,
+                "raw_resource_revision_id": raw_id,
+                "source_snapshot_id": source["source_snapshot_id"],
+                "actor_id": actor_id,
+                "created_at": command_received,
+            }, connection=conn)
+        accepted_count = sum(
+            row["observation_status"] == "available" for row in observations
+        )
+        return {
+            "result": {
+                "resource_id": parsed.resource_id,
+                "raw_resource_revision_id": raw_id,
+                "source_snapshot_id": source["source_snapshot_id"],
+                "observation_ids": observation_ids,
+                "idempotency": command,
+                "created": False,
+            },
+            "item": {
+                "status": self._item_status(parsed.status),
+                "quality_status": self._item_quality(parsed.status),
+                "parser_version": "1",
+                "schema_fingerprint": parsed.schema_fingerprint,
+                "record_count": len(parsed.rows),
+                "accepted_count": accepted_count,
+                "rejected_count": len(parsed.rows) - accepted_count,
+                "reason": parsed.reason,
+            },
+            "terminal_status": self._terminal_run_status(parsed.status),
+        }
+
+    def _reuse_classification_content(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        parsed: Any,
+        official_code: str,
+        raw_payload_sha256: str,
+        logical_revision_key: str,
+        idempotency_key: str | None,
+        actor_id: str,
+        command_received: str,
+    ) -> dict[str, Any] | None:
+        existing = self.repository.ingestion_content_idempotency(
+            resource_id=CLASSIFICATION_RESOURCE_ID,
+            payload_fingerprint=raw_payload_sha256,
+            logical_revision_key=logical_revision_key,
+            connection=conn,
+        )
+        if existing is None:
+            return None
+        raw_id = str(existing["raw_resource_revision_id"])
+        raw_revision = self.foundation.raw_revision(raw_id, connection=conn)
+        evidence = self.repository.classification_for_raw_revision(
+            official_code=official_code,
+            raw_resource_revision_id=raw_id,
+            connection=conn,
+        )
+        if (
+            raw_revision is None
+            or raw_revision["resource_id"] != CLASSIFICATION_RESOURCE_ID
+            or str(raw_revision["raw_payload_sha256"]).lower() != raw_payload_sha256
+            or raw_revision["logical_revision_key"] != logical_revision_key
+            or raw_revision["schema_fingerprint"] != parsed.schema_fingerprint
+            or evidence is None
+            or evidence["raw_payload_sha256"] != raw_payload_sha256
+            or evidence["schema_fingerprint"] != parsed.schema_fingerprint
+        ):
+            raise EodEvidenceConflict("content_idempotency_evidence_mismatch")
+        command = None
+        if idempotency_key:
+            command = self.repository.add_ingestion_idempotency({
+                "idempotency_key": idempotency_key,
+                "payload_fingerprint": raw_payload_sha256,
+                "resource_id": CLASSIFICATION_RESOURCE_ID,
+                "raw_resource_revision_id": raw_id,
+                "actor_id": actor_id,
+                "created_at": command_received,
+            }, connection=conn)
+        parsed_state = str(evidence["classification_state"])
+        return {
+            "result": {
+                "resource_id": CLASSIFICATION_RESOURCE_ID,
+                "raw_resource_revision_id": raw_id,
+                "classification_evidence_id": evidence["classification_evidence_id"],
+                "classification_state": parsed_state,
+                "classification_decision": evidence["classification_decision"],
+                "idempotency": command,
+                "created": False,
+            },
+            "item": {
+                "status": self._item_status(parsed_state),
+                "quality_status": self._item_quality(parsed_state),
+                "parser_version": "1",
+                "schema_fingerprint": parsed.schema_fingerprint,
+                "record_count": 1,
+                "accepted_count": 1 if parsed_state == "accepted" else 0,
+                "rejected_count": 0 if parsed_state == "accepted" else 1,
+                "reason": evidence["reason"],
+            },
+            "terminal_status": self._terminal_run_status(parsed_state),
+        }
+
     def _execute_command(
         self,
         *,
@@ -589,6 +751,18 @@ class EodCloseIngestionService:
             command_received: str,
             command_published: str | None,
         ) -> dict[str, Any]:
+            logical_key = f"{parsed.resource_id}:{parsed.source_trade_date or 'undated'}"
+            reused = self._reuse_price_content(
+                conn=conn,
+                parsed=parsed,
+                raw_payload_sha256=raw_payload_sha256,
+                logical_revision_key=logical_key,
+                idempotency_key=idempotency_key,
+                actor_id=actor_id,
+                command_received=command_received,
+            )
+            if reused is not None:
+                return reused
             raw_revision = self._raw_revision(
                 resource_id=parsed.resource_id,
                 raw_payload_sha256=raw_payload_sha256,
@@ -602,7 +776,6 @@ class EodCloseIngestionService:
             )
             self._inject_failure("after_raw_revision")
             raw_id = raw_revision["raw_resource_revision_id"]
-            logical_key = f"{parsed.resource_id}:{parsed.source_trade_date or 'undated'}"
             previous_source = self.repository.latest_source_snapshot_for_logical(
                 resource_id=parsed.resource_id,
                 logical_revision_key=logical_key,
@@ -800,6 +973,19 @@ class EodCloseIngestionService:
             command_received: str,
             command_published: str | None,
         ) -> dict[str, Any]:
+            logical_key = f"{TWSE_ISIN_CLASSIFICATION_RESOURCE_ID}:{official_code.strip()}"
+            reused = self._reuse_classification_content(
+                conn=conn,
+                parsed=parsed,
+                official_code=official_code.strip(),
+                raw_payload_sha256=raw_payload_sha256,
+                logical_revision_key=logical_key,
+                idempotency_key=idempotency_key,
+                actor_id=actor_id,
+                command_received=command_received,
+            )
+            if reused is not None:
+                return reused
             quality_status = {
                 "accepted": DataHealthStatus.FRESH,
                 "ambiguous": DataHealthStatus.AWAITING_REVIEW,
@@ -810,7 +996,6 @@ class EodCloseIngestionService:
                 if parsed.state == "accepted"
                 else EligibilityStatus.AWAITING_REVIEW
             )
-            logical_key = f"{TWSE_ISIN_CLASSIFICATION_RESOURCE_ID}:{official_code.strip()}"
             revision = RawResourceRevision(
                 raw_resource_revision_id="pending",
                 provider_id="twse-isin-official",
