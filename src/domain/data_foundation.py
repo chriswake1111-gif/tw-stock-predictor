@@ -41,6 +41,8 @@ class ResourceType(str, Enum):
     TRADING_CALENDAR = "trading_calendar"
     SYMBOL_MASTER = "symbol_master"
     CORPORATE_ACTION = "corporate_action"
+    EOD_CLOSE = "eod_close"
+    PRODUCT_CLASSIFICATION = "product_classification"
 
 
 class ExpectedFrequency(str, Enum):

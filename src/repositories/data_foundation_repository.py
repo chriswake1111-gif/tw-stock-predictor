@@ -588,6 +588,9 @@ class DataFoundationRepository:
             clauses.append(
                 "NOT EXISTS (SELECT 1 FROM universe_resource_policies up WHERE up.resource_id = r.resource_id)"
             )
+        # Phase 14 owns a separate EOD context contract and public read path;
+        # do not leak its resources into the legacy Phase 10 health DTO.
+        clauses.append("r.resource_type NOT IN ('eod_close', 'product_classification')")
         if provider_id:
             clauses.append("r.provider_id = ?")
             parameters.append(provider_id.strip().lower())

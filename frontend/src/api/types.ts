@@ -60,6 +60,49 @@ export interface UniverseListResponse extends UniverseResponse {
   limit: number;
 }
 
+export type EodCloseStatus =
+  | "available"
+  | "insufficient_data"
+  | "partial"
+  | "unknown"
+  | "blocked"
+  | "needs_human_input"
+  | "not_applicable";
+export type EodFreshnessState = "current" | "stale" | "unknown" | "blocked";
+export type EodProductScope =
+  | "supported_stock"
+  | "not_applicable"
+  | "needs_human_input";
+
+export interface EodCloseContextResponse {
+  contract_version: "eod_close_context_v1";
+  status: EodCloseStatus;
+  reason_codes: string[];
+  canonical_symbol: string | null;
+  instrument_id: string | null;
+  official_code: string | null;
+  venue: "TWSE" | "TPEX" | string | null;
+  security_type: string | null;
+  product_scope: EodProductScope;
+  knowledge_cutoff_at: string | null;
+  evaluated_at: string;
+  selection_scope: string | null;
+  selected_trade_date: string | null;
+  close_value: string | null;
+  currency: string | null;
+  unit: string | null;
+  price_semantics: string | null;
+  freshness_state: EodFreshnessState;
+  current_complete: boolean;
+  provider: string | null;
+  resource_key: string | null;
+  source_url: string | null;
+  source_trade_date: string | null;
+  observed_at: string | null;
+  source_scope: string | null;
+  quality_flags: string[];
+}
+
 export interface RuleTrace extends UnknownRecord {
   rule_id: string;
   rule_version?: string;

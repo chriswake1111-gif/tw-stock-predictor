@@ -1325,6 +1325,70 @@ class UniverseRepository:
     def get_by_symbol(self, canonical_symbol: str, *, knowledge_cutoff_at: str, current: bool = False) -> dict[str, Any]:
         return self.get_by_canonical(canonical_symbol, knowledge_cutoff_at=knowledge_cutoff_at, current=current)
 
+    def identity_context_for_eod(
+        self,
+        canonical_symbol: str,
+        *,
+        knowledge_cutoff_at: str,
+        conn: sqlite3.Connection | None = None,
+    ) -> dict[str, Any] | None:
+        """Return the exact Phase 13 identity binding for an EOD row.
+
+        This is intentionally narrower than the public Universe DTO.  EOD
+        observations need the immutable instrument revision/epoch boundary,
+        while the EOD public contract must not expose the full Universe
+        revision or event lineage.  When a caller supplies a connection the
+        helper participates in that caller-owned query-only transaction.
+        """
+
+        venue, code = parse_canonical_symbol(canonical_symbol)
+        cutoff = validate_knowledge_cutoff_at(knowledge_cutoff_at)
+
+        def select(connection: sqlite3.Connection) -> dict[str, Any] | None:
+            effective_ids = self._effective_epoch_instrument_ids(
+                connection,
+                cutoff=cutoff,
+                venue=venue.value,
+                official_code=code,
+            )
+            if len(effective_ids) != 1:
+                return None
+            instrument_id = sorted(effective_ids)[0]
+            reference = self._select_historical_reference(
+                connection,
+                instrument_id=instrument_id,
+                cutoff=cutoff,
+            )
+            if not reference or reference.get("status") != "accepted":
+                return None
+            if (
+                reference.get("canonical_symbol") != canonical_symbol.strip().upper()
+                or reference.get("venue") != venue.value
+                or reference.get("official_code") != code
+            ):
+                return None
+            return {
+                "instrument_id": reference.get("instrument_id"),
+                "instrument_revision_id": reference.get("instrument_revision_id"),
+                "identity_epoch": reference.get("identity_epoch"),
+                "identity_binding_fingerprint": reference.get("identity_binding_fingerprint"),
+                "canonical_symbol": reference.get("canonical_symbol"),
+                "official_code": reference.get("official_code"),
+                "venue": reference.get("venue"),
+                "security_type": reference.get("security_type") or "unknown",
+                "display_name": reference.get("display_name"),
+                "listing_status": reference.get("listing_status"),
+                "trading_state": reference.get("trading_state"),
+                "source_effective_date": reference.get("source_effective_date"),
+                "source_effective_at": reference.get("source_effective_at"),
+                "status": reference.get("status"),
+            }
+
+        if conn is not None:
+            return select(conn)
+        with self.read_transaction() as owned:
+            return select(owned)
+
     def find_by_canonical_symbol(self, canonical_symbol: str, *, knowledge_cutoff_at: str, current: bool = False) -> dict[str, Any]:
         return self.get_by_canonical(canonical_symbol, knowledge_cutoff_at=knowledge_cutoff_at, current=current)
 

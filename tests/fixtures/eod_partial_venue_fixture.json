@@ -1,0 +1,20 @@
+{
+  "coverage_state": "partial",
+  "coverage_proof_type": "fixture_only_positive_proof",
+  "coverage_proof_reference": "tests/fixtures/eod_partial_venue_fixture.json",
+  "rows": [
+    {
+      "Date": "115/08/27",
+      "Code": "2330",
+      "Name": "台積電",
+      "TradeVolume": "123456789",
+      "TradeValue": "123456789000",
+      "OpeningPrice": "1000.00",
+      "HighestPrice": "1010.00",
+      "LowestPrice": "990.00",
+      "ClosingPrice": "1005.00",
+      "Change": "5.00",
+      "Transaction": "123456"
+    }
+  ]
+}

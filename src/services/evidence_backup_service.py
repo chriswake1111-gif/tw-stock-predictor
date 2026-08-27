@@ -28,6 +28,11 @@ IRREPLACEABLE_TABLES = (
     "universe_lifecycle_events",
     "universe_operational_state_events",
     "universe_ingestion_idempotency",
+    "eod_price_resource_policies",
+    "eod_close_source_snapshots",
+    "eod_product_classification_evidence",
+    "eod_close_observations",
+    "eod_ingestion_idempotency",
 )
 
 
@@ -86,8 +91,10 @@ class EvidenceBackupService:
                 table: conn.execute(
                     f'''SELECT COUNT(*) FROM "{table}"'''
                     + (''' WHERE resource_id NOT IN (SELECT resource_id FROM universe_resource_policies)'''
+                       + ''' AND resource_type NOT IN ('eod_close','product_classification')'''
                        if table == "data_resources" and "universe_resource_policies" in table_names else "")
                     + (''' WHERE provider_id NOT IN (SELECT DISTINCT r.provider_id FROM data_resources r JOIN universe_resource_policies up ON up.resource_id = r.resource_id)'''
+                       + ''' AND provider_id NOT IN (SELECT DISTINCT provider_id FROM data_resources WHERE resource_type IN ('eod_close','product_classification'))'''
                        if table == "data_providers" and "universe_resource_policies" in table_names else "")
                 ).fetchone()[0]
                 for table in (
@@ -106,6 +113,15 @@ class EvidenceBackupService:
                     "universe_instrument_revisions", "universe_identity_alias_events",
                     "universe_lifecycle_events", "universe_operational_state_events",
                     "universe_ingestion_idempotency",
+                )
+                if table in table_names
+            }
+            eod_foundation = {
+                table: conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+                for table in (
+                    "eod_price_resource_policies", "eod_close_source_snapshots",
+                    "eod_product_classification_evidence", "eod_close_observations",
+                    "eod_ingestion_idempotency",
                 )
                 if table in table_names
             }
@@ -148,6 +164,19 @@ class EvidenceBackupService:
                 raise RuntimeError(
                     f"universe foreign key check failed: {universe_violations[:3]}"
                 )
+            eod_tables = [
+                "eod_price_resource_policies", "eod_close_source_snapshots",
+                "eod_product_classification_evidence", "eod_close_observations",
+                "eod_ingestion_idempotency",
+            ]
+            eod_violations = [
+                row for table in eod_tables if table in table_names
+                for row in conn.execute(f"PRAGMA foreign_key_check({table})").fetchall()
+            ]
+            if eod_violations:
+                raise RuntimeError(
+                    f"EOD foreign key check failed: {eod_violations[:3]}"
+                )
         if integrity != "ok":
             raise RuntimeError(f"SQLite integrity check failed: {integrity}")
         return {
@@ -156,5 +185,6 @@ class EvidenceBackupService:
             "irreplaceable_counts": counts,
             "operational_provenance_counts": operational,
             "universe_foundation_counts": universe_foundation,
+            "eod_foundation_counts": eod_foundation,
             "research_workflow_counts": workflow,
         }

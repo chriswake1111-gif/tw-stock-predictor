@@ -153,7 +153,13 @@
 - Canonical `.TW`/`.TWO` mapping is generated only in approved master scope. Corroborating observations can preserve an existing master mapping but cannot create one independently; otherwise the result remains `canonical_mapping_unverified`.
 - Historical revocation targets `instrument_revision_id` (not the parent `universe_revision_id`) and removes the old identity from exact/canonical/resolve/list historical references until a corrected accepted revision is cutoff-visible. Master mapping carry-forward is likewise cutoff, publication-evidence and revocation safe.
 - Instrument supersession is derived only from the exact parent `universe_revision_id` in the same instrument/source/logical chain; interleaved sources never share a global instrument predecessor. The effective historical evaluator removes both accepted-correction ancestors and revoked targets transitively, and list pagination applies filters, canonical ordering and cursors only after that effective reference is established.
-- Phase 13 composes a cutoff-visible identity epoch per venue/code and applies lifecycle/operational events to exact, resolve and list state without date-only intraday inference. The actionable allowlist remains the authoritative five reasons and event governance fails closed. List/search prefilters possible matches without recursion, traverses null and mapped canonical lanes in the advertised public order, and limits recursive epoch/revision/event work to bounded candidate groups; Phase 14 remains blocked pending review and merge gates.
+- Phase 13 composes a cutoff-visible identity epoch per venue/code and applies lifecycle/operational events to exact, resolve and list state without date-only intraday inference. The actionable allowlist remains the authoritative five reasons and event governance fails closed. List/search prefilters possible matches without recursion, traverses null and mapped canonical lanes in the advertised public order, and limits recursive epoch/revision/event work to bounded candidate groups.
+
+## Evidence Model v2 Phase 14 — Official EOD Close Context
+
+- [x] LUK-29 Phase 14 Implementation is present on its dedicated Draft PR branch: exact TWSE/TPEx official EOD collectors, TWSE ISIN product classification, append-only provenance/lineage, current and cutoff-bound read-only context, fail-closed status matrix, GET-only API, neutral frontend surface, and EOD backup/restore coverage.
+- [x] Phase 14 implementation explicitly excludes `tpex_mainboard_quotes`, calendar/session inference, yfinance adjusted prices, analysis/signal/ranking/valuation integration, broker connectivity, real orders, and automatic trading.
+- [ ] Phase 14 Draft PR first code review, exact-head CI closure, merge, and deployment remain pending. Phase 15 has not started.
 
 ## Evidence Model V2 Phase 3 status (2026-08-01)
 

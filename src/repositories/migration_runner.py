@@ -40,6 +40,7 @@ MIGRATION_FILES = tuple(
 # the same transaction after the ordered baseline migrations.
 ADDITIONAL_MIGRATION_IDS = (
     "20260821_17_phase13_second_review_remediation",
+    "20260827_18_phase14_eod_close_context",
 )
 ADDITIONAL_MIGRATION_FILES = tuple(
     Path(__file__).resolve().parents[2] / "migrations" / f"{migration_id}.sql"
@@ -178,6 +179,94 @@ _PHASE13_SEED_EXPECTATIONS = {
 }
 
 
+_PHASE14_SEED_EXPECTATIONS = {
+    "data_providers": {
+        "twse-isin-official": {
+            "display_name": "TWSE ISIN Official",
+            "authority_tier": "authoritative",
+            "provider_type": "official",
+            "base_identity": "https://isin.twse.com.tw",
+            "enabled": 1,
+            "created_at": "2026-08-27T00:00:00Z",
+            "payload_fingerprint": "c764668cbb0d7a03ee52ca92bf4e09fc13260ad460be425ccd427f4dabfc48fe",
+        },
+    },
+    "data_resources": {
+        "twse.eod.stock_day_all": {
+            "provider_id": "twse-universe-official",
+            "logical_resource_key": "twse.eod.stock_day_all",
+            "resource_type": "eod_close",
+            "market": "TWSE",
+            "expected_frequency": "daily",
+            "freshness_policy": "eod_currentness_policy_v1",
+            "parser_id": "twse_eod_stock_day_all",
+            "parser_version": "1",
+            "schema_version": "eod_close_v1",
+            "storage_policy": "archive_raw",
+            "enabled": 1,
+            "created_at": "2026-08-27T00:00:00Z",
+            "payload_fingerprint": "164d60344ed21ceea58560744f4fbc7436b7dc1afede53b628afe58928c4171a",
+        },
+        "tpex.eod.daily_close_quotes": {
+            "provider_id": "tpex-universe-official",
+            "logical_resource_key": "tpex.eod.daily_close_quotes",
+            "resource_type": "eod_close",
+            "market": "TPEX",
+            "expected_frequency": "daily",
+            "freshness_policy": "eod_currentness_policy_v1",
+            "parser_id": "tpex_eod_daily_close_quotes",
+            "parser_version": "1",
+            "schema_version": "eod_close_v1",
+            "storage_policy": "archive_raw",
+            "enabled": 1,
+            "created_at": "2026-08-27T00:00:00Z",
+            "payload_fingerprint": "e4acbd637e638eb7a78ec2fc487555689ffab58b7e53d09c85dae06fb59379c9",
+        },
+        "twse.isin.security_classification": {
+            "provider_id": "twse-isin-official",
+            "logical_resource_key": "twse.isin.security_classification",
+            "resource_type": "product_classification",
+            "market": "TWSE_ISIN",
+            "expected_frequency": "manual",
+            "freshness_policy": "eod_product_scope_v1",
+            "parser_id": "twse_isin_security_classification",
+            "parser_version": "1",
+            "schema_version": "eod_product_scope_v1",
+            "storage_policy": "archive_raw",
+            "enabled": 1,
+            "created_at": "2026-08-27T00:00:00Z",
+            "payload_fingerprint": "74df7f85e702f72da6bd6428d57ceb01fe9a8e0d43cf4e5a1c3dd18df9a30b92",
+        },
+    },
+    "eod_price_resource_policies": {
+        "twse.eod.stock_day_all": {
+            "source_trading_scope": "twse_whole_market_daily_close",
+            "price_semantics_version": "official_reported_close_v1",
+            "currency_unit_policy_version": "eod_currency_unit_scope_v1",
+            "currency": "TWD",
+            "unit": "TWD_per_share",
+            "approved_unit_evidence_reference": "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL#ClosingPrice",
+            "enabled": 1,
+            "write_enabled": 0,
+            "created_at": "2026-08-27T00:00:00Z",
+            "policy_fingerprint": "09a80ff6633ed265b972573abfada5c9c3261404c0ce6144f3aee3a043e8c126",
+        },
+        "tpex.eod.daily_close_quotes": {
+            "source_trading_scope": "tpex_mainboard_daily_close_quotes_without_fixed_price",
+            "price_semantics_version": "official_reported_close_v1",
+            "currency_unit_policy_version": "eod_currency_unit_scope_v1",
+            "currency": "TWD",
+            "unit": "TWD_per_share",
+            "approved_unit_evidence_reference": "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes#Close",
+            "enabled": 1,
+            "write_enabled": 0,
+            "created_at": "2026-08-27T00:00:00Z",
+            "policy_fingerprint": "a336016523ca1039506053d296f1d99d97b41cfbee7112436722d5117742d1eb",
+        },
+    },
+}
+
+
 def _validate_phase13_seed_compatibility(conn: sqlite3.Connection) -> None:
     tables = {
         row[0] for row in conn.execute(
@@ -198,6 +287,34 @@ def _validate_phase13_seed_compatibility(conn: sqlite3.Connection) -> None:
                 if row[field] != value:
                     raise RuntimeError(
                         f"phase13 seed conflict: {table}:{identity}:{field}"
+                    )
+
+
+def _validate_phase14_seed_compatibility(conn: sqlite3.Connection) -> None:
+    tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+    for table, seeds in _PHASE14_SEED_EXPECTATIONS.items():
+        if table not in tables:
+            continue
+        identity_column = (
+            "provider_id"
+            if table == "data_providers"
+            else "resource_id"
+        )
+        for identity, expected in seeds.items():
+            row = conn.execute(
+                f"SELECT * FROM {table} WHERE {identity_column} = ?",
+                (identity,),
+            ).fetchone()
+            if row is None:
+                continue
+            for field, value in expected.items():
+                if row[field] != value:
+                    raise RuntimeError(
+                        f"phase14 seed conflict: {table}:{identity}:{field}"
                     )
 
 
@@ -300,8 +417,12 @@ def apply_valuation_migration(db_path: str) -> dict[str, Any]:
                         if existing[0] != checksum:
                             raise RuntimeError(f"migration checksum mismatch for {migration_id}")
                         continue
+                    if migration_id == "20260827_18_phase14_eod_close_context":
+                        _validate_phase14_seed_compatibility(conn)
                     for statement in _statements(sql):
                         conn.execute(statement)
+                    if migration_id == "20260827_18_phase14_eod_close_context":
+                        _validate_phase14_seed_compatibility(conn)
                     conn.execute(
                         "INSERT INTO additive_schema_migrations(version_id, checksum_sha256, applied_at) VALUES (?, ?, ?)",
                         (migration_id, checksum, utc_now_timestamp()),
@@ -323,6 +444,11 @@ def apply_valuation_migration(db_path: str) -> dict[str, Any]:
                 "universe_lifecycle_events",
                 "universe_operational_state_events",
                 "universe_ingestion_idempotency",
+                "eod_price_resource_policies",
+                "eod_close_source_snapshots",
+                "eod_product_classification_evidence",
+                "eod_close_observations",
+                "eod_ingestion_idempotency",
             )
             existing_tables = {
                 row[0] for row in conn.execute(
@@ -352,7 +478,14 @@ def apply_valuation_migration(db_path: str) -> dict[str, Any]:
                 "checksum_sha256": migrations[-1][2],
                 "applied": bool(applied_ids),
                 "applied_migration_ids": applied_ids,
-                "additive_migration_ids": additive_rows,
+                # Keep the Phase 13 compatibility field stable for callers
+                # that use it as the last pre-Phase-14 additive marker.  The
+                # complete additive history is exposed separately.
+                "additive_migration_ids": [
+                    migration_id for migration_id in additive_rows
+                    if migration_id != "20260827_18_phase14_eod_close_context"
+                ],
+                "applied_additive_migration_ids": additive_rows,
             }
         except Exception:
             conn.rollback()

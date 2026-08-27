@@ -9,6 +9,7 @@ import { SnapshotComparisonPage } from "./pages/SnapshotComparisonPage";
 import { ValidationHistoryPage, ValidationRunPage } from "./pages/ValidationPages";
 import { ResearchQueuePage } from "./pages/ResearchQueuePage";
 import { UniversePage } from "./pages/UniversePage";
+import { EodCloseContextPage } from "./pages/EodCloseContextPage";
 
 export default function App() {
   return (
@@ -25,6 +26,7 @@ export default function App() {
         <Route path="/rules" element={<RuleLibraryPage />} />
         <Route path="/research" element={<ResearchQueuePage />} />
         <Route path="/universe" element={<UniversePage />} />
+        <Route path="/eod-close" element={<EodCloseContextPage />} />
         <Route path="*" element={<PlaceholderPage title="找不到頁面" description="請使用主要導覽返回研究工作區。" />} />
       </Routes>
     </AppShell>

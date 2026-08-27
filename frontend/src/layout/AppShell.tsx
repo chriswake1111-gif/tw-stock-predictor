@@ -8,6 +8,7 @@ import {
   Search,
   ListChecks,
   Network,
+  CandlestickChart,
 } from "lucide-react";
 import { NavLink, useNavigate } from "react-router-dom";
 
@@ -19,6 +20,7 @@ const navigation = [
   { to: "/rules", label: "模型說明", icon: BookOpen },
   { to: "/research", label: "研究清單", icon: ListChecks },
   { to: "/universe", label: "標的主檔", icon: Network },
+  { to: "/eod-close", label: "官方日收盤", icon: CandlestickChart },
 ] as const;
 
 export function AppShell({ children }: { children: ReactNode }) {

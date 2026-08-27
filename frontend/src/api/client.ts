@@ -15,6 +15,7 @@ import type {
   ResearchQueueResponse,
   UniverseListResponse,
   UniverseResponse,
+  EodCloseContextResponse,
 } from "./types";
 
 type QueryValue = string | number | boolean | null | undefined;
@@ -159,5 +160,17 @@ export const evidenceApi = {
       knowledge_cutoff_at: knowledgeCutoffAt, query: filters.query, venue: filters.venue,
       listing_status: filters.listingStatus, limit: filters.limit,
     }), signal);
+  },
+  eodCloseCurrent(canonicalSymbol: string, signal?: AbortSignal) {
+    return fetchJson<EodCloseContextResponse>(
+      `/api/v2/market-context/eod-close/current/${encodeURIComponent(canonicalSymbol)}`,
+      signal,
+    );
+  },
+  eodCloseAsOf(canonicalSymbol: string, knowledgeCutoffAt: string, signal?: AbortSignal) {
+    return fetchJson<EodCloseContextResponse>(withQuery(
+      `/api/v2/market-context/eod-close/as-of/${encodeURIComponent(canonicalSymbol)}`,
+      { knowledge_cutoff_at: knowledgeCutoffAt },
+    ), signal);
   },
 };
