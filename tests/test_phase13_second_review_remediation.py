@@ -56,7 +56,11 @@ def test_additive_remediation_migration_is_versioned_and_rerunnable(tmp_path):
     db = tmp_path / "migration-rerun" / "universe.sqlite"
     first = apply_valuation_migration(str(db))
     second = apply_valuation_migration(str(db))
-    assert first["additive_migration_ids"] == ["20260821_17_phase13_second_review_remediation"]
+    assert first["additive_migration_ids"] == [
+        "20260821_17_phase13_second_review_remediation",
+        "20260827_19_phase14_second_code_review_remediation",
+        "20260828_20_phase14_third_code_review_remediation",
+    ]
     assert second["additive_migration_ids"] == first["additive_migration_ids"]
     with sqlite3.connect(db) as conn:
         assert conn.execute(

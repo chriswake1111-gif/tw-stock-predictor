@@ -1,0 +1,22 @@
+[
+  {
+    "Date": "115/08/27",
+    "SecuritiesCompanyCode": "6488",
+    "CompanyName": "環球晶",
+    "Close": "500.00",
+    "Change": "-5.00",
+    "Open": "510.00",
+    "High": "515.00",
+    "Low": "495.00",
+    "Average": "503.00",
+    "TradingShares": "987654",
+    "TransactionAmount": "496296000",
+    "TransactionNumber": "12345",
+    "LatestBidPrice": "499.00",
+    "LatesAskPrice": "501.00",
+    "Capitals": "1000000000",
+    "NextReferencePrice": "505.00",
+    "NextLimitUp": "555.00",
+    "NextLimitDown": "455.00"
+  }
+]
