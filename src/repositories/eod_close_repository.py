@@ -115,9 +115,11 @@ class EodCloseRepository:
 
     @staticmethod
     def _visible_where(alias: str, *, as_of: bool) -> str:
-        if as_of:
-            return f"{alias}.available_at IS NOT NULL AND {alias}.available_at <= ? AND {alias}.ingested_at <= ?"
-        return f"{alias}.ingested_at IS NOT NULL AND {alias}.ingested_at <= ?"
+        # Availability is the authoritative publication boundary for both
+        # current and point-in-time reads.  Ingestion alone only says when the
+        # repository learned about a row; it must never make future-available
+        # evidence visible to an earlier evaluated_at/cutoff.
+        return f"{alias}.available_at IS NOT NULL AND {alias}.available_at <= ? AND {alias}.ingested_at IS NOT NULL AND {alias}.ingested_at <= ?"
 
     def price_policy(self, conn: sqlite3.Connection, resource_id: str) -> dict[str, Any] | None:
         return self._row(conn.execute(
@@ -188,8 +190,8 @@ class EodCloseRepository:
             clauses.append(self._visible_where("s", as_of=True))
             params.extend([cutoff, cutoff])
         elif cutoff:
-            clauses.append("s.ingested_at IS NOT NULL AND s.ingested_at <= ?")
-            params.append(cutoff)
+            clauses.append(self._visible_where("s", as_of=False))
+            params.extend([cutoff, cutoff])
         if source_trade_date is not None:
             clauses.extend(["source_trade_date = ?", "source_trade_date_status = 'valid'"])
             params.append(source_trade_date)
@@ -219,8 +221,8 @@ class EodCloseRepository:
             clauses.append(self._visible_where("c", as_of=True))
             params.extend([cutoff, cutoff])
         elif cutoff:
-            clauses.append("c.ingested_at IS NOT NULL AND c.ingested_at <= ?")
-            params.append(cutoff)
+            clauses.append(self._visible_where("c", as_of=False))
+            params.extend([cutoff, cutoff])
         return self._row(conn.execute(
             f"""SELECT c.* FROM eod_product_classification_evidence c
                 WHERE {' AND '.join(clauses)}
@@ -242,11 +244,11 @@ class EodCloseRepository:
         if as_of:
             if not cutoff:
                 raise ValueError("cutoff is required for as-of observation selection")
-            clauses.append("o.available_at IS NOT NULL AND o.available_at <= ? AND o.ingested_at <= ?")
+            clauses.append(self._visible_where("o", as_of=True))
             params.extend([cutoff, cutoff])
         elif cutoff:
-            clauses.append("o.ingested_at IS NOT NULL AND o.ingested_at <= ?")
-            params.append(cutoff)
+            clauses.append(self._visible_where("o", as_of=False))
+            params.extend([cutoff, cutoff])
         return self._row(conn.execute(
             f"""SELECT o.* FROM eod_close_observations o
                WHERE {' AND '.join(clauses)}

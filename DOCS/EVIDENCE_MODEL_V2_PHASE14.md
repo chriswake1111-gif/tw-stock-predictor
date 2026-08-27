@@ -38,7 +38,7 @@ Only an exact code/venue/classification match with `Type of security=股票`, a 
 
 Status precedence is deterministic: `blocked > needs_human_input > partial > unknown > insufficient_data > not_applicable > available`. Every non-available DTO returns `close_value=null`; currency, unit, and price semantics are also withheld unless the status is available. Unknown reason codes are fail-closed as blocked.
 
-Current mode accepts only a source trade date equal to the evaluated Asia/Taipei date. An older source is stale/unknown, a future or invalid date is blocked, and same-day session completion is never inferred. Missing source, empty source, or no cutoff-visible record remains unknown. An explicit suspension is `not_applicable`.
+Current mode accepts only a source trade date equal to the evaluated Asia/Taipei date. An older source is stale/unknown, a future or invalid date is blocked, and same-day session completion is never inferred. Current source, classification, and observation selection requires both `available_at <= evaluated_at` and `ingested_at <= evaluated_at`; ingestion alone cannot expose future-available evidence. Missing source, empty source, or no cutoff-visible record remains unknown. An explicit suspension is `not_applicable`.
 
 As-of mode uses `latest_observed_trade_date_as_of_cutoff`: first choose the maximum valid source trade date visible at the cutoff, then choose the deterministic latest revision for that exact date. If that date is blocked, missing, revoked, or otherwise unusable, the service does not fall back to an earlier date. Identity and classification are selected at the same knowledge cutoff in the same read transaction.
 
@@ -52,9 +52,9 @@ Migration `20260827_18_phase14_eod_close_context` is additive, rerunnable, check
 - `eod_close_observations`
 - `eod_ingestion_idempotency`
 
-Raw evidence remains bound to the existing Phase 10 `raw_resource_revisions` identity and SHA-256 provenance. EOD records, corrections, revocations, and idempotency bindings are append-only and immutable; a correction must explicitly supersede the latest revision in its logical chain. The dedicated EOD idempotency ledger is retained because an operator command retry is a distinct command-level retry boundary from the Phase 10 raw payload identity.
+Raw evidence remains bound to the existing Phase 10 `raw_resource_revisions` identity and SHA-256 provenance. EOD records, corrections, revocations, and idempotency bindings are append-only and immutable; a correction must explicitly supersede the latest revision in its logical chain. The dedicated EOD idempotency ledger is retained because an operator command retry is a distinct command-level retry boundary from the Phase 10 raw payload identity. Focused tests cover correction-before/after-cutoff, late-D1 versus D2 selection, latest blockers/revokes without fallback, classifier determinism, availability/ingestion visibility, and Phase 13 identity epoch reuse.
 
-The operator ingestion service is disabled unless explicitly enabled. Public reads never migrate or write the database. Evidence backup/restore validation includes all five EOD tables and their foreign-key dependencies.
+The operator ingestion service is disabled unless explicitly enabled. Public reads never migrate or write the database. Evidence backup/restore validation includes all five EOD tables and their foreign-key dependencies, and post-restore repository/service checks preserve correction and revocation lineage, D-first/no-fallback semantics, current latest-blocking, Phase 13 identity epochs, and zero-volume raw retention/public ineligibility.
 
 ## Public API and frontend
 
@@ -69,4 +69,4 @@ The `/eod-close` page is a neutral, read-only surface with current/as-of selecti
 
 ## Review boundary
 
-The Draft PR is the only requested external change. First code review, exact-head CI review, merge, deployment, production activation, and Phase 15 remain separate gates. No Phase 15 work is included in this implementation.
+The Draft PR is the only requested external change. First Code Review remediation is implemented on the same Draft PR; exact-head CI and the Second Code Review, merge, deployment, production activation, and Phase 15 remain separate gates. No Phase 15 work is included in this implementation.

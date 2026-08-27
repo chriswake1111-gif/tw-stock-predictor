@@ -19,15 +19,39 @@ This evidence file covers the Phase 14 Implementation only. Baseline: `be8e93103
 | AC-32–AC-34 | Evidence backup/restore includes the five EOD tables; the Phase 14 repository/service tests cover migration, lineage, idempotency, as-of blocker behavior, backup/restore, and Phase 10/13 regression boundaries. |
 | AC-35 | Phase 14 scope/boundary documentation, acceptance evidence, explicit no-calendar/no-fallback policy, Draft PR-only gate, and “Phase 15 not started” state are recorded in this file and `DOCS/EVIDENCE_MODEL_V2_PHASE14.md`. |
 
+## First Code Review remediation evidence
+
+The latest First Code Review required evidence for the complete PIT lineage and
+visibility boundary. The remediation adds focused repository/service coverage
+for:
+
+- D1 correction visibility before and after its cutoff;
+- a late D1 correction that cannot replace a newer D2;
+- D2 blocked, revoked, missing-row, and ineligible/zero-volume states with no
+  fallback to D1;
+- classifier correction visibility, latest-blocker no-fallback, and repeated
+  identical-cutoff determinism;
+- Phase 13 identity epoch/code reuse at the EOD cutoff boundary;
+- current selection where `available_at` and `ingested_at` differ, proving
+  future-available evidence cannot affect an earlier evaluated result;
+- backup/restore semantic equivalence for correction, revocation, D-first
+  selection, current latest-blocking, identity epochs, and raw zero-volume
+  retention versus public ineligibility.
+
+The EOD repository now applies both `available_at <= evaluated_at` and
+`ingested_at <= evaluated_at` to current source, classification, and
+observation selection. As-of selection retains the same two-boundary rule.
+
 ## Validation record
 
-The following results were obtained in the implementation worktree before the implementation head was fixed:
+The following results were obtained in the remediation worktree before the
+remediation head was fixed:
 
 | Check | Result |
 | --- | --- |
-| Phase 14 focused backend tests | `24 passed, 1 warning` |
-| Full Python suite | `597 passed, 2 failed, 1 warning`; the two failures are existing legacy `/api/analysis` tests whose yfinance requests could not connect to `fc.yahoo.com:443` in this environment. No Phase 14 test failed. |
-| Full suite with the two external-network legacy tests excluded | `597 passed, 2 deselected, 1 warning` |
+| Phase 14 focused backend tests | `34 passed, 1 warning` |
+| Full Python suite | `607 passed, 2 failed, 1 warning`; the two failures are existing legacy `/api/analysis` tests whose yfinance requests could not connect to `fc.yahoo.com:443` in this environment. No Phase 14 test failed. |
+| Full suite with the two external-network legacy tests excluded | `607 passed, 2 deselected, 1 warning` |
 | Python compile gate | passed for all changed Python modules |
 | Frontend typecheck | passed |
 | Frontend lint | passed |
