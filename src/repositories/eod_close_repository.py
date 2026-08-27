@@ -14,6 +14,7 @@ from src.domain.eod_close import (
     EOD_PRICE_SEMANTICS_VERSION,
 )
 from src.domain.universe import parse_canonical_symbol, validate_knowledge_cutoff_at
+from src.domain.valuation import normalize_utc_timestamp, utc_now_timestamp
 from src.repositories.migration_runner import apply_valuation_migration
 from src.repositories.universe_repository import UniverseRepository
 
@@ -77,6 +78,30 @@ class EodCloseRepository:
         return conn
 
     @contextmanager
+    def _connection(
+        self, connection: sqlite3.Connection | None = None
+    ) -> Iterator[sqlite3.Connection]:
+        if connection is not None:
+            yield connection
+            return
+        with self._connect() as conn:
+            yield conn
+
+    @contextmanager
+    def write_transaction(self) -> Iterator[sqlite3.Connection]:
+        """Run one operator command's evidence writes atomically."""
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @contextmanager
     def read_transaction(self) -> Iterator[sqlite3.Connection]:
         conn = self._connect(query_only=True)
         try:
@@ -131,17 +156,185 @@ class EodCloseRepository:
         with self._connect(query_only=True) as conn:
             return self.price_policy(conn, resource_id)
 
-    def ingestion_idempotency(self, idempotency_key: str) -> dict[str, Any] | None:
-        with self._connect(query_only=True) as conn:
+    def ingestion_idempotency(
+        self,
+        idempotency_key: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[str, Any] | None:
+        with self._connection(connection) as conn:
             return self._row(conn.execute(
                 "SELECT * FROM eod_ingestion_idempotency WHERE idempotency_key = ?",
                 (idempotency_key,),
             ).fetchone())
 
-    def latest_source_snapshot_for_logical(
-        self, *, resource_id: str, logical_revision_key: str
+    @staticmethod
+    def _command_row(
+        conn: sqlite3.Connection, idempotency_key: str
+    ) -> dict[str, Any] | None:
+        return EodCloseRepository._row(conn.execute(
+            """SELECT r.*, run.status AS run_status,
+                      lock_row.lease_expires_at AS lease_expires_at
+               FROM eod_ingestion_command_reservations r
+               LEFT JOIN ingestion_runs run ON run.ingestion_run_id = r.run_id
+               LEFT JOIN ingestion_resource_locks lock_row
+                 ON lock_row.resource_id = r.resource_id
+                AND lock_row.owner_run_id = r.run_id
+               WHERE r.idempotency_key = ?""",
+            (idempotency_key,),
+        ).fetchone())
+
+    @staticmethod
+    def _validate_command_reservation(
+        existing: dict[str, Any],
+        *,
+        payload_fingerprint: str,
+        resource_id: str,
+        source_published_at: str | None,
+    ) -> None:
+        if existing["payload_fingerprint"] != payload_fingerprint:
+            raise EodEvidenceConflict("idempotency_key_reused")
+        if existing["resource_id"] != resource_id:
+            raise EodEvidenceConflict("idempotency_key_resource_reused")
+        if existing["source_published_at"] != source_published_at:
+            raise EodEvidenceConflict("idempotency_key_parameters_reused")
+
+    def ingestion_command_reservation(
+        self, idempotency_key: str
     ) -> dict[str, Any] | None:
         with self._connect(query_only=True) as conn:
+            return self._command_row(conn, idempotency_key)
+
+    def reserve_ingestion_command(
+        self,
+        *,
+        idempotency_key: str,
+        payload_fingerprint: str,
+        resource_id: str,
+        actor_id: str,
+        command_received_at: str,
+        source_published_at: str | None,
+    ) -> dict[str, Any]:
+        key = _required(idempotency_key, "idempotency_key")
+        fingerprint = _required(payload_fingerprint, "payload_fingerprint").lower()
+        resource = _required(resource_id, "resource_id")
+        actor = _required(actor_id, "actor_id")
+        received = normalize_utc_timestamp(command_received_at, "command_received_at")
+        published = (
+            normalize_utc_timestamp(source_published_at, "source_published_at")
+            if source_published_at
+            else None
+        )
+        with self.write_transaction() as conn:
+            existing = self._command_row(conn, key)
+            if existing:
+                self._validate_command_reservation(
+                    existing,
+                    payload_fingerprint=fingerprint,
+                    resource_id=resource,
+                    source_published_at=published,
+                )
+                return {**existing, "created": False}
+            same = conn.execute(
+                "SELECT idempotency_key FROM eod_ingestion_command_reservations "
+                "WHERE payload_fingerprint = ?",
+                (fingerprint,),
+            ).fetchone()
+            if same:
+                raise EodEvidenceConflict("payload_fingerprint_already_bound")
+            now = utc_now_timestamp()
+            conn.execute(
+                """INSERT INTO eod_ingestion_command_reservations (
+                       idempotency_key, payload_fingerprint, resource_id, actor_id,
+                       command_received_at, source_published_at, status, run_id,
+                       lock_id, audit_id, result_json, reserved_at, updated_at,
+                       last_error
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    key, fingerprint, resource, actor, received, published,
+                    "reserved", None, None, None, None, received, now, None,
+                ),
+            )
+            row = self._command_row(conn, key)
+            if row is None:
+                raise RuntimeError("EOD ingestion command reservation was not stored")
+            return {**row, "created": True}
+
+    def claim_ingestion_command(
+        self,
+        *,
+        idempotency_key: str,
+        run_id: str,
+        lock_id: str,
+        audit_id: str,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[str, Any] | None:
+        key = _required(idempotency_key, "idempotency_key")
+        run = _required(run_id, "run_id")
+        lock = _required(lock_id, "lock_id")
+        audit = _required(audit_id, "audit_id")
+        with self._connection(connection) as conn:
+            changed = conn.execute(
+                """UPDATE eod_ingestion_command_reservations
+                   SET status='running', run_id=?, lock_id=?, audit_id=?,
+                       updated_at=?, last_error=NULL
+                   WHERE idempotency_key=? AND status='reserved'""",
+                (run, lock, audit, utc_now_timestamp(), key),
+            ).rowcount
+            return self._command_row(conn, key) if changed == 1 else None
+
+    def complete_ingestion_command(
+        self,
+        *,
+        idempotency_key: str,
+        run_id: str,
+        result_json: str,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[str, Any]:
+        key = _required(idempotency_key, "idempotency_key")
+        run = _required(run_id, "run_id")
+        result = _required(result_json, "result_json")
+        with self._connection(connection) as conn:
+            changed = conn.execute(
+                """UPDATE eod_ingestion_command_reservations
+                   SET status='completed', result_json=?, updated_at=?
+                   WHERE idempotency_key=? AND run_id=? AND status='running'""",
+                (result, utc_now_timestamp(), key, run),
+            ).rowcount
+            if changed != 1:
+                raise EodEvidenceConflict("idempotency_command_state_conflict")
+            return self._command_row(conn, key) or {}
+
+    def reset_ingestion_command(
+        self,
+        *,
+        idempotency_key: str,
+        run_id: str,
+        error_code: str,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[str, Any]:
+        key = _required(idempotency_key, "idempotency_key")
+        run = _required(run_id, "run_id")
+        reason = _required(error_code, "error_code")[:160]
+        with self._connection(connection) as conn:
+            changed = conn.execute(
+                """UPDATE eod_ingestion_command_reservations
+                   SET status='reserved', updated_at=?, last_error=?
+                   WHERE idempotency_key=? AND run_id=? AND status='running'""",
+                (utc_now_timestamp(), reason, key, run),
+            ).rowcount
+            if changed != 1:
+                raise EodEvidenceConflict("idempotency_command_state_conflict")
+            return self._command_row(conn, key) or {}
+
+    def latest_source_snapshot_for_logical(
+        self,
+        *,
+        resource_id: str,
+        logical_revision_key: str,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[str, Any] | None:
+        with self._connection(connection) as conn:
             return self._row(conn.execute(
                 """SELECT * FROM eod_close_source_snapshots
                    WHERE resource_id = ? AND logical_revision_key = ?
@@ -150,8 +343,13 @@ class EodCloseRepository:
                 (resource_id, logical_revision_key),
             ).fetchone())
 
-    def latest_classification_for_code(self, official_code: str) -> dict[str, Any] | None:
-        with self._connect(query_only=True) as conn:
+    def latest_classification_for_code(
+        self,
+        official_code: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[str, Any] | None:
+        with self._connection(connection) as conn:
             return self._row(conn.execute(
                 """SELECT * FROM eod_product_classification_evidence
                    WHERE resource_id = ? AND official_code = ?
@@ -161,9 +359,14 @@ class EodCloseRepository:
             ).fetchone())
 
     def latest_observation(
-        self, *, resource_id: str, official_code: str, trade_date: str | None
+        self,
+        *,
+        resource_id: str,
+        official_code: str,
+        trade_date: str | None,
+        connection: sqlite3.Connection | None = None,
     ) -> dict[str, Any] | None:
-        with self._connect(query_only=True) as conn:
+        with self._connection(connection) as conn:
             return self._row(conn.execute(
                 """SELECT * FROM eod_close_observations
                    WHERE resource_id = ? AND official_code = ?
@@ -363,7 +566,12 @@ class EodCloseRepository:
 
     # ----- Operator-only append paths -----
 
-    def add_source_snapshot(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def add_source_snapshot(
+        self,
+        payload: dict[str, Any],
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[str, Any]:
         resource_id = _required(payload.get("resource_id"), "resource_id")
         if resource_id not in {TWSE_EOD_RESOURCE_ID, TPEX_EOD_RESOURCE_ID}:
             raise ValueError("resource_id is not an approved EOD close resource")
@@ -375,7 +583,7 @@ class EodCloseRepository:
             "raw_payload_sha256": raw_hash,
             "status": payload.get("status"),
         }))
-        with self._connect() as conn:
+        with self._connection(connection) as conn:
             raw_revision = conn.execute(
                 "SELECT resource_id, raw_payload_sha256 FROM raw_resource_revisions WHERE raw_resource_revision_id = ?",
                 (_required(payload.get("raw_resource_revision_id"), "raw_resource_revision_id"),),
@@ -455,7 +663,12 @@ class EodCloseRepository:
                 (snapshot_id,),
             ).fetchone()), "created": True}
 
-    def add_classification_evidence(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def add_classification_evidence(
+        self,
+        payload: dict[str, Any],
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[str, Any]:
         resource_id = _required(payload.get("resource_id") or CLASSIFICATION_RESOURCE_ID, "resource_id")
         if resource_id != CLASSIFICATION_RESOURCE_ID:
             raise ValueError("resource_id is not the approved classification resource")
@@ -467,7 +680,7 @@ class EodCloseRepository:
             "raw_payload_sha256": raw_hash,
             "classification_state": payload.get("classification_state"),
         }))
-        with self._connect() as conn:
+        with self._connection(connection) as conn:
             raw_revision = conn.execute(
                 "SELECT resource_id, raw_payload_sha256 FROM raw_resource_revisions WHERE raw_resource_revision_id = ?",
                 (_required(payload.get("raw_resource_revision_id"), "raw_resource_revision_id"),),
@@ -545,7 +758,12 @@ class EodCloseRepository:
                 (fields["classification_evidence_id"],),
             ).fetchone()), "created": True}
 
-    def add_observation(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def add_observation(
+        self,
+        payload: dict[str, Any],
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[str, Any]:
         resource_id = _required(payload.get("resource_id"), "resource_id")
         official_code = _required(payload.get("official_code"), "official_code")
         raw_hash = _required(payload.get("raw_payload_sha256"), "raw_payload_sha256").lower()
@@ -556,7 +774,7 @@ class EodCloseRepository:
             "revision_number": payload.get("revision_number"),
             "raw_payload_sha256": raw_hash,
         }))
-        with self._connect() as conn:
+        with self._connection(connection) as conn:
             parent = conn.execute(
                 "SELECT * FROM eod_close_source_snapshots WHERE source_snapshot_id = ?",
                 (_required(payload.get("source_snapshot_id"), "source_snapshot_id"),),
@@ -638,6 +856,9 @@ class EodCloseRepository:
                 "price_semantics_version": payload.get("price_semantics_version") or EOD_PRICE_SEMANTICS_VERSION,
                 "product_scope": str(payload.get("product_scope") or "needs_human_input"),
                 "observation_status": str(payload.get("observation_status") or "insufficient_data"),
+                "source_observation_state": str(
+                    payload.get("source_observation_state") or "source_observed"
+                ),
                 "public_eligibility_status": str(payload.get("public_eligibility_status") or "ineligible"),
                 "quality_status": str(payload.get("quality_status") or "unknown"),
                 "quality_flags_json": payload.get("quality_flags_json") or _json([]),
@@ -651,6 +872,8 @@ class EodCloseRepository:
                 "source_note": payload.get("source_note"),
                 "identity_fingerprint": identity,
             }
+            if fields["source_observation_state"] != "source_observed":
+                raise ValueError("source observation state must be source_observed")
             columns = ",".join(fields)
             placeholders = ",".join("?" for _ in fields)
             conn.execute(
@@ -662,7 +885,12 @@ class EodCloseRepository:
                 (fields["close_observation_id"],),
             ).fetchone()), "created": True}
 
-    def add_ingestion_idempotency(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def add_ingestion_idempotency(
+        self,
+        payload: dict[str, Any],
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[str, Any]:
         fields = {
             "idempotency_key": _required(payload.get("idempotency_key"), "idempotency_key"),
             "payload_fingerprint": _required(payload.get("payload_fingerprint"), "payload_fingerprint"),
@@ -672,7 +900,7 @@ class EodCloseRepository:
             "actor_id": _required(payload.get("actor_id"), "actor_id"),
             "created_at": _required(payload.get("created_at"), "created_at"),
         }
-        with self._connect() as conn:
+        with self._connection(connection) as conn:
             raw_revision = conn.execute(
                 "SELECT resource_id, raw_payload_sha256 FROM raw_resource_revisions WHERE raw_resource_revision_id = ?",
                 (fields["raw_resource_revision_id"],),

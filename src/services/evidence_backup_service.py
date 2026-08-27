@@ -33,6 +33,7 @@ IRREPLACEABLE_TABLES = (
     "eod_product_classification_evidence",
     "eod_close_observations",
     "eod_ingestion_idempotency",
+    "eod_ingestion_command_reservations",
 )
 
 
@@ -121,7 +122,7 @@ class EvidenceBackupService:
                 for table in (
                     "eod_price_resource_policies", "eod_close_source_snapshots",
                     "eod_product_classification_evidence", "eod_close_observations",
-                    "eod_ingestion_idempotency",
+                    "eod_ingestion_idempotency", "eod_ingestion_command_reservations",
                 )
                 if table in table_names
             }
@@ -167,7 +168,7 @@ class EvidenceBackupService:
             eod_tables = [
                 "eod_price_resource_policies", "eod_close_source_snapshots",
                 "eod_product_classification_evidence", "eod_close_observations",
-                "eod_ingestion_idempotency",
+                "eod_ingestion_idempotency", "eod_ingestion_command_reservations",
             ]
             eod_violations = [
                 row for table in eod_tables if table in table_names

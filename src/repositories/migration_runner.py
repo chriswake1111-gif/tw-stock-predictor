@@ -41,6 +41,7 @@ MIGRATION_FILES = tuple(
 ADDITIONAL_MIGRATION_IDS = (
     "20260821_17_phase13_second_review_remediation",
     "20260827_18_phase14_eod_close_context",
+    "20260827_19_phase14_second_code_review_remediation",
 )
 ADDITIONAL_MIGRATION_FILES = tuple(
     Path(__file__).resolve().parents[2] / "migrations" / f"{migration_id}.sql"
@@ -449,6 +450,7 @@ def apply_valuation_migration(db_path: str) -> dict[str, Any]:
                 "eod_product_classification_evidence",
                 "eod_close_observations",
                 "eod_ingestion_idempotency",
+                "eod_ingestion_command_reservations",
             )
             existing_tables = {
                 row[0] for row in conn.execute(

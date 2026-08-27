@@ -260,6 +260,8 @@ class EodCloseService:
                             listing_date=classification.get("listing_date"),
                             trade_date=selected_trade_date,
                             currency=classification.get("currency_raw"),
+                            cfi=classification.get("cfi_raw"),
+                            remarks=classification.get("remarks_raw"),
                         )
                         product_scope = str(decision["product_scope"])
                         reasons.extend(decision.get("reason_codes") or [])
@@ -319,6 +321,8 @@ class EodCloseService:
                     listing_date=classification.get("listing_date"),
                     trade_date=selected_trade_date,
                     currency=classification.get("currency_raw"),
+                    cfi=classification.get("cfi_raw"),
+                    remarks=classification.get("remarks_raw"),
                 )
                 product_scope = str(decision["product_scope"])
         if any(reason == "unsupported_security_type" for reason in reasons):

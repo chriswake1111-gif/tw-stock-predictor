@@ -223,6 +223,9 @@ def _classification(
     market_raw: str = "上市",
     security_type_raw: str = "股票",
     currency_raw: str = "新台幣",
+    classification_decision: str | None = None,
+    cfi_raw: str | None = None,
+    remarks_raw: str | None = None,
 ):
     raw, raw_hash = _raw(
         db,
@@ -239,9 +242,13 @@ def _classification(
         "market_raw": market_raw,
         "security_type_raw": security_type_raw,
         "listing_date": "2000-09-05",
+        "cfi_raw": cfi_raw,
         "currency_raw": currency_raw,
+        "remarks_raw": remarks_raw,
         "raw_cells_json": "[]",
-        "classification_decision": "supported_stock" if state == "accepted" else "needs_human_input",
+        "classification_decision": classification_decision or (
+            "supported_stock" if state == "accepted" else "needs_human_input"
+        ),
         "classification_state": state,
         "reason": None if state == "accepted" else "classifier blocker",
         "contract_version": "eod_product_scope_v1",
@@ -472,7 +479,9 @@ def test_operator_ingestion_reuses_phase10_raw_identity_and_eod_lineage(tmp_path
         assert conn.execute("SELECT COUNT(*) FROM raw_resource_revisions WHERE resource_id=?", ("twse.eod.stock_day_all",)).fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM eod_close_source_snapshots").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM eod_close_observations").fetchone()[0] == 1
+        assert conn.execute("SELECT source_observation_state FROM eod_close_observations").fetchone()[0] == "source_observed"
         assert conn.execute("SELECT COUNT(*) FROM eod_ingestion_idempotency").fetchone()[0] == 1
+        assert conn.execute("SELECT status FROM eod_ingestion_command_reservations").fetchone()[0] == "completed"
 
 
 def test_phase14_eod_evidence_round_trips_through_backup_and_restore(tmp_path) -> None:
@@ -498,6 +507,7 @@ def test_phase14_eod_evidence_round_trips_through_backup_and_restore(tmp_path) -
     assert restored_result["eod_foundation_counts"]["eod_close_source_snapshots"] == 1
     assert restored_result["eod_foundation_counts"]["eod_close_observations"] == 1
     assert restored_result["eod_foundation_counts"]["eod_ingestion_idempotency"] == 1
+    assert restored_result["eod_foundation_counts"]["eod_ingestion_command_reservations"] == 1
 
 
 def test_current_selection_requires_available_and_ingested_cutoff_visibility(tmp_path) -> None:

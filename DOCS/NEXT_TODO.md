@@ -157,9 +157,9 @@
 
 ## Evidence Model v2 Phase 14 — Official EOD Close Context
 
-- [x] LUK-29 Phase 14 Implementation and First Code Review remediation are present on its dedicated Draft PR branch: exact TWSE/TPEx official EOD collectors, TWSE ISIN product classification, append-only provenance/lineage, current and cutoff-bound read-only context, fail-closed status matrix, GET-only API, neutral frontend surface, semantic backup/restore evidence, and PIT/visibility regression coverage.
+- [x] LUK-29 Phase 14 Implementation, First Code Review remediation, and Second Code Review remediation are present on its dedicated Draft PR branch: exact TWSE/TPEx official EOD collectors, TWSE ISIN product classification, append-only provenance/lineage, source-observed/public-eligibility separation, durable command reservation, atomic operator evidence writes, current and cutoff-bound read-only context, fail-closed status matrix, GET-only API, neutral frontend surface, semantic backup/restore evidence, and PIT/visibility regression coverage.
 - [x] Phase 14 implementation explicitly excludes `tpex_mainboard_quotes`, calendar/session inference, yfinance adjusted prices, analysis/signal/ranking/valuation integration, broker connectivity, real orders, and automatic trading.
-- [ ] Phase 14 Draft PR Second Code Review and exact-head CI closure remain pending; merge and deployment are not authorized. Phase 15 has not started.
+- [ ] Phase 14 Draft PR Third Code Review and exact-head CI closure remain pending; merge and deployment are not authorized. Phase 15 has not started.
 
 ## Evidence Model V2 Phase 3 status (2026-08-01)
 

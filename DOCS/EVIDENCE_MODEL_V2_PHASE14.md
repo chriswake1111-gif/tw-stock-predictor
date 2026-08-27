@@ -2,7 +2,11 @@
 
 ## Status
 
-This document records the LUK-29 Phase 14 Implementation scope. The implementation is isolated from the Phase 13 baseline `be8e931038bf818cf7d9f578e18fa91b8f068cd4` and is intended for one Draft PR and first code review. It is not a merge, deployment, production activation, or Phase 15 authorization.
+This document records the LUK-29 Phase 14 Implementation scope and the latest
+Second Code Review remediation. The implementation is isolated from the Phase
+13 baseline `be8e931038bf818cf7d9f578e18fa91b8f068cd4` and remains in one Draft
+PR for the Third Code Review gate. It is not a merge, deployment, production
+activation, or Phase 15 authorization.
 
 ## Purpose and boundary
 
@@ -34,7 +38,7 @@ The seeded policy versions are:
 - `official_reported_close_v1`
 - public DTO `eod_close_context_v1`
 
-Only an exact code/venue/classification match with `Type of security=股票`, a proven TWD per-share policy, a positive close, usable positive volume, accepted identity binding, and eligible observation may expose `status=available` and `close_value`. ETF, ETN, warrants, depositary receipts, preferred shares, and other unsupported types are `not_applicable`. Missing, foreign, conflicting, or unrecognized classification is `needs_human_input`.
+Only an exact code/venue/classification match with `Type of security=股票`, a proven TWD per-share policy, a positive close, usable positive volume, accepted identity binding, and eligible observation may expose `status=available` and `close_value`. Exact non-stock classifications include `認購權證`, `認售權證`, `權證`, `權利證書`, `臺灣存託憑證`, `存託憑證`, ETF, ETN, and preferred evidence from exact Type/CFI/Remarks fields; these are `not_applicable`. Missing, foreign, conflicting, or unrecognized classification is `needs_human_input`.
 
 Status precedence is deterministic: `blocked > needs_human_input > partial > unknown > insufficient_data > not_applicable > available`. Every non-available DTO returns `close_value=null`; currency, unit, and price semantics are also withheld unless the status is available. Unknown reason codes are fail-closed as blocked.
 
@@ -44,7 +48,10 @@ As-of mode uses `latest_observed_trade_date_as_of_cutoff`: first choose the maxi
 
 ## Persistence and recovery
 
-Migration `20260827_18_phase14_eod_close_context` is additive, rerunnable, checksum-safe, and preserves existing Phase 10/13 registry rows. It registers the two EOD resources and the exact TWSE ISIN classifier, seeds TWD/share policies with `write_enabled=0`, and adds:
+Migration `20260827_18_phase14_eod_close_context` is additive, rerunnable,
+checksum-safe, and preserves existing Phase 10/13 registry rows. It registers
+the two EOD resources and the exact TWSE ISIN classifier, seeds TWD/share
+policies with `write_enabled=0`, and adds:
 
 - `eod_price_resource_policies`
 - `eod_close_source_snapshots`
@@ -52,9 +59,17 @@ Migration `20260827_18_phase14_eod_close_context` is additive, rerunnable, check
 - `eod_close_observations`
 - `eod_ingestion_idempotency`
 
-Raw evidence remains bound to the existing Phase 10 `raw_resource_revisions` identity and SHA-256 provenance. EOD records, corrections, revocations, and idempotency bindings are append-only and immutable; a correction must explicitly supersede the latest revision in its logical chain. The dedicated EOD idempotency ledger is retained because an operator command retry is a distinct command-level retry boundary from the Phase 10 raw payload identity. Focused tests cover correction-before/after-cutoff, late-D1 versus D2 selection, latest blockers/revokes without fallback, classifier determinism, availability/ingestion visibility, and Phase 13 identity epoch reuse.
+Migration `20260827_19_phase14_second_code_review_remediation` is additive and
+leaves Migration 18 immutable. It adds the internal
+`source_observation_state` evidence column and the durable command-reservation
+table used by the operator retry state machine:
 
-The operator ingestion service is disabled unless explicitly enabled. Public reads never migrate or write the database. Evidence backup/restore validation includes all five EOD tables and their foreign-key dependencies, and post-restore repository/service checks preserve correction and revocation lineage, D-first/no-fallback semantics, current latest-blocking, Phase 13 identity epochs, and zero-volume raw retention/public ineligibility.
+- `source_observation_state`
+- `eod_ingestion_command_reservations`
+
+Raw evidence remains bound to the existing Phase 10 `raw_resource_revisions` identity and SHA-256 provenance. EOD records, corrections, revocations, and the completed idempotency ledger are append-only and immutable; a correction must explicitly supersede the latest revision in its logical chain. The additive command-reservation table is a durable `reserved -> running -> completed` / `running -> reserved` state machine that binds a key and payload before side effects. Raw revision, source/classification evidence, source-observed rows, normalized observations, the legacy EOD ledger, Phase 10 run/item, and terminal run state are committed in one SQLite transaction. Failure cleanup releases the lock, records the failed run/audit outcome, and returns the reservation to retryable `reserved` state. Focused tests cover correction-before/after-cutoff, late-D1 versus D2 selection, latest blockers/revokes without fallback, classifier determinism and exact fixtures, source-observed/public-eligibility separation, atomic failure recovery, same-key concurrency, backup/restore, availability/ingestion visibility, and Phase 13 identity epoch reuse.
+
+The operator ingestion service is disabled unless explicitly enabled. Public reads never migrate or write the database. Evidence backup/restore validation includes all six EOD tables and their foreign-key dependencies, and post-restore repository/service checks preserve correction and revocation lineage, D-first/no-fallback semantics, current latest-blocking, Phase 13 identity epochs, command reservation state, and zero-volume raw retention/public ineligibility.
 
 ## Public API and frontend
 
@@ -65,8 +80,8 @@ The public API is GET-only:
 
 There is no public `trade_date` selector. Invalid symbols/cutoffs return 422; missing Phase 14 storage returns 503; ordinary evidence insufficiency is a 200 DTO with an explicit status and null close. The DTO excludes raw payloads, hashes, credentials, locks, actor identifiers, idempotency keys, internal revision chains, ranking, recommendation, valuation, technical, wave, signal, quote, and return fields.
 
-The `/eod-close` page is a neutral, read-only surface with current/as-of selection, timezone-aware cutoff input, explicit status/reason display, backend-only fetches, and the disclaimer that the official unadjusted close is not a target price, buy/sell instruction, or recommendation.
+The `/eod-close` page is a neutral, read-only surface with current/as-of selection, timezone-aware cutoff input, explicit status/reason display, backend-only fetches, and the disclaimer that the official unadjusted close is not a target price, buy/sell instruction, or recommendation. The public DTO remains unchanged by the internal source-observation state.
 
 ## Review boundary
 
-The Draft PR is the only requested external change. First Code Review remediation is implemented on the same Draft PR; exact-head CI and the Second Code Review, merge, deployment, production activation, and Phase 15 remain separate gates. No Phase 15 work is included in this implementation.
+The Draft PR is the only requested external change. First and Second Code Review remediations are implemented on the same Draft PR; exact-head CI and the Third Code Review, merge, deployment, production activation, and Phase 15 remain separate gates. No Phase 15 work is included in this implementation.

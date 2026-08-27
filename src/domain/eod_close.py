@@ -57,6 +57,35 @@ EOD_ELIGIBILITY_POLICY_VERSION = "eod_public_close_eligibility_v1"
 EOD_CURRENTNESS_POLICY_VERSION = "eod_currentness_policy_v1"
 EOD_ASOF_SELECTION_SCOPE = "latest_observed_trade_date_as_of_cutoff"
 
+# These are exact first-party classification values only.  The classifier must
+# not infer product scope from a name, code shape, or a broad text fragment.
+_RECOGNIZED_NON_STOCK_TYPES = frozenset({
+    "etf",
+    "etn",
+    "特別股",
+    "優先股",
+    "權證",
+    "權利證書",
+    "認股權憑證",
+    "認購權證",
+    "認售權證",
+    "存託憑證",
+    "臺灣存託憑證",
+    "tdr",
+    "depositary receipt",
+    "受益證券",
+    "指數股票型基金",
+})
+_PREFERRED_CFI_VALUES = frozenset({"EPNRAR"})
+_PREFERRED_REMARK_VALUES = frozenset({
+    "特別股",
+    "優先股",
+    "Preferred Stock",
+    "Preferred Stocks",
+    "Preferred Share",
+    "Preferred Shares",
+})
+
 
 EOD_REASON_CODES = (
     "source_date_older_than_evaluated_date",
@@ -308,6 +337,8 @@ def classify_product(
     listing_date: str | None = None,
     trade_date: str | None = None,
     currency: str | None = None,
+    cfi: str | None = None,
+    remarks: str | None = None,
 ) -> dict[str, Any]:
     """Apply the exact v1 product decision table without inference."""
 
@@ -315,11 +346,15 @@ def classify_product(
     requested = str(requested_code).strip()
     observed_market = str(market or "").strip()
     observed_type = str(security_type or "").strip()
+    observed_cfi = str(cfi or "").strip()
+    observed_remarks = str(remarks or "").strip()
     result: dict[str, Any] = {
         "product_scope": EodProductScope.NEEDS_HUMAN_INPUT.value,
         "decision": "needs_human_input",
         "reason_codes": [],
         "security_type": observed_type or None,
+        "cfi": observed_cfi or None,
+        "remarks": observed_remarks or None,
     }
     if not code or not observed_market or not observed_type:
         result["reason_codes"] = ["classification_evidence_missing"]
@@ -332,11 +367,16 @@ def classify_product(
         return result
 
     normalized_type = observed_type.casefold()
-    recognized_non_stock = {
-        "etf", "etn", "特別股", "優先股", "權證", "權利證書", "認股權憑證",
-        "存託憑證", "tdr", "depositary receipt", "受益證券", "指數股票型基金",
-    }
-    if normalized_type in {item.casefold() for item in recognized_non_stock}:
+    normalized_cfi = observed_cfi.upper()
+    normalized_remarks = observed_remarks.casefold()
+    preferred_evidence = (
+        normalized_cfi in {item.upper() for item in _PREFERRED_CFI_VALUES}
+        or normalized_remarks in {item.casefold() for item in _PREFERRED_REMARK_VALUES}
+    )
+    if (
+        normalized_type in {item.casefold() for item in _RECOGNIZED_NON_STOCK_TYPES}
+        or preferred_evidence
+    ):
         result.update(
             product_scope=EodProductScope.NOT_APPLICABLE.value,
             decision="not_applicable",

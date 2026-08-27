@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import timedelta
-from typing import Any
+from typing import Any, Iterator
 
 from src.domain.data_foundation import (
     DataProvider,
@@ -31,6 +32,16 @@ class DataFoundationRepository:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
+
+    @contextmanager
+    def _connection(
+        self, connection: sqlite3.Connection | None = None
+    ) -> Iterator[sqlite3.Connection]:
+        if connection is not None:
+            yield connection
+            return
+        with self._connect() as conn:
+            yield conn
 
     @staticmethod
     def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -97,9 +108,11 @@ class DataFoundationRepository:
             ).fetchone()
             return {**dict(row), "created": True}
 
-    def add_run(self, run: IngestionRun) -> dict[str, Any]:
+    def add_run(
+        self, run: IngestionRun, *, connection: sqlite3.Connection | None = None
+    ) -> dict[str, Any]:
         payload = run.canonical_payload()
-        with self._connect() as conn:
+        with self._connection(connection) as conn:
             existing = conn.execute(
                 "SELECT * FROM ingestion_runs WHERE ingestion_run_id = ?",
                 (payload["ingestion_run_id"],),
@@ -125,11 +138,13 @@ class DataFoundationRepository:
             ).fetchone()
             return dict(row)
 
-    def complete_run(self, run: IngestionRun) -> dict[str, Any]:
+    def complete_run(
+        self, run: IngestionRun, *, connection: sqlite3.Connection | None = None
+    ) -> dict[str, Any]:
         payload = run.canonical_payload()
         if payload["status"] == "running":
             raise ValueError("complete_run requires a terminal status")
-        with self._connect() as conn:
+        with self._connection(connection) as conn:
             current = conn.execute(
                 "SELECT * FROM ingestion_runs WHERE ingestion_run_id = ?",
                 (payload["ingestion_run_id"],),
@@ -167,9 +182,11 @@ class DataFoundationRepository:
                 (payload["ingestion_run_id"],),
             ).fetchone())
 
-    def add_run_item(self, item: IngestionRunItem) -> dict[str, Any]:
+    def add_run_item(
+        self, item: IngestionRunItem, *, connection: sqlite3.Connection | None = None
+    ) -> dict[str, Any]:
         payload = item.canonical_payload()
-        with self._connect() as conn:
+        with self._connection(connection) as conn:
             conn.execute(
                 """
                 INSERT INTO ingestion_run_items VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -190,10 +207,12 @@ class DataFoundationRepository:
                 (payload["ingestion_run_item_id"],),
             ).fetchone())
 
-    def add_raw_revision(self, revision: RawResourceRevision) -> dict[str, Any]:
+    def add_raw_revision(
+        self, revision: RawResourceRevision, *, connection: sqlite3.Connection | None = None
+    ) -> dict[str, Any]:
         payload = revision.canonical_payload()
         fingerprint = revision.deterministic_identity()
-        with self._connect() as conn:
+        with self._connection(connection) as conn:
             existing = conn.execute(
                 "SELECT * FROM raw_resource_revisions WHERE identity_fingerprint = ?",
                 (fingerprint,),
@@ -247,6 +266,7 @@ class DataFoundationRepository:
         acquired_at: str,
         *,
         lease_seconds: int = 900,
+        connection: sqlite3.Connection | None = None,
     ) -> dict[str, Any]:
         if lease_seconds <= 0:
             raise ValueError("lease_seconds must be greater than zero")
@@ -256,8 +276,9 @@ class DataFoundationRepository:
             (acquired_time + timedelta(seconds=lease_seconds)).isoformat(),
             "lease_expires_at",
         )
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        with self._connection(connection) as conn:
+            if connection is None:
+                conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
                 "SELECT * FROM ingestion_resource_locks WHERE resource_id = ?",
                 (resource_id,),
@@ -335,8 +356,14 @@ class DataFoundationRepository:
                 "recovery_event_id": recovery_event_id,
             }
 
-    def release_resource_lock(self, resource_id: str, owner_run_id: str) -> None:
-        with self._connect() as conn:
+    def release_resource_lock(
+        self,
+        resource_id: str,
+        owner_run_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> None:
+        with self._connection(connection) as conn:
             result = conn.execute(
                 "DELETE FROM ingestion_resource_locks WHERE resource_id = ? AND owner_run_id = ?",
                 (resource_id, owner_run_id),
@@ -344,8 +371,13 @@ class DataFoundationRepository:
             if result.rowcount != 1:
                 raise RuntimeError("resource lock is not owned by this run")
 
-    def raw_revision(self, revision_id: str) -> dict[str, Any] | None:
-        with self._connect() as conn:
+    def raw_revision(
+        self,
+        revision_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[str, Any] | None:
+        with self._connection(connection) as conn:
             return self._row(conn.execute(
                 "SELECT * FROM raw_resource_revisions WHERE raw_resource_revision_id = ?",
                 (revision_id,),
@@ -462,9 +494,14 @@ class DataFoundationRepository:
         ).fetchone())
 
     def latest_raw_revision(
-        self, provider_id: str, resource_id: str, logical_revision_key: str
+        self,
+        provider_id: str,
+        resource_id: str,
+        logical_revision_key: str,
+        *,
+        connection: sqlite3.Connection | None = None,
     ) -> dict[str, Any] | None:
-        with self._connect() as conn:
+        with self._connection(connection) as conn:
             return self._row(conn.execute(
                 """
                 SELECT * FROM raw_resource_revisions

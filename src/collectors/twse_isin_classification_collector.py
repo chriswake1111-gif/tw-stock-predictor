@@ -25,7 +25,7 @@ _LABELS = {
     "security_type": frozenset({"Type of security", "有價證券別"}),
     "listing_date": frozenset({"Date Stock Listed", "上市日期"}),
     "isin": frozenset({"ISIN Code", "國際證券辨識號碼"}),
-    "cfi": frozenset({"CFI", "CFI Code"}),
+    "cfi": frozenset({"CFI", "CFI Code", "CFICode"}),
     "remarks": frozenset({"Remarks", "備註"}),
     "currency": frozenset({"Currency", "幣別", "計價幣別"}),
 }
@@ -208,6 +208,7 @@ def parse_twse_isin_classification(
         (
             item.get("market"), item.get("security_type"),
             item.get("listing_date"), item.get("currency"),
+            item.get("cfi"), item.get("remarks"),
         )
         for item in exact_candidates
     }
@@ -260,6 +261,8 @@ def parse_twse_isin_classification(
             listing_date=listing_date,
             trade_date=trade_date,
             currency=candidate.get("currency"),
+            cfi=candidate.get("cfi"),
+            remarks=candidate.get("remarks"),
         )
     else:
         decision = {
