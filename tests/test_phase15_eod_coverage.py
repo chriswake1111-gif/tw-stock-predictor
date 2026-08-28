@@ -98,6 +98,7 @@ def _seed_coverage(
     *,
     source_kwargs: dict | None = None,
     first_observed_at: str | None = None,
+    include_observation: bool = True,
 ):
     tmp_path.mkdir(parents=True, exist_ok=True)
     db, anchor = (
@@ -123,16 +124,18 @@ def _seed_coverage(
         **source_options,
     )
     classification = _classification(repo, db, at="2026-08-27T04:00:00Z")
-    observation = _observation(
-        repo,
-        raw=raw,
-        raw_hash=raw_hash,
-        source=source,
-        classification=classification,
-        anchor=anchor,
-        instrument_revision_id=_identity_revision_id(db, anchor["instrument_id"]),
-        at="2026-08-27T05:02:00Z",
-    )
+    observation = None
+    if include_observation:
+        observation = _observation(
+            repo,
+            raw=raw,
+            raw_hash=raw_hash,
+            source=source,
+            classification=classification,
+            anchor=anchor,
+            instrument_revision_id=_identity_revision_id(db, anchor["instrument_id"]),
+            at="2026-08-27T05:02:00Z",
+        )
     return db, repo, anchor, raw, raw_hash, source, classification, observation
 
 
@@ -376,6 +379,156 @@ def test_source_selection_is_exact_no_fallback_and_partial_requires_proof(tmp_pa
     assert partial_repo is not None and partial_raw is not None and partial_hash is not None
 
 
+def test_partial_source_preserves_exact_observed_eligibility_and_membership_counts(tmp_path) -> None:
+    db, _, _, _, _, _, _, _ = _seed_coverage(
+        tmp_path,
+        source_kwargs={
+            "status": "partial",
+            "coverage_state": "partial",
+            "coverage_proof_type": "explicit_row_bound",
+            "coverage_proof_reference": "fixture-proof-observed",
+        },
+    )
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    item = result["items"][0]
+    assert result["status"] == "partial"
+    assert result["aggregate_assertion_state"] == "partial"
+    assert item["coverage_status"] == "observed_eligible"
+    assert item["denominator_membership"] == "expected"
+    assert result["aggregate"]["denominator_expected_count"] == 1
+    assert result["aggregate"]["denominator_excluded_count"] == 0
+    assert result["aggregate"]["denominator_unresolved_count"] == 0
+    assert result["aggregate"]["source_observation_orphan_count"] == 0
+
+
+def test_partial_source_marks_unobserved_expected_candidate_source_partial(tmp_path) -> None:
+    db, _, _, _, _, _, _, _ = _seed_coverage(
+        tmp_path,
+        source_kwargs={
+            "status": "partial",
+            "coverage_state": "partial",
+            "coverage_proof_type": "explicit_row_bound",
+            "coverage_proof_reference": "fixture-proof-unobserved",
+        },
+        include_observation=False,
+    )
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    item = result["items"][0]
+    assert result["status"] == "partial"
+    assert result["aggregate_assertion_state"] == "partial"
+    assert item["coverage_status"] == "source_partial"
+    assert item["denominator_membership"] == "expected"
+    assert result["aggregate"]["denominator_expected_count"] == 1
+    assert result["aggregate"]["denominator_excluded_count"] == 0
+    assert result["aggregate"]["denominator_unresolved_count"] == 0
+    assert result["aggregate"]["source_observation_orphan_count"] == 0
+
+
+def test_unknown_source_does_not_mask_proven_product_exclusion(tmp_path) -> None:
+    db, repo, _, _, _, _, classification, _ = _seed_coverage(
+        tmp_path,
+        source_kwargs={"date": "2026-08-26"},
+    )
+    _classification(
+        repo,
+        db,
+        at="2026-08-27T04:01:00Z",
+        security_type_raw="ETF",
+        revision_number=2,
+        supersedes_classification_evidence_id=classification["classification_evidence_id"],
+    )
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    item = result["items"][0]
+    assert result["status"] == "unknown"
+    assert result["aggregate_assertion_state"] == "unknown"
+    assert item["coverage_status"] == "excluded_by_product_scope"
+    assert item["denominator_membership"] == "excluded"
+    assert result["aggregate"]["denominator_expected_count"] == 0
+    assert result["aggregate"]["denominator_excluded_count"] == 1
+    assert result["aggregate"]["denominator_unresolved_count"] == 0
+    assert result["aggregate"]["source_observation_orphan_count"] == 0
+
+
+def test_blocked_source_does_not_mask_classification_unresolved(tmp_path) -> None:
+    db, repo, _, _, _, _, classification, _ = _seed_coverage(
+        tmp_path,
+        source_kwargs={"status": "schema_changed"},
+    )
+    _classification(
+        repo,
+        db,
+        at="2026-08-27T04:01:00Z",
+        state="blocked",
+        revision_number=2,
+        supersedes_classification_evidence_id=classification["classification_evidence_id"],
+    )
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    item = result["items"][0]
+    assert result["status"] == "blocked"
+    assert result["aggregate_assertion_state"] == "blocked"
+    assert item["coverage_status"] == "classification_unresolved"
+    assert item["denominator_membership"] == "unresolved"
+    assert result["aggregate"]["denominator_expected_count"] == 0
+    assert result["aggregate"]["denominator_excluded_count"] == 0
+    assert result["aggregate"]["denominator_unresolved_count"] == 1
+    assert result["aggregate"]["source_observation_orphan_count"] == 0
+
+
+def test_blocked_source_does_not_mask_observation_identity_unresolved(tmp_path) -> None:
+    db, repo, anchor, raw, raw_hash, source, classification, _ = _seed_coverage(
+        tmp_path,
+        source_kwargs={"status": "schema_changed"},
+    )
+    universe = UniverseRepository(str(db), guard=UniverseWriteGuard(True))
+    wrong_anchor = universe.allocate_instrument(
+        venue="TWSE", official_code="9999", source_identity="twse:9999:future",
+        first_observed_at="2026-08-29T00:00:00Z", source_reference="fixture",
+        context=UniverseOperatorContext("operator", "identity", "identity-lock", "identity-audit"),
+    )
+    _observation(
+        repo,
+        raw=raw,
+        raw_hash=raw_hash,
+        source=source,
+        classification=classification,
+        anchor=wrong_anchor,
+        at="2026-08-27T05:03:00Z",
+        close="1006",
+        revision_number=2,
+        supersedes_observation_id=_observation_id(db),
+    )
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    item = next(item for item in result["items"] if item["official_code"] == anchor["official_code"])
+    assert result["status"] == "blocked"
+    assert result["aggregate_assertion_state"] == "blocked"
+    assert item["coverage_status"] == "identity_unresolved"
+    assert item["denominator_membership"] == "expected"
+    assert result["aggregate"]["denominator_expected_count"] == 1
+    assert result["aggregate"]["denominator_excluded_count"] == 0
+    assert result["aggregate"]["denominator_unresolved_count"] == 0
+    assert result["aggregate"]["source_observation_orphan_count"] == 0
+
+
 def test_post_k_lifecycle_and_same_day_event_do_not_rewrite_target_date(tmp_path) -> None:
     db, _, anchor, _, _, _, _, _ = _seed_coverage(tmp_path)
     universe = UniverseRepository(str(db), guard=UniverseWriteGuard(True))
@@ -401,7 +554,7 @@ def test_post_k_lifecycle_and_same_day_event_do_not_rewrite_target_date(tmp_path
     same_day = EodCoverageService(str(db_same)).as_of(
         venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
     )
-    assert same_day["items"][0]["coverage_status"] == "classification_unresolved"
+    assert same_day["items"][0]["coverage_status"] == "identity_unresolved"
     assert same_day["items"][0]["denominator_membership"] == "unresolved"
 
 
@@ -418,7 +571,7 @@ def test_date_only_event_uses_taipei_cutoff_date_for_k_visibility(tmp_path) -> N
         venue="TWSE", source_trade_date=TARGET_DATE,
         knowledge_cutoff_at="2026-08-27T08:00:00Z",
     )
-    assert result["items"][0]["coverage_status"] == "classification_unresolved"
+    assert result["items"][0]["coverage_status"] == "identity_unresolved"
     assert result["items"][0]["denominator_membership"] == "unresolved"
 
 
@@ -467,7 +620,7 @@ def test_first_observed_after_d_without_d_applicability_stays_unresolved(tmp_pat
     assert result["aggregate"]["denominator_unresolved_count"] == 1
     assert result["aggregate"]["source_observation_orphan_count"] == 0
     assert result["items"][0]["denominator_membership"] == "unresolved"
-    assert result["items"][0]["coverage_status"] == "classification_unresolved"
+    assert result["items"][0]["coverage_status"] == "identity_unresolved"
 
 
 def test_first_observed_after_d_does_not_orphan_exact_d_observation(tmp_path) -> None:
@@ -524,7 +677,7 @@ def test_operational_event_applicability_is_bounded_by_target_date(tmp_path) -> 
     same = EodCoverageService(str(same_db)).as_of(
         venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
     )
-    assert same["items"][0]["coverage_status"] == "classification_unresolved"
+    assert same["items"][0]["coverage_status"] == "identity_unresolved"
     assert same["items"][0]["denominator_membership"] == "unresolved"
 
 

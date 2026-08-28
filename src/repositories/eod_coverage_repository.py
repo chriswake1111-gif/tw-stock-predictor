@@ -800,18 +800,6 @@ class EodCoverageRepository:
         candidate_projection AS (
             SELECT facts.*,
                    CASE
-                     WHEN facts.source_state = 'blocked' THEN 'source_blocked'
-                     WHEN facts.source_state = 'unknown' THEN 'source_unknown'
-                     WHEN facts.source_state = 'partial' THEN 'source_partial'
-                     WHEN facts.listing_excluded = 1 THEN 'excluded_by_lifecycle'
-                     WHEN facts.operational_excluded = 1 THEN 'excluded_by_operational_state'
-                     WHEN facts.classification_membership_hint = 'excluded'
-                       THEN 'excluded_by_product_scope'
-                     WHEN facts.identity_unresolved = 1 THEN 'identity_unresolved'
-                     WHEN facts.event_unresolved = 1
-                       OR facts.classification_membership_hint = 'unresolved'
-                       THEN 'classification_unresolved'
-                     WHEN facts.observation_id IS NULL THEN 'not_observed_unproven'
                      WHEN (facts.observation_instrument_id IS NOT NULL
                            AND facts.instrument_id IS NOT NULL
                            AND facts.observation_instrument_id <> facts.instrument_id)
@@ -819,7 +807,22 @@ class EodCoverageRepository:
                            AND facts.reference_instrument_revision_id IS NOT NULL
                            AND facts.observation_instrument_revision_id
                                <> facts.reference_instrument_revision_id)
+                       OR facts.identity_unresolved = 1
+                       OR facts.event_unresolved = 1
                        THEN 'identity_unresolved'
+                     WHEN facts.classification_membership_hint = 'unresolved'
+                       THEN 'classification_unresolved'
+                     WHEN facts.listing_excluded = 1 THEN 'excluded_by_lifecycle'
+                     WHEN facts.operational_excluded = 1 THEN 'excluded_by_operational_state'
+                     WHEN facts.classification_membership_hint = 'excluded'
+                       THEN 'excluded_by_product_scope'
+                     WHEN facts.observation_id IS NULL
+                       AND facts.source_state = 'blocked' THEN 'source_blocked'
+                     WHEN facts.observation_id IS NULL
+                       AND facts.source_state = 'unknown' THEN 'source_unknown'
+                     WHEN facts.observation_id IS NULL
+                       AND facts.source_state = 'partial' THEN 'source_partial'
+                     WHEN facts.observation_id IS NULL THEN 'not_observed_unproven'
                     WHEN facts.observation_status = 'available'
                        AND facts.public_eligibility_status = 'eligible'
                        AND facts.observation_product_scope = 'supported_stock'
