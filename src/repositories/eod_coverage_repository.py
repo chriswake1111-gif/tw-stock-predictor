@@ -259,7 +259,6 @@ class EodCoverageRepository:
             WHERE i.venue = p.venue
               AND i.first_observed_at IS NOT NULL
               AND eod_timestamp_leq(i.first_observed_at, p.cutoff) = 1
-              AND date(i.first_observed_at, '+8 hours') <= p.trade_date
         ),
         event_rows AS (
             SELECT e.instrument_id, 'lifecycle' AS event_source,

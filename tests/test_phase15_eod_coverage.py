@@ -27,11 +27,13 @@ from src.api.routes.v2_eod_coverage import router
 from tests.test_phase14_eod_repository_service import (
     _classification,
     _db_with_identity,
+    _identity_payload,
     _identity_revision_id,
     _observation,
     _raw,
     _source,
 )
+from tests.phase13_test_support import seed_raw_provenance
 
 
 TARGET_DATE = "2026-08-27"
@@ -62,9 +64,47 @@ def _app() -> FastAPI:
     return app
 
 
-def _seed_coverage(tmp_path, *, source_kwargs: dict | None = None):
+def _db_with_identity_at(tmp_path, first_observed_at: str):
+    db = tmp_path / "phase14.sqlite"
+    apply_valuation_migration(str(db))
+    seed_raw_provenance(db)
+    universe = UniverseRepository(str(db), guard=UniverseWriteGuard(True))
+    context = UniverseOperatorContext("operator", "identity", "identity-lock", "identity-audit")
+    anchor = universe.allocate_instrument(
+        venue="TWSE", official_code="2330", source_identity="twse:2330:v1",
+        first_observed_at=first_observed_at, source_reference="fixture",
+        context=context,
+    )
+    universe.add_revision(
+        instrument_id=anchor["instrument_id"],
+        resource_id="twse-universe-master",
+        logical_revision_key="master",
+        revision_number=1,
+        payload=_identity_payload(
+            first_observed_at=first_observed_at,
+            fetched_at=first_observed_at,
+            received_at=first_observed_at,
+            ingested_at=first_observed_at,
+            available_at=first_observed_at,
+        ),
+        context=context,
+        idempotency_key="identity-revision",
+    )
+    return db, anchor
+
+
+def _seed_coverage(
+    tmp_path,
+    *,
+    source_kwargs: dict | None = None,
+    first_observed_at: str | None = None,
+):
     tmp_path.mkdir(parents=True, exist_ok=True)
-    db, anchor = _db_with_identity(tmp_path)
+    db, anchor = (
+        _db_with_identity_at(tmp_path, first_observed_at)
+        if first_observed_at is not None
+        else _db_with_identity(tmp_path)
+    )
     repo = EodCloseRepository(str(db))
     raw, raw_hash = _raw(
         db,
@@ -147,6 +187,22 @@ def _assert_no_forbidden_keys(value):
     elif isinstance(value, list):
         for child in value:
             _assert_no_forbidden_keys(child)
+
+
+def _add_listing_evidence(db, anchor: dict, *, event_date: str | None = None) -> None:
+    UniverseRepository(str(db), guard=UniverseWriteGuard(True)).add_lifecycle_event(
+        instrument_id=anchor["instrument_id"],
+        event_type="listed",
+        available_at="2026-08-27T06:00:00Z",
+        ingested_at="2026-08-27T06:00:00Z",
+        effective_at=None if event_date else "2026-08-26T01:00:00Z",
+        event_date=event_date,
+        source_reference="coverage first-observed timing fixture",
+        reason="D applicability fixture",
+        context=UniverseOperatorContext(
+            "operator", "coverage-event", "coverage-lock", "coverage-audit",
+        ),
+    )
 
 
 def test_domain_request_status_and_cursor_validation() -> None:
@@ -364,6 +420,71 @@ def test_date_only_event_uses_taipei_cutoff_date_for_k_visibility(tmp_path) -> N
     )
     assert result["items"][0]["coverage_status"] == "classification_unresolved"
     assert result["items"][0]["denominator_membership"] == "unresolved"
+
+
+def test_first_observed_after_d_but_visible_at_k_keeps_d_applicable_candidate(tmp_path) -> None:
+    db, _, anchor, _, _, _, _, _ = _seed_coverage(
+        tmp_path, first_observed_at="2026-08-27T23:00:00Z",
+    )
+    _add_listing_evidence(db, anchor)
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    assert sum(
+        result["aggregate"][key]
+        for key in (
+            "denominator_expected_count",
+            "denominator_excluded_count",
+            "denominator_unresolved_count",
+        )
+    ) == 1
+    assert result["aggregate"]["denominator_expected_count"] == 1
+    assert result["aggregate"]["source_observation_orphan_count"] == 0
+    assert result["items"][0]["denominator_membership"] == "expected"
+    assert result["items"][0]["listing_status"] == "listed"
+
+
+def test_first_observed_after_d_without_d_applicability_stays_unresolved(tmp_path) -> None:
+    db, _, anchor, _, _, _, _, _ = _seed_coverage(
+        tmp_path, first_observed_at="2026-08-27T23:00:00Z",
+    )
+    _add_listing_evidence(db, anchor, event_date=TARGET_DATE)
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    assert sum(
+        result["aggregate"][key]
+        for key in (
+            "denominator_expected_count",
+            "denominator_excluded_count",
+            "denominator_unresolved_count",
+        )
+    ) == 1
+    assert result["aggregate"]["denominator_unresolved_count"] == 1
+    assert result["aggregate"]["source_observation_orphan_count"] == 0
+    assert result["items"][0]["denominator_membership"] == "unresolved"
+    assert result["items"][0]["coverage_status"] == "classification_unresolved"
+
+
+def test_first_observed_after_d_does_not_orphan_exact_d_observation(tmp_path) -> None:
+    db, _, anchor, _, _, _, _, _ = _seed_coverage(
+        tmp_path, first_observed_at="2026-08-27T23:00:00Z",
+    )
+    _add_listing_evidence(db, anchor)
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    item = result["items"][0]
+    assert item["item_kind"] == "denominator_candidate"
+    assert item["coverage_status"] == "observed_eligible"
+    assert item["observed_trade_date"] == TARGET_DATE
+    assert result["aggregate"]["source_observation_orphan_count"] == 0
 
 
 def test_operational_event_applicability_is_bounded_by_target_date(tmp_path) -> None:
