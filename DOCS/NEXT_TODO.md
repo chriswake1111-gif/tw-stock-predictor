@@ -159,7 +159,12 @@
 
 - [x] LUK-29 Phase 14 Implementation, First Code Review remediation, Second Code Review remediation, and Third Code Review remediation are present on its dedicated Draft PR branch: exact TWSE/TPEx official EOD collectors, TWSE ISIN product classification, append-only provenance/lineage, source-observed/public-eligibility separation, durable command reservation, command/content idempotency separation with scoped evidence reuse, atomic operator evidence writes, current and cutoff-bound read-only context, fail-closed status matrix, GET-only API, neutral frontend surface, semantic backup/restore evidence, and PIT/visibility regression coverage.
 - [x] Phase 14 implementation explicitly excludes `tpex_mainboard_quotes`, calendar/session inference, yfinance adjusted prices, analysis/signal/ranking/valuation integration, broker connectivity, real orders, and automatic trading.
-- [ ] Phase 14 Draft PR Fourth Code Review and exact-head CI closure remain pending; merge and deployment are not authorized. Phase 15 has not started.
+- [x] Phase 14 Draft PR Fourth Code Review and exact-head post-merge main CI closure are complete; Phase 14 is closed at its recorded merge baseline.
+
+## Evidence Model v2 Phase 15 — Coverage Quality / Visibility
+
+- [x] LUK-39 Phase 15 Implementation adds a historical/as-of, read-only coverage visibility projection on its dedicated Draft PR branch, with no migration, persistence, frontend, or live-provider request path.
+- [ ] Phase 15 Code Review, merge, deployment, production activation, and Phase 16 remain unauthorized; the Draft PR must remain Draft until the next gate.
 
 ## Evidence Model V2 Phase 3 status (2026-08-01)
 
