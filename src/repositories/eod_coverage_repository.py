@@ -273,10 +273,6 @@ class EodCoverageRepository:
             WHERE e.available_at IS NOT NULL AND eod_timestamp_leq(e.available_at, p.cutoff) = 1
               AND e.ingested_at IS NOT NULL AND eod_timestamp_leq(e.ingested_at, p.cutoff) = 1
               AND e.event_type <> 'resumed'
-              AND (
-                (e.effective_at IS NOT NULL AND eod_timestamp_leq(e.effective_at, p.cutoff) = 1)
-                OR e.effective_at IS NULL
-              )
             UNION ALL
             SELECT e.instrument_id, 'operational' AS event_source,
                    e.operational_event_id AS event_id,
@@ -289,10 +285,6 @@ class EodCoverageRepository:
             CROSS JOIN params p
             WHERE e.available_at IS NOT NULL AND eod_timestamp_leq(e.available_at, p.cutoff) = 1
               AND e.ingested_at IS NOT NULL AND eod_timestamp_leq(e.ingested_at, p.cutoff) = 1
-              AND (
-                (e.effective_at IS NOT NULL AND eod_timestamp_leq(e.effective_at, p.cutoff) = 1)
-                OR e.effective_at IS NULL
-              )
             UNION ALL
             SELECT e.instrument_id, 'lifecycle' AS event_source,
                    e.lifecycle_event_id AS event_id,
@@ -306,10 +298,6 @@ class EodCoverageRepository:
             WHERE e.event_type = 'resumed'
               AND e.available_at IS NOT NULL AND eod_timestamp_leq(e.available_at, p.cutoff) = 1
               AND e.ingested_at IS NOT NULL AND eod_timestamp_leq(e.ingested_at, p.cutoff) = 1
-              AND (
-                (e.effective_at IS NOT NULL AND eod_timestamp_leq(e.effective_at, p.cutoff) = 1)
-                OR e.effective_at IS NULL
-              )
         ),
         event_temporal AS (
             SELECT e.*,
@@ -983,6 +971,8 @@ class EodCoverageRepository:
         conn: sqlite3.Connection,
         base_sql: str,
         params: list[Any],
+        *,
+        bound_invalid_source: bool = False,
     ) -> dict[str, Any]:
         rows = conn.execute(
             f"""
@@ -998,7 +988,12 @@ class EodCoverageRepository:
         for row in rows:
             item_kind = str(row[0])
             membership = row[1]
-            status = str(row[2])
+            status = EodCoverageRepository._effective_status(
+                item_kind=item_kind,
+                denominator_membership=membership,
+                status=row[2],
+                bound_invalid_source=bound_invalid_source,
+            )
             count = int(row[3])
             status_counts[status] = status_counts.get(status, 0) + count
             if item_kind == CoverageItemKind.SOURCE_OBSERVATION_ORPHAN.value:
@@ -1021,12 +1016,48 @@ class EodCoverageRepository:
         }
 
     @staticmethod
-    def _item_from_row(row: dict[str, Any]) -> dict[str, Any]:
-        status = str(row.get("coverage_status_hint") or CoverageStatus.SOURCE_UNKNOWN.value)
+    def _effective_status(
+        *,
+        item_kind: Any,
+        denominator_membership: Any,
+        status: Any,
+        bound_invalid_source: bool,
+    ) -> str:
+        normalized_status = str(status or CoverageStatus.SOURCE_UNKNOWN.value)
+        if (
+            bound_invalid_source
+            and str(item_kind or "") == CoverageItemKind.DENOMINATOR_CANDIDATE.value
+            and str(denominator_membership or "") == DenominatorMembership.EXPECTED.value
+            and normalized_status == CoverageStatus.SOURCE_UNKNOWN.value
+        ):
+            return CoverageStatus.SOURCE_BLOCKED.value
+        return normalized_status
+
+    @staticmethod
+    def _item_from_row(
+        row: dict[str, Any],
+        *,
+        bound_invalid_source: bool = False,
+    ) -> dict[str, Any]:
+        raw_status = str(row.get("coverage_status_hint") or CoverageStatus.SOURCE_UNKNOWN.value)
+        status = EodCoverageRepository._effective_status(
+            item_kind=row.get("item_kind"),
+            denominator_membership=row.get("denominator_membership_hint"),
+            status=raw_status,
+            bound_invalid_source=bound_invalid_source,
+        )
         reasons: list[str] = [status]
         source_state = str(row.get("source_state") or CoverageSourceState.UNKNOWN.value)
         source_status = str(row.get("source_status") or "")
         source_reason = str(row.get("source_reason") or "")
+        if (
+            bound_invalid_source
+            and raw_status == CoverageStatus.SOURCE_UNKNOWN.value
+            and status == CoverageStatus.SOURCE_BLOCKED.value
+        ):
+            source_state = CoverageSourceState.BLOCKED.value
+            source_status = CoverageSourceState.BLOCKED.value
+            source_reason = "source_date_in_future_or_invalid"
         if source_state == CoverageSourceState.UNKNOWN.value:
             reasons.append(source_reason or "no_exact_D")
         elif source_state == CoverageSourceState.BLOCKED.value:
@@ -1134,23 +1165,16 @@ class EodCoverageRepository:
             source = self._source_context(conn, request)
             base_sql = self._base_sql()
             params = self._base_params(request)
-            aggregate = self._status_counts(conn, base_sql, params)
-            if (
+            bound_invalid_source = (
                 source["source_state"] == CoverageSourceState.BLOCKED.value
                 and source["source_reason"] == "source_date_in_future_or_invalid"
-            ):
-                # The bound-invalid branch has no selectable exact-D source
-                # row in the common CTE.  Reclassify its otherwise unknown
-                # candidate statuses so aggregate counts match the public
-                # blocked projection without a second per-item query.
-                status_counts = dict(aggregate["item_status_counts"])
-                unknown_count = status_counts.pop(CoverageStatus.SOURCE_UNKNOWN.value, 0)
-                if unknown_count:
-                    status_counts[CoverageStatus.SOURCE_BLOCKED.value] = (
-                        status_counts.get(CoverageStatus.SOURCE_BLOCKED.value, 0)
-                        + unknown_count
-                    )
-                    aggregate["item_status_counts"] = dict(sorted(status_counts.items()))
+            )
+            aggregate = self._status_counts(
+                conn,
+                base_sql,
+                params,
+                bound_invalid_source=bound_invalid_source,
+            )
             page_params = list(params)
             cursor_clause = ""
             if cursor_last_key is not None:
@@ -1186,17 +1210,13 @@ class EodCoverageRepository:
                 """,
                 page_params,
             ).fetchall()
-            items = tuple(self._item_from_row(dict(row)) for row in page_rows)
-            if source["source_state"] == CoverageSourceState.BLOCKED.value and source["source_reason"] == "source_date_in_future_or_invalid":
-                items = tuple({
-                    **item,
-                    "coverage_status": CoverageStatus.SOURCE_BLOCKED.value,
-                    "reason_codes": normalize_reason_codes([
-                        *item.get("reason_codes", []),
-                        "source_date_in_future_or_invalid",
-                    ]),
-                    "_source_state": CoverageSourceState.BLOCKED.value,
-                } for item in items)
+            items = tuple(
+                self._item_from_row(
+                    dict(row),
+                    bound_invalid_source=bound_invalid_source,
+                )
+                for row in page_rows
+            )
             return CoverageProjection(source=source, aggregate=aggregate, items=items)
 
 

@@ -394,6 +394,34 @@ def _add_listing_evidence(db, anchor: dict, *, event_date: str | None = None) ->
     )
 
 
+def _add_bound_invalid_source(repo: EodCloseRepository, raw: dict, raw_hash: str) -> dict:
+    return repo.add_source_snapshot({
+        "resource_id": "twse.eod.stock_day_all",
+        "raw_resource_revision_id": raw["raw_resource_revision_id"],
+        "logical_revision_key": "twse.eod.stock_day_all:invalid-bound",
+        "source_trade_date": "2026-08-28",
+        "source_trade_date_status": "invalid",
+        "status": "available",
+        "coverage_state": "complete",
+        "row_count": 1,
+        "source_date_min": None,
+        "source_date_max": None,
+        "fetched_at": "2026-08-27T05:00:00Z",
+        "received_at": "2026-08-27T05:00:00Z",
+        "available_at": "2026-08-27T05:00:00Z",
+        "ingested_at": "2026-08-27T05:00:00Z",
+        "source_url": "https://example.invalid/eod",
+        "contract_version": "eod_close_v1",
+        "parser_version": "1",
+        "schema_fingerprint": hashlib.sha256(b"invalid-source-schema").hexdigest(),
+        "raw_payload_sha256": raw_hash,
+        "normalized_payload_sha256": hashlib.sha256(b"invalid-source-normalized").hexdigest(),
+        "query_dimensions_json": json.dumps({"target_trade_date": TARGET_DATE}),
+        "source_record_reference": "twse.eod.stock_day_all:invalid-bound",
+        "source_scope": "twse_whole_market_daily_close",
+    })
+
+
 def test_domain_request_status_and_cursor_validation() -> None:
     request = CoverageRequest(
         venue="twse",
@@ -860,6 +888,48 @@ def test_operational_event_applicability_is_bounded_by_target_date(tmp_path) -> 
     assert same["items"][0]["denominator_membership"] == "unresolved"
 
 
+@pytest.mark.parametrize(
+    ("event_kind", "event_type", "effective_at", "expected_status"),
+    [
+        ("lifecycle", "terminated", "2026-08-27T07:00:00Z", "identity_unresolved"),
+        ("lifecycle", "terminated", "2026-08-28T07:00:00Z", "observed_eligible"),
+        ("operational", None, "2026-08-27T07:00:00Z", "identity_unresolved"),
+        ("operational", None, "2026-08-28T07:00:00Z", "observed_eligible"),
+        ("lifecycle", "resumed", "2026-08-27T07:00:00Z", "identity_unresolved"),
+        ("lifecycle", "resumed", "2026-08-28T07:00:00Z", "observed_eligible"),
+    ],
+)
+def test_k_visible_event_with_effective_at_after_k_is_resolved_only_by_d_axis(
+    tmp_path, event_kind, event_type, effective_at, expected_status,
+) -> None:
+    db, _, anchor, _, _, _, _, _ = _seed_coverage(tmp_path)
+    context = UniverseOperatorContext("operator", "coverage-event", "coverage-lock", "coverage-audit")
+    event_kwargs = {
+        "instrument_id": anchor["instrument_id"],
+        "available_at": "2026-08-27T05:30:00Z",
+        "ingested_at": "2026-08-27T05:30:00Z",
+        "effective_at": effective_at,
+        "source_reference": "K-visible effective-time fixture",
+        "reason": "effective_at is after K",
+        "context": context,
+    }
+    universe = UniverseRepository(str(db), guard=UniverseWriteGuard(True))
+    if event_kind == "operational":
+        universe.add_operational_event(trading_state="suspended", **event_kwargs)
+    else:
+        universe.add_lifecycle_event(event_type=event_type, **event_kwargs)
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE",
+        source_trade_date=TARGET_DATE,
+        knowledge_cutoff_at="2026-08-27T06:00:00Z",
+    )
+
+    assert result["items"][0]["coverage_status"] == expected_status
+    if expected_status == "identity_unresolved":
+        assert result["items"][0]["denominator_membership"] == "unresolved"
+
+
 def test_resumed_lifecycle_event_has_one_deterministic_operational_state(tmp_path) -> None:
     db, _, anchor, _, _, _, _, _ = _seed_coverage(tmp_path)
     UniverseRepository(str(db), guard=UniverseWriteGuard(True)).add_lifecycle_event(
@@ -1131,31 +1201,7 @@ def test_bound_invalid_source_date_is_blocked_without_older_fallback(tmp_path) -
         tmp_path,
         source_kwargs={"date": "2026-08-26"},
     )
-    repo.add_source_snapshot({
-        "resource_id": "twse.eod.stock_day_all",
-        "raw_resource_revision_id": raw["raw_resource_revision_id"],
-        "logical_revision_key": "twse.eod.stock_day_all:invalid-bound",
-        "source_trade_date": "2026-08-28",
-        "source_trade_date_status": "invalid",
-        "status": "available",
-        "coverage_state": "complete",
-        "row_count": 1,
-        "source_date_min": None,
-        "source_date_max": None,
-        "fetched_at": "2026-08-27T05:00:00Z",
-        "received_at": "2026-08-27T05:00:00Z",
-        "available_at": "2026-08-27T05:00:00Z",
-        "ingested_at": "2026-08-27T05:00:00Z",
-        "source_url": "https://example.invalid/eod",
-        "contract_version": "eod_close_v1",
-        "parser_version": "1",
-        "schema_fingerprint": hashlib.sha256(b"invalid-source-schema").hexdigest(),
-        "raw_payload_sha256": raw_hash,
-        "normalized_payload_sha256": hashlib.sha256(b"invalid-source-normalized").hexdigest(),
-        "query_dimensions_json": json.dumps({"target_trade_date": TARGET_DATE}),
-        "source_record_reference": "twse.eod.stock_day_all:invalid-bound",
-        "source_scope": "twse_whole_market_daily_close",
-    })
+    _add_bound_invalid_source(repo, raw, raw_hash)
     result = EodCoverageService(str(db)).as_of(
         venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
     )
@@ -1164,3 +1210,47 @@ def test_bound_invalid_source_date_is_blocked_without_older_fallback(tmp_path) -
     assert result["source"]["source_status"] == "blocked"
     assert result["source"]["source_trade_date"] is None
     assert result["aggregate"]["item_status_counts"] == {"source_blocked": 1}
+
+
+@pytest.mark.parametrize(
+    ("case", "include_observation", "expected_status"),
+    [
+        ("expected_unobserved", False, "source_blocked"),
+        ("classification_unresolved", True, "classification_unresolved"),
+        ("product_exclusion", True, "excluded_by_product_scope"),
+    ],
+)
+def test_bound_invalid_source_preserves_item_precedence_and_aggregate_counts(
+    tmp_path, case: str, include_observation: bool, expected_status: str,
+) -> None:
+    classification_kwargs = {"security_type_raw": "ETF"} if case == "product_exclusion" else None
+    db, repo, _, raw, raw_hash, _, classification, _ = _seed_coverage(
+        tmp_path,
+        source_kwargs={"date": "2026-08-26"},
+        include_observation=include_observation,
+        classification_kwargs=classification_kwargs,
+    )
+    if case == "classification_unresolved":
+        _classification(
+            repo,
+            db,
+            at="2026-08-27T04:01:00Z",
+            state="blocked",
+            revision_number=2,
+            supersedes_classification_evidence_id=classification["classification_evidence_id"],
+        )
+    _add_bound_invalid_source(repo, raw, raw_hash)
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    assert result["status"] == "blocked"
+    assert result["aggregate_assertion_state"] == "blocked"
+    assert result["items"][0]["coverage_status"] == expected_status
+    assert result["items"][0]["reason_codes"]
+    emitted_counts: dict[str, int] = {}
+    for item in result["items"]:
+        status = item["coverage_status"]
+        emitted_counts[status] = emitted_counts.get(status, 0) + 1
+    assert emitted_counts == result["aggregate"]["item_status_counts"]
