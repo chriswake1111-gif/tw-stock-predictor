@@ -597,7 +597,7 @@ class EodCoverageRepository:
         classification_ranked AS (
             SELECT c.*,
                    ROW_NUMBER() OVER (
-                     PARTITION BY c.official_code
+                     PARTITION BY c.official_code, c.market_raw
                      ORDER BY c.revision_number DESC,
                               COALESCE(c.available_at, '') DESC,
                               c.ingested_at DESC,
@@ -610,10 +610,12 @@ class EodCoverageRepository:
               AND c.ingested_at IS NOT NULL AND eod_timestamp_leq(c.ingested_at, p.cutoff) = 1
         ),
         classification_context AS (
+            -- Phase 14 classifier evidence has no approved D-effective field.
+            -- available_at/ingested_at establish K visibility only; a
+            -- material superseding revision therefore stays unresolved for D.
             SELECT latest.*,
                    CASE
                      WHEN latest.supersedes_classification_evidence_id IS NOT NULL
-                      AND date(latest.available_at, '+8 hours') > p.trade_date
                       AND (
                         parent.classification_evidence_id IS NULL
                         OR COALESCE(latest.classification_state, '')
@@ -639,7 +641,6 @@ class EodCoverageRepository:
             FROM classification_ranked latest
             LEFT JOIN eod_product_classification_evidence parent
               ON parent.classification_evidence_id = latest.supersedes_classification_evidence_id
-            CROSS JOIN params p
             WHERE latest.rn = 1
         ),
         observed_ranked AS (
@@ -787,7 +788,9 @@ class EodCoverageRepository:
             LEFT JOIN reference_projected ref ON ref.instrument_id = ea.instrument_id
             LEFT JOIN latest_listing ll ON ll.instrument_id = ea.instrument_id
             LEFT JOIN latest_operational op ON op.instrument_id = ea.instrument_id
-            LEFT JOIN classification_context cc ON cc.official_code = ea.official_code
+            LEFT JOIN classification_context cc
+              ON cc.official_code = ea.official_code
+             AND cc.market_raw = CASE WHEN ea.venue = 'TWSE' THEN '上市' ELSE '上櫃' END
             LEFT JOIN observed_ranked obs
               ON obs.venue = ea.venue
              AND obs.official_code = ea.official_code
@@ -916,7 +919,9 @@ class EodCoverageRepository:
                 END AS coverage_status_hint,
                 NULL AS denominator_membership_hint
             FROM observed_ranked o
-            LEFT JOIN classification_context cc ON cc.official_code = o.official_code
+            LEFT JOIN classification_context cc
+              ON cc.official_code = o.official_code
+             AND cc.market_raw = CASE WHEN o.venue = 'TWSE' THEN '上市' ELSE '上櫃' END
             LEFT JOIN source_projected sp ON 1 = 1
             WHERE o.rn = 1
               AND NOT EXISTS (

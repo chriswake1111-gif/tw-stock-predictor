@@ -99,6 +99,7 @@ def _seed_coverage(
     source_kwargs: dict | None = None,
     first_observed_at: str | None = None,
     include_observation: bool = True,
+    classification_kwargs: dict | None = None,
 ):
     tmp_path.mkdir(parents=True, exist_ok=True)
     db, anchor = (
@@ -123,7 +124,9 @@ def _seed_coverage(
         at="2026-08-27T05:00:00Z",
         **source_options,
     )
-    classification = _classification(repo, db, at="2026-08-27T04:00:00Z")
+    classification_options = {"at": "2026-08-27T04:00:00Z"}
+    classification_options.update(classification_kwargs or {})
+    classification = _classification(repo, db, **classification_options)
     observation = None
     if include_observation:
         observation = _observation(
@@ -137,6 +140,123 @@ def _seed_coverage(
             at="2026-08-27T05:02:00Z",
         )
     return db, repo, anchor, raw, raw_hash, source, classification, observation
+
+
+def _add_tpex_identity(db) -> dict:
+    universe = UniverseRepository(str(db), guard=UniverseWriteGuard(True))
+    context = UniverseOperatorContext(
+        "operator", "tpex-identity", "tpex-identity-lock", "tpex-identity-audit",
+    )
+    anchor = universe.allocate_instrument(
+        venue="TPEX", official_code="2330", source_identity="tpex:2330:v1",
+        first_observed_at="2026-08-21T00:00:00Z", source_reference="TPEX fixture",
+        context=context,
+    )
+    universe.add_revision(
+        instrument_id=anchor["instrument_id"],
+        resource_id="tpex-universe-master",
+        logical_revision_key="master:tpex:2330",
+        revision_number=1,
+        payload=_identity_payload(
+            venue="TPEX",
+            canonical_symbol="2330.TWO",
+            source_reference="TPEX fixture",
+            raw_resource_revision_id="raw-phase13-tpex_universe_master",
+            raw_payload_sha256=hashlib.sha256(
+                b"phase13:tpex-universe-master"
+            ).hexdigest(),
+        ),
+        context=context,
+        idempotency_key="tpex-identity-revision",
+    )
+    return anchor
+
+
+def _tpex_source(
+    repo: EodCloseRepository,
+    raw: dict,
+    raw_hash: str,
+    *,
+    date: str = TARGET_DATE,
+    at: str = "2026-08-27T05:00:00Z",
+) -> dict:
+    return repo.add_source_snapshot({
+        "resource_id": "tpex.eod.daily_close_quotes",
+        "raw_resource_revision_id": raw["raw_resource_revision_id"],
+        "logical_revision_key": f"tpex.eod.daily_close_quotes:{date}",
+        "source_trade_date": date,
+        "source_trade_date_status": "valid",
+        "status": "available",
+        "coverage_state": "complete",
+        "row_count": 1,
+        "source_date_min": date,
+        "source_date_max": date,
+        "fetched_at": at,
+        "received_at": at,
+        "available_at": at,
+        "ingested_at": at,
+        "source_url": "https://www.tpex.org.tw/en-us/announce/market/regular.html",
+        "contract_version": "eod_close_v1",
+        "parser_version": "1",
+        "schema_fingerprint": hashlib.sha256(b"tpex-eod-schema").hexdigest(),
+        "raw_payload_sha256": raw_hash,
+        "normalized_payload_sha256": hashlib.sha256(
+            ("tpex-normalized:" + date).encode()
+        ).hexdigest(),
+        "source_record_reference": f"tpex.eod.daily_close_quotes:{date}",
+        "source_scope": "tpex_mainboard_daily_close_quotes_without_fixed_price",
+    })
+
+
+def _tpex_observation(
+    repo: EodCloseRepository,
+    *,
+    raw: dict,
+    raw_hash: str,
+    source: dict,
+    classification: dict,
+    anchor: dict,
+    instrument_revision_id: str,
+    at: str = "2026-08-27T05:02:00Z",
+) -> dict:
+    payload = {
+        "resource_id": "tpex.eod.daily_close_quotes",
+        "raw_resource_revision_id": raw["raw_resource_revision_id"],
+        "source_snapshot_id": source["source_snapshot_id"],
+        "classification_evidence_id": classification["classification_evidence_id"],
+        "instrument_id": anchor["instrument_id"],
+        "instrument_revision_id": instrument_revision_id,
+        "venue": "TPEX",
+        "official_code": "2330",
+        "trade_date": source["source_trade_date"],
+        "trade_date_status": "valid",
+        "raw_close_text": "1005",
+        "close_value": "1005",
+        "raw_volume_text": "123456",
+        "volume_value": "123456",
+        "raw_trade_indication_text": "123456789",
+        "trade_indication_value": "123456789",
+        "currency": "TWD",
+        "unit": "TWD_per_share",
+        "price_semantics_version": "official_reported_close_v1",
+        "product_scope": "supported_stock",
+        "observation_status": "available",
+        "public_eligibility_status": "eligible",
+        "quality_status": "fresh",
+        "quality_flags_json": "[]",
+        "row_fingerprint": hashlib.sha256(
+            f"tpex-row:{source['source_snapshot_id']}".encode()
+        ).hexdigest(),
+        "raw_payload_sha256": raw_hash,
+        "normalized_payload_sha256": hashlib.sha256(
+            f"tpex-normalized-row:{source['source_snapshot_id']}".encode()
+        ).hexdigest(),
+        "source_trading_scope": "tpex_mainboard_daily_close_quotes_without_fixed_price",
+        "available_at": at,
+        "ingested_at": at,
+        "source_record_reference": f"tpex.eod.daily_close_quotes:{TARGET_DATE}:2330",
+    }
+    return repo.add_observation(payload)
 
 
 def _add_orphan(repo: EodCloseRepository, *, raw: dict, raw_hash: str, source: dict, code: str = "9999"):
@@ -433,17 +553,10 @@ def test_partial_source_marks_unobserved_expected_candidate_source_partial(tmp_p
 
 
 def test_unknown_source_does_not_mask_proven_product_exclusion(tmp_path) -> None:
-    db, repo, _, _, _, _, classification, _ = _seed_coverage(
+    db, _, _, _, _, _, _, _ = _seed_coverage(
         tmp_path,
         source_kwargs={"date": "2026-08-26"},
-    )
-    _classification(
-        repo,
-        db,
-        at="2026-08-27T04:01:00Z",
-        security_type_raw="ETF",
-        revision_number=2,
-        supersedes_classification_evidence_id=classification["classification_evidence_id"],
+        classification_kwargs={"security_type_raw": "ETF"},
     )
 
     result = EodCoverageService(str(db)).as_of(
@@ -736,18 +849,15 @@ def _observation_id(db) -> str:
 
 
 def test_classification_exclusion_and_foreign_currency_are_fail_closed(tmp_path) -> None:
-    db, repo, anchor, raw, raw_hash, source, classification, _ = _seed_coverage(tmp_path)
-    excluded = _classification(
-        repo, db, at="2026-08-27T04:01:00Z", security_type_raw="ETF",
-        revision_number=2,
-        supersedes_classification_evidence_id=classification["classification_evidence_id"],
+    db, _, _, _, _, _, _, _ = _seed_coverage(
+        tmp_path,
+        classification_kwargs={"security_type_raw": "ETF"},
     )
     result = EodCoverageService(str(db)).as_of(
         venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
     )
     assert result["items"][0]["coverage_status"] == "excluded_by_product_scope"
     assert result["items"][0]["denominator_membership"] == "excluded"
-    assert excluded["classification_evidence_id"]
 
     db2, repo2, _, _, _, _, foreign_classification, _ = _seed_coverage(tmp_path / "foreign")
     first_foreign = foreign_classification
@@ -789,6 +899,111 @@ def test_classification_exclusion_and_foreign_currency_are_fail_closed(tmp_path)
     )
     assert unresolved["status"] == "insufficient_data"
     assert repo2 is not None and db2 is not None
+
+
+@pytest.mark.parametrize(
+    "correction_available_at",
+    [
+        "2026-08-26T04:01:00Z",
+        "2026-08-27T04:01:00Z",
+        "2026-08-27T16:01:00Z",
+    ],
+)
+def test_material_classifier_correction_without_d_effective_semantics_is_unresolved(
+    tmp_path, correction_available_at: str,
+) -> None:
+    db, repo, _, _, _, _, classification, _ = _seed_coverage(tmp_path)
+    corrected = _classification(
+        repo,
+        db,
+        at=correction_available_at,
+        available_at=correction_available_at,
+        security_type_raw="ETF",
+        revision_number=2,
+        supersedes_classification_evidence_id=classification["classification_evidence_id"],
+    )
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    item = result["items"][0]
+    assert item["coverage_status"] == "classification_unresolved"
+    assert item["denominator_membership"] == "unresolved"
+    assert "classification_d_applicability_unresolved" in item["reason_codes"]
+    assert result["aggregate"]["denominator_expected_count"] == 0
+    assert result["aggregate"]["denominator_excluded_count"] == 0
+    assert result["aggregate"]["denominator_unresolved_count"] == 1
+    assert corrected["classification_evidence_id"]
+
+
+def test_non_material_classifier_correction_keeps_latest_k_visible_state(tmp_path) -> None:
+    db, repo, _, _, _, _, classification, _ = _seed_coverage(tmp_path)
+    corrected = _classification(
+        repo,
+        db,
+        at="2026-08-27T16:01:00Z",
+        available_at="2026-08-27T16:01:00Z",
+        revision_number=2,
+        supersedes_classification_evidence_id=classification["classification_evidence_id"],
+    )
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    item = result["items"][0]
+    assert item["coverage_status"] == "observed_eligible"
+    assert item["denominator_membership"] == "expected"
+    assert result["aggregate"]["denominator_expected_count"] == 1
+    assert result["aggregate"]["denominator_unresolved_count"] == 0
+    assert corrected["classification_evidence_id"]
+
+
+def test_same_code_classifier_selection_is_separate_for_twse_and_tpex(tmp_path) -> None:
+    db, repo, _, _, _, _, _, _ = _seed_coverage(tmp_path)
+    tpex_anchor = _add_tpex_identity(db)
+    tpex_raw, tpex_hash = _raw(
+        db,
+        "tpex.eod.daily_close_quotes",
+        "tpex-universe-official",
+        "tpex-coverage-2026-08-27",
+        "2026-08-27T05:00:00Z",
+    )
+    tpex_source = _tpex_source(repo, tpex_raw, tpex_hash)
+    tpex_classification = _classification(
+        repo,
+        db,
+        at="2026-08-27T04:02:00Z",
+        market_raw="上櫃",
+    )
+    _tpex_observation(
+        repo,
+        raw=tpex_raw,
+        raw_hash=tpex_hash,
+        source=tpex_source,
+        classification=tpex_classification,
+        anchor=tpex_anchor,
+        instrument_revision_id=_identity_revision_id(db, tpex_anchor["instrument_id"]),
+    )
+
+    service = EodCoverageService(str(db))
+    twse = service.as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+    tpex = service.as_of(
+        venue="TPEX", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    for result in (twse, tpex):
+        assert result["status"] == "available"
+        assert result["aggregate"]["denominator_expected_count"] == 1
+        assert result["aggregate"]["denominator_unresolved_count"] == 0
+        assert result["items"][0]["official_code"] == "2330"
+        assert result["items"][0]["coverage_status"] == "observed_eligible"
+        assert result["items"][0]["denominator_membership"] == "expected"
+    assert twse["items"][0]["venue"] == "TWSE"
+    assert tpex["items"][0]["venue"] == "TPEX"
 
 
 def test_bound_invalid_source_date_is_blocked_without_older_fallback(tmp_path) -> None:
