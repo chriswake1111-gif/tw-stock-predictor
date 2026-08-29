@@ -6,7 +6,7 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from src.domain.eod_coverage import (
@@ -30,6 +30,8 @@ _CLASSIFICATION_EXCLUDED_TYPES = (
     "認購權證", "認售權證", "存託憑證", "臺灣存託憑證", "tdr",
     "depositary receipt", "受益證券", "指數股票型基金",
 )
+
+
 def _numeric_value_valid(value: Any, allow_zero: int) -> int:
     """Expose Phase 14's decimal parser to the set-based SQLite projection."""
 
@@ -59,6 +61,69 @@ def _timestamp_leq(value: Any, boundary: Any) -> int:
         return int(left.astimezone(timezone.utc) <= right.astimezone(timezone.utc))
     except (TypeError, ValueError, OverflowError):
         return 0
+
+
+def _revision_d_state(
+    source_effective_date: Any,
+    source_effective_at: Any,
+    effective_from: Any,
+    effective_to: Any,
+    target_date: Any,
+) -> int:
+    """Classify a K-visible identity revision against the requested D date.
+
+    The Universe write contract permits date-only or aware timestamps for the
+    source effective date, while the remaining interval fields are aware
+    timestamps.  A missing boundary preserves the established legacy
+    behavior.  An explicit boundary on D, malformed evidence, or conflicting
+    boundaries is conservative and unresolved; a boundary wholly after D (or
+    an interval already ended before D) is deterministically not applicable.
+    """
+
+    def local_date(value: Any, *, allow_date: bool) -> date:
+        if value is None:
+            raise ValueError("missing boundary")
+        text = str(value).strip()
+        if not text:
+            raise ValueError("blank boundary")
+        if "T" not in text and "t" not in text:
+            if not allow_date:
+                raise ValueError("timestamp required")
+            return date.fromisoformat(text)
+        parsed = datetime.fromisoformat(
+            text.replace("Z", "+00:00").replace("z", "+00:00")
+        )
+        if parsed.tzinfo is None:
+            raise ValueError("aware timestamp required")
+        return parsed.astimezone(timezone(timedelta(hours=8))).date()
+
+    try:
+        target = date.fromisoformat(str(target_date).strip())
+        start_dates: list[date] = []
+        if source_effective_date is not None:
+            start_dates.append(local_date(source_effective_date, allow_date=True))
+        for value in (source_effective_at, effective_from):
+            if value is not None:
+                start_dates.append(local_date(value, allow_date=False))
+        end_date = (
+            local_date(effective_to, allow_date=False)
+            if effective_to is not None
+            else None
+        )
+    except (TypeError, ValueError, OverflowError):
+        return -1
+
+    if any(boundary == target for boundary in start_dates) or end_date == target:
+        return -1
+
+    start_after = any(boundary > target for boundary in start_dates)
+    start_before = any(boundary < target for boundary in start_dates)
+    end_before = end_date is not None and end_date < target
+    if start_after and (start_before or end_before):
+        return -1
+    if start_after or end_before:
+        return 0
+    return 1
 
 
 @dataclass(frozen=True)
@@ -431,6 +496,7 @@ class EodCoverageRepository:
         ),
         visible_revision_rows AS (
             SELECT r.*, ur.logical_revision_key,
+                   ur.source_effective_date AS universe_source_effective_date,
                    ea.venue AS anchor_venue,
                    ea.official_code AS anchor_code,
                    ea.identity_epoch AS anchor_identity_epoch,
@@ -468,8 +534,20 @@ class EodCoverageRepository:
                                latest.publication_evidence_id DESC
                       LIMIT 1
                     )
-                )
               )
+          )
+        ),
+        revision_temporal AS (
+            SELECT v.*,
+                   eod_revision_d_state(
+                       COALESCE(v.source_effective_date, v.universe_source_effective_date),
+                       v.source_effective_at,
+                       v.effective_from,
+                       v.effective_to,
+                       q.trade_date
+                   ) AS revision_d_state
+            FROM visible_revision_rows v
+            CROSS JOIN params q
         ),
         visible_revision_edges AS (
             SELECT instrument_id, instrument_revision_id AS child_revision_id,
@@ -488,6 +566,18 @@ class EodCoverageRepository:
               ON x.instrument_id = e.instrument_id
              AND x.instrument_revision_id = e.child_revision_id
         ),
+        d_applicable_revision_rows AS (
+            SELECT *
+            FROM revision_temporal
+            WHERE revision_d_state = 1
+        ),
+        revision_d_context AS (
+            SELECT instrument_id,
+                   MAX(CASE WHEN revision_d_state <> 1 THEN 1 ELSE 0 END)
+                     AS revision_d_non_applicable
+            FROM revision_temporal
+            GROUP BY instrument_id
+        ),
         accepted_ranked AS (
             SELECT v.*,
                    ROW_NUMBER() OVER (
@@ -496,7 +586,7 @@ class EodCoverageRepository:
                               COALESCE(v.available_at, '') DESC,
                               v.ingested_at DESC, v.instrument_revision_id DESC
                    ) AS rn
-            FROM visible_revision_rows v
+            FROM d_applicable_revision_rows v
             WHERE v.status = 'accepted'
               AND NOT EXISTS (
                 SELECT 1 FROM excluded_revisions x
@@ -515,7 +605,7 @@ class EodCoverageRepository:
                               COALESCE(v.available_at, '') DESC,
                               v.ingested_at DESC, v.instrument_revision_id DESC
                    ) AS rn
-            FROM visible_revision_rows v
+            FROM d_applicable_revision_rows v
             WHERE v.status = 'partial'
         ),
         latest_partial AS (
@@ -751,9 +841,13 @@ class EodCoverageRepository:
                 ref.reference_status,
                 ref.security_type,
                 CASE
-                  WHEN cc.classification_state = 'accepted'
+                  WHEN COALESCE(cc.classification_d_unresolved, 0) = 0
+                   AND cc.classification_state = 'accepted'
+                   AND cc.classification_decision = 'supported_stock'
                    AND cc.official_code = ea.official_code
                    AND cc.market_raw = CASE WHEN ea.venue = 'TWSE' THEN '上市' ELSE '上櫃' END
+                   AND trim(COALESCE(cc.security_type_raw, '')) = '股票'
+                   AND upper(trim(COALESCE(cc.currency_raw, ''))) IN ('TWD','新台幣','台幣')
                    AND cc.listing_date IS NOT NULL
                    AND substr(cc.listing_date, 1, 10) > p.trade_date
                    THEN 'not_yet_listed'
@@ -779,15 +873,48 @@ class EodCoverageRepository:
                 cc.cfi_raw AS classification_cfi_raw,
                 cc.remarks_raw AS classification_remarks_raw,
                 COALESCE(cc.classification_d_unresolved, 0) AS classification_d_unresolved,
+                COALESCE(rdc.revision_d_non_applicable, 0) AS revision_d_non_applicable,
                 CASE
-                  WHEN cc.classification_state = 'accepted'
+                  WHEN COALESCE(cc.classification_d_unresolved, 0) = 0
+                   AND cc.classification_state = 'accepted'
+                   AND cc.classification_decision = 'supported_stock'
                    AND cc.official_code = ea.official_code
                    AND cc.market_raw = CASE WHEN ea.venue = 'TWSE' THEN '上市' ELSE '上櫃' END
+                   AND trim(COALESCE(cc.security_type_raw, '')) = '股票'
+                   AND upper(trim(COALESCE(cc.currency_raw, ''))) IN ('TWD','新台幣','台幣')
+                   AND cc.listing_date IS NOT NULL
+                   AND substr(cc.listing_date, 1, 10) > p.trade_date
+                   THEN 1 ELSE 0
+                END AS classification_lifecycle_excluded,
+                CASE
+                  WHEN COALESCE(cc.classification_d_unresolved, 0) = 0
+                   AND cc.classification_state = 'accepted'
+                   AND cc.official_code = ea.official_code
+                   AND cc.market_raw = CASE WHEN ea.venue = 'TWSE' THEN '上市' ELSE '上櫃' END
+                   AND (
+                     lower(trim(COALESCE(cc.security_type_raw, ''))) IN ({excluded_values})
+                     OR upper(trim(COALESCE(cc.cfi_raw, ''))) = 'EPNRAR'
+                     OR lower(trim(COALESCE(cc.remarks_raw, ''))) IN
+                       ('特別股','優先股','preferred stock','preferred stocks',
+                        'preferred share','preferred shares')
+                     OR cc.classification_decision = 'not_applicable'
+                   ) THEN 1 ELSE 0
+                END AS classification_product_excluded,
+                CASE
+                  WHEN COALESCE(cc.classification_d_unresolved, 0) = 1
+                   THEN 'unresolved'
+                  WHEN COALESCE(cc.classification_d_unresolved, 0) = 0
+                   AND cc.classification_state = 'accepted'
+                   AND cc.classification_decision = 'supported_stock'
+                   AND cc.official_code = ea.official_code
+                   AND cc.market_raw = CASE WHEN ea.venue = 'TWSE' THEN '上市' ELSE '上櫃' END
+                   AND trim(COALESCE(cc.security_type_raw, '')) = '股票'
+                   AND upper(trim(COALESCE(cc.currency_raw, ''))) IN ('TWD','新台幣','台幣')
                    AND cc.listing_date IS NOT NULL
                    AND substr(cc.listing_date, 1, 10) > p.trade_date
                    THEN 'excluded'
-                  WHEN cc.classification_d_unresolved = 1 THEN 'unresolved'
-                  WHEN cc.classification_state = 'accepted'
+                  WHEN COALESCE(cc.classification_d_unresolved, 0) = 0
+                   AND cc.classification_state = 'accepted'
                    AND cc.official_code = ea.official_code
                    AND cc.market_raw = CASE WHEN ea.venue = 'TWSE' THEN '上市' ELSE '上櫃' END
                    AND (
@@ -831,9 +958,13 @@ class EodCoverageRepository:
                       THEN CASE WHEN ll.event_type = 'terminated' THEN 'delisted' ELSE 'listed' END
                     ELSE 'unknown' END) = 'delisted'
                     OR (
-                      cc.classification_state = 'accepted'
+                      COALESCE(cc.classification_d_unresolved, 0) = 0
+                      AND cc.classification_state = 'accepted'
+                      AND cc.classification_decision = 'supported_stock'
                       AND cc.official_code = ea.official_code
                       AND cc.market_raw = CASE WHEN ea.venue = 'TWSE' THEN '上市' ELSE '上櫃' END
+                      AND trim(COALESCE(cc.security_type_raw, '')) = '股票'
+                      AND upper(trim(COALESCE(cc.currency_raw, ''))) IN ('TWD','新台幣','台幣')
                       AND cc.listing_date IS NOT NULL
                       AND substr(cc.listing_date, 1, 10) > p.trade_date
                     ) THEN 1 ELSE 0
@@ -880,6 +1011,7 @@ class EodCoverageRepository:
             LEFT JOIN reference_projected ref ON ref.instrument_id = ea.instrument_id
             LEFT JOIN latest_listing ll ON ll.instrument_id = ea.instrument_id
             LEFT JOIN latest_operational op ON op.instrument_id = ea.instrument_id
+            LEFT JOIN revision_d_context rdc ON rdc.instrument_id = ea.instrument_id
             LEFT JOIN classification_context cc
               ON cc.official_code = ea.official_code
              AND cc.market_raw = CASE WHEN ea.venue = 'TWSE' THEN '上市' ELSE '上櫃' END
@@ -909,7 +1041,7 @@ class EodCoverageRepository:
                        THEN 'classification_unresolved'
                      WHEN facts.listing_excluded = 1 THEN 'excluded_by_lifecycle'
                      WHEN facts.operational_excluded = 1 THEN 'excluded_by_operational_state'
-                     WHEN facts.classification_membership_hint = 'excluded'
+                     WHEN facts.classification_product_excluded = 1
                        THEN 'excluded_by_product_scope'
                      WHEN facts.observation_id IS NULL
                        AND facts.source_state = 'blocked' THEN 'source_blocked'
@@ -933,7 +1065,7 @@ class EodCoverageRepository:
                    CASE
                      WHEN facts.listing_excluded = 1
                        OR facts.operational_excluded = 1
-                       OR facts.classification_membership_hint = 'excluded'
+                       OR facts.classification_product_excluded = 1
                        THEN 'excluded'
                      WHEN facts.identity_unresolved = 1
                        OR facts.event_unresolved = 1
@@ -971,6 +1103,9 @@ class EodCoverageRepository:
                 cc.cfi_raw AS classification_cfi_raw,
                 cc.remarks_raw AS classification_remarks_raw,
                 COALESCE(cc.classification_d_unresolved, 0) AS classification_d_unresolved,
+                0 AS revision_d_non_applicable,
+                0 AS classification_lifecycle_excluded,
+                0 AS classification_product_excluded,
                 'unresolved' AS classification_membership_hint,
                 1 AS identity_unresolved,
                 0 AS event_unresolved,
@@ -1143,6 +1278,8 @@ class EodCoverageRepository:
             reasons.append("identity_unresolved")
         if row.get("event_unresolved"):
             reasons.append("event_d_applicability_unresolved")
+        if row.get("identity_unresolved") and row.get("revision_d_non_applicable"):
+            reasons.append("identity_d_applicability_unresolved")
         if row.get("listing_excluded"):
             reasons.append("excluded_by_lifecycle")
         if row.get("listing_status") == "not_yet_listed":
@@ -1151,7 +1288,7 @@ class EodCoverageRepository:
             reasons.append("excluded_by_operational_state")
         classification_hint = str(row.get("classification_membership_hint") or "unresolved")
         classification_state = str(row.get("classification_state") or "missing")
-        if classification_hint == "excluded":
+        if row.get("classification_product_excluded"):
             reasons.append("excluded_by_product_scope")
         elif classification_hint == "unresolved":
             reasons.append("classification_unresolved")
@@ -1183,9 +1320,9 @@ class EodCoverageRepository:
             except json.JSONDecodeError:
                 pass
         product_scope = "needs_human_input"
-        if classification_hint == "excluded":
+        if row.get("classification_product_excluded"):
             product_scope = "not_applicable"
-        elif classification_hint == "expected":
+        elif row.get("classification_lifecycle_excluded") or classification_hint == "expected":
             product_scope = "supported_stock"
         canonical = row.get("canonical_symbol")
         if canonical and (
@@ -1231,6 +1368,12 @@ class EodCoverageRepository:
                 "eod_timestamp_leq",
                 2,
                 _timestamp_leq,
+                deterministic=True,
+            )
+            conn.create_function(
+                "eod_revision_d_state",
+                5,
+                _revision_d_state,
                 deterministic=True,
             )
             conn.create_function(

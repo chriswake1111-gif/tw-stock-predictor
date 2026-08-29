@@ -215,6 +215,106 @@ def _insert_independent_classification_root(
     return dict(zip(column_names, inserted))
 
 
+def _add_classification_revision(
+    repo: EodCloseRepository,
+    db,
+    parent: dict,
+    *,
+    at: str,
+    listing_date: str | None,
+    security_type_raw: str = "股票",
+    currency_raw: str | None = "新台幣",
+    classification_decision: str = "supported_stock",
+) -> dict:
+    raw, raw_hash = _raw(
+        db,
+        "twse.isin.security_classification",
+        "twse-isin-official",
+        f"phase15-classification-correction:{at}:{listing_date}:{security_type_raw}",
+        at,
+    )
+    payload = dict(parent)
+    payload.pop("created", None)
+    payload.pop("identity_fingerprint", None)
+    payload.update({
+        "classification_evidence_id": f"fixture-class-{raw_hash[:24]}",
+        "raw_resource_revision_id": raw["raw_resource_revision_id"],
+        "raw_payload_sha256": raw_hash,
+        "normalized_payload_sha256": hashlib.sha256(
+            f"phase15-classification-normalized:{at}:{listing_date}".encode()
+        ).hexdigest(),
+        "fetched_at": at,
+        "received_at": at,
+        "available_at": at,
+        "ingested_at": at,
+        "listing_date": listing_date,
+        "security_type_raw": security_type_raw,
+        "currency_raw": currency_raw,
+        "classification_decision": classification_decision,
+        "classification_state": "accepted",
+        "reason": None,
+        "revision_number": int(parent["revision_number"]) + 1,
+        "supersedes_classification_evidence_id": parent[
+            "classification_evidence_id"
+        ],
+        "source_record_reference": (
+            f"twse.isin.security_classification:2330:correction:{at}"
+        ),
+    })
+    return repo.add_classification_evidence(payload)
+
+
+def _add_identity_revision(
+    db,
+    anchor: dict,
+    *,
+    available_at: str = "2026-08-27T16:00:00Z",
+    status: str = "accepted",
+    **effective_fields: str,
+) -> dict:
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        parent = conn.execute(
+            """
+            SELECT ur.universe_revision_id, ur.revision_number
+            FROM universe_revisions ur
+            JOIN universe_instrument_revisions ir
+              ON ir.universe_revision_id = ur.universe_revision_id
+            WHERE ir.instrument_id = ?
+              AND ur.resource_id = 'twse-universe-master'
+              AND ur.logical_revision_key = 'master'
+            ORDER BY ur.revision_number DESC
+            LIMIT 1
+            """,
+            (anchor["instrument_id"],),
+        ).fetchone()
+    assert parent is not None
+    universe = UniverseRepository(str(db), guard=UniverseWriteGuard(True))
+    context = UniverseOperatorContext(
+        "operator", "phase15-identity", "phase15-identity-lock", "phase15-identity-audit",
+    )
+    payload = _identity_payload(
+        fetched_at=available_at,
+        received_at=available_at,
+        ingested_at=available_at,
+        available_at=available_at,
+        status=status,
+        reason="phase15 revoked identity fixture" if status != "accepted" else None,
+        source_reference="phase15 identity revision fixture",
+    )
+    payload.update(effective_fields)
+    payload["supersedes_revision_id"] = parent["universe_revision_id"]
+    return universe.add_revision(
+        instrument_id=anchor["instrument_id"],
+        resource_id="twse-universe-master",
+        logical_revision_key="master",
+        revision_number=int(parent["revision_number"]) + 1,
+        payload=payload,
+        context=context,
+        idempotency_key=f"phase15-identity-revision-{parent['revision_number'] + 1}",
+    )
+
+
 def _add_tpex_identity(db) -> dict:
     universe = UniverseRepository(str(db), guard=UniverseWriteGuard(True))
     context = UniverseOperatorContext(
@@ -1107,6 +1207,8 @@ def test_classification_exclusion_and_foreign_currency_are_fail_closed(tmp_path)
     )
     assert result["items"][0]["coverage_status"] == "excluded_by_product_scope"
     assert result["items"][0]["denominator_membership"] == "excluded"
+    assert "excluded_by_product_scope" in result["items"][0]["reason_codes"]
+    assert result["items"][0]["product_scope"] == "not_applicable"
 
     db2, repo2, _, _, _, _, foreign_classification, _ = _seed_coverage(tmp_path / "foreign")
     first_foreign = foreign_classification
@@ -1188,6 +1290,10 @@ def test_classifier_listing_date_and_currency_require_positive_evidence(
     assert item["denominator_membership"] == expected_membership
     if expected_reason is not None:
         assert expected_reason in item["reason_codes"]
+    if listing_date == "2026-08-28":
+        assert "excluded_by_lifecycle" in item["reason_codes"]
+        assert "excluded_by_product_scope" not in item["reason_codes"]
+        assert item["product_scope"] == "supported_stock"
 
 
 @pytest.mark.parametrize(
@@ -1226,6 +1332,47 @@ def test_material_classifier_correction_without_d_effective_semantics_is_unresol
     assert corrected["classification_evidence_id"]
 
 
+@pytest.mark.parametrize(
+    ("parent_listing_date", "corrected_listing_date"),
+    [
+        ("2000-09-05", "2026-08-28"),
+        ("2026-08-28", "2000-09-05"),
+    ],
+)
+def test_material_classifier_correction_keeps_d_priority_over_listing_exclusion(
+    tmp_path, parent_listing_date: str, corrected_listing_date: str,
+) -> None:
+    db, repo, _, _, _, _, classification, _ = _seed_coverage(tmp_path)
+    parent = classification
+    if parent_listing_date != "2000-09-05":
+        parent = _insert_independent_classification_root(
+            db,
+            classification,
+            market_raw="上市",
+            at="2026-08-27T04:01:00Z",
+            listing_date=parent_listing_date,
+        )
+    corrected = _add_classification_revision(
+        repo,
+        db,
+        parent,
+        at="2026-08-27T16:01:00Z",
+        listing_date=corrected_listing_date,
+    )
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    item = result["items"][0]
+    assert item["coverage_status"] == "classification_unresolved"
+    assert item["denominator_membership"] == "unresolved"
+    assert "classification_d_applicability_unresolved" in item["reason_codes"]
+    assert "excluded_by_lifecycle" not in item["reason_codes"]
+    assert "excluded_by_product_scope" not in item["reason_codes"]
+    assert corrected["classification_evidence_id"]
+
+
 def test_non_material_classifier_correction_keeps_latest_k_visible_state(tmp_path) -> None:
     db, repo, _, _, _, _, classification, _ = _seed_coverage(tmp_path)
     corrected = _classification(
@@ -1247,6 +1394,109 @@ def test_non_material_classifier_correction_keeps_latest_k_visible_state(tmp_pat
     assert result["aggregate"]["denominator_expected_count"] == 1
     assert result["aggregate"]["denominator_unresolved_count"] == 0
     assert corrected["classification_evidence_id"]
+
+
+@pytest.mark.parametrize(
+    ("effective_field", "effective_value"),
+    [
+        ("source_effective_date", "2026-08-28"),
+        ("source_effective_at", "2026-08-28T00:00:00Z"),
+        ("effective_from", "2026-08-28T00:00:00Z"),
+    ],
+)
+def test_k_visible_future_identity_revision_does_not_resurrect_parent(
+    tmp_path, effective_field: str, effective_value: str,
+) -> None:
+    db, _, anchor, _, _, _, _, _ = _seed_coverage(tmp_path)
+    corrected = _add_identity_revision(
+        db,
+        anchor,
+        **{effective_field: effective_value},
+    )
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    item = result["items"][0]
+    assert item["coverage_status"] == "identity_unresolved"
+    assert item["denominator_membership"] == "unresolved"
+    assert "identity_d_applicability_unresolved" in item["reason_codes"]
+    assert item["canonical_symbol"] is None
+    assert corrected["universe_revision_id"]
+
+
+@pytest.mark.parametrize(
+    ("effective_field", "effective_value"),
+    [
+        ("source_effective_date", TARGET_DATE),
+        ("source_effective_at", "2026-08-27T00:00:00Z"),
+        ("effective_from", "2026-08-27T00:00:00Z"),
+        ("effective_to", "2026-08-27T08:00:00Z"),
+    ],
+)
+def test_k_visible_same_d_identity_revision_fails_closed(
+    tmp_path, effective_field: str, effective_value: str,
+) -> None:
+    db, _, anchor, _, _, _, _, _ = _seed_coverage(tmp_path)
+    corrected = _add_identity_revision(
+        db,
+        anchor,
+        **{effective_field: effective_value},
+    )
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    item = result["items"][0]
+    assert item["coverage_status"] == "identity_unresolved"
+    assert item["denominator_membership"] == "unresolved"
+    assert "identity_d_applicability_unresolved" in item["reason_codes"]
+    assert item["canonical_symbol"] is None
+    assert corrected["universe_revision_id"]
+
+
+def test_post_k_future_identity_revision_keeps_d_parent(tmp_path) -> None:
+    db, _, anchor, _, _, _, _, _ = _seed_coverage(tmp_path)
+    corrected = _add_identity_revision(
+        db,
+        anchor,
+        available_at="2026-08-28T00:00:01Z",
+        source_effective_date="2026-08-28",
+    )
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    item = result["items"][0]
+    assert item["coverage_status"] == "observed_eligible"
+    assert item["denominator_membership"] == "expected"
+    assert item["canonical_symbol"] == "2330.TW"
+    assert "identity_d_applicability_unresolved" not in item["reason_codes"]
+    assert corrected["universe_revision_id"]
+
+
+def test_k_visible_future_revoked_identity_revision_blocks_parent(tmp_path) -> None:
+    db, _, anchor, _, _, _, _, _ = _seed_coverage(tmp_path)
+    corrected = _add_identity_revision(
+        db,
+        anchor,
+        status="revoked",
+        source_effective_date="2026-08-28",
+    )
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    item = result["items"][0]
+    assert item["coverage_status"] == "identity_unresolved"
+    assert item["denominator_membership"] == "unresolved"
+    assert "identity_d_applicability_unresolved" in item["reason_codes"]
+    assert item["canonical_symbol"] is None
+    assert corrected["universe_revision_id"]
 
 
 def test_same_code_classifier_selection_is_separate_for_twse_and_tpex(tmp_path) -> None:
