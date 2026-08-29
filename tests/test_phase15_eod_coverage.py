@@ -9,6 +9,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from src.domain.data_foundation import (
+    PublicationVerificationMode,
+    ResourcePublicationEvidence,
+)
 from src.domain.eod_coverage import (
     CoverageCursor,
     CoverageCursorError,
@@ -18,6 +22,7 @@ from src.domain.eod_coverage import (
     eod_coverage_visibility_status_v1,
 )
 from src.repositories.eod_close_repository import EodCloseRepository
+from src.repositories.data_foundation_repository import DataFoundationRepository
 from src.repositories.eod_coverage_repository import EodCoverageRepository
 from src.repositories.migration_runner import apply_valuation_migration
 from src.repositories.universe_repository import UniverseRepository
@@ -29,6 +34,7 @@ from tests.test_phase14_eod_repository_service import (
     _db_with_identity,
     _identity_payload,
     _identity_revision_id,
+    _add_reused_identity,
     _observation,
     _raw,
     _source,
@@ -312,6 +318,108 @@ def _add_identity_revision(
         payload=payload,
         context=context,
         idempotency_key=f"phase15-identity-revision-{parent['revision_number'] + 1}",
+    )
+
+
+def _add_tpex_corroborating_revision(db, anchor: dict) -> dict:
+    raw, raw_hash = _raw(
+        db,
+        "tpex-universe-corroborating",
+        "tpex-universe-official",
+        "phase15-tpex-corroborating-2330",
+        "2026-08-27T05:00:00Z",
+    )
+    evidence = DataFoundationRepository(str(db)).add_publication_evidence(
+        ResourcePublicationEvidence(
+            provider_id="tpex-universe-official",
+            resource_id="tpex-universe-corroborating",
+            logical_revision_key="phase15-tpex-corroborating-2330",
+            official_release_at="2026-08-27T05:00:00Z",
+            source_reference="https://www.tpex.org.tw/company/otcSearch",
+            source_identity="phase15:tpex:corroborating:2330",
+            evidence_file_sha256="b" * 64,
+            captured_at="2026-08-27T05:01:00Z",
+            verification_mode=PublicationVerificationMode.MANUAL_OFFICIAL_SOURCE_REVIEW,
+            verified_by="phase15-reviewer",
+        ),
+        ingested_at="2026-08-27T05:02:00Z",
+    )
+    universe = UniverseRepository(str(db), guard=UniverseWriteGuard(True))
+    return universe.add_revision(
+        instrument_id=anchor["instrument_id"],
+        resource_id="tpex-universe-corroborating",
+        logical_revision_key="phase15-tpex-corroborating-2330",
+        revision_number=2,
+        payload=_identity_payload(
+            venue="TPEX",
+            official_code="2330",
+            canonical_symbol="2330.TWO",
+            display_name="TPEX corroborating 2330",
+            fetched_at="2026-08-27T05:00:00Z",
+            received_at="2026-08-27T05:01:00Z",
+            ingested_at="2026-08-27T05:02:00Z",
+            available_at="2026-08-27T05:00:00Z",
+            source_reference="phase15 corroborating fixture",
+            freshness_mode="event_observation",
+            current_complete=True,
+            coverage_complete=True,
+            raw_resource_revision_id=raw["raw_resource_revision_id"],
+            raw_payload_sha256=raw_hash,
+            publication_evidence_id=evidence["publication_evidence_id"],
+        ),
+        context=UniverseOperatorContext(
+            "operator", "phase15-corroborating", "phase15-corroborating-lock",
+            "phase15-corroborating-audit",
+        ),
+        idempotency_key="phase15-tpex-corroborating-2330",
+    )
+
+
+def _add_tpex_master_revision(db, anchor: dict, *, status: str) -> dict:
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        parent = conn.execute(
+            """
+            SELECT ur.universe_revision_id, ur.revision_number
+            FROM universe_revisions ur
+            JOIN universe_instrument_revisions ir
+              ON ir.universe_revision_id = ur.universe_revision_id
+            WHERE ir.instrument_id = ?
+              AND ur.resource_id = 'tpex-universe-master'
+              AND ur.logical_revision_key = 'master:tpex:2330'
+            ORDER BY ur.revision_number DESC
+            LIMIT 1
+            """,
+            (anchor["instrument_id"],),
+        ).fetchone()
+    assert parent is not None
+    universe = UniverseRepository(str(db), guard=UniverseWriteGuard(True))
+    return universe.add_revision(
+        instrument_id=anchor["instrument_id"],
+        resource_id="tpex-universe-master",
+        logical_revision_key="master:tpex:2330",
+        revision_number=int(parent["revision_number"]) + 2,
+        payload=_identity_payload(
+            venue="TPEX",
+            official_code="2330",
+            canonical_symbol="2330.TWO",
+            fetched_at="2026-08-27T06:00:00Z",
+            received_at="2026-08-27T06:01:00Z",
+            ingested_at="2026-08-27T06:02:00Z",
+            available_at="2026-08-27T06:00:00Z",
+            status=status,
+            reason=f"phase15 {status} master fixture",
+            raw_resource_revision_id="raw-phase13-tpex_universe_master",
+            raw_payload_sha256=hashlib.sha256(
+                b"phase13:tpex-universe-master"
+            ).hexdigest(),
+            supersedes_revision_id=parent["universe_revision_id"],
+        ),
+        context=UniverseOperatorContext(
+            "operator", "phase15-master-control", "phase15-master-control-lock",
+            "phase15-master-control-audit",
+        ),
+        idempotency_key=f"phase15-tpex-master-{status}",
     )
 
 
@@ -1101,6 +1209,43 @@ def test_operational_event_applicability_is_bounded_by_target_date(tmp_path) -> 
     assert same["items"][0]["denominator_membership"] == "unresolved"
 
 
+def test_observation_parent_revision_keeps_semantic_identity_after_d_applicable_child(
+    tmp_path,
+) -> None:
+    db, _, anchor, _, _, _, _, _ = _seed_coverage(tmp_path)
+    parent_revision_id = _identity_revision_id(db, anchor["instrument_id"])
+    child = _add_identity_revision(
+        db,
+        anchor,
+        available_at="2026-08-27T16:00:00Z",
+    )
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    item = result["items"][0]
+    assert item["coverage_status"] == "observed_eligible"
+    assert item["denominator_membership"] == "expected"
+    assert "identity_unresolved" not in item["reason_codes"]
+    assert child["universe_revision_id"] != parent_revision_id
+
+
+def test_observation_from_superseded_identity_epoch_is_unresolved(tmp_path) -> None:
+    db, _, anchor, _, _, _, _, _ = _seed_coverage(tmp_path)
+    _, successor, _, _ = _add_reused_identity(db, anchor)
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    item = result["items"][0]
+    assert item["identity_epoch"] == successor["identity_epoch"]
+    assert item["coverage_status"] == "identity_unresolved"
+    assert item["denominator_membership"] == "expected"
+    assert "identity_unresolved" in item["reason_codes"]
+
+
 @pytest.mark.parametrize(
     ("event_kind", "event_type", "effective_at", "expected_status"),
     [
@@ -1542,6 +1687,93 @@ def test_same_code_classifier_selection_is_separate_for_twse_and_tpex(tmp_path) 
         assert result["items"][0]["denominator_membership"] == "expected"
     assert twse["items"][0]["venue"] == "TWSE"
     assert tpex["items"][0]["venue"] == "TPEX"
+
+
+def test_neutral_corroborating_revision_does_not_displace_master_reference(tmp_path) -> None:
+    db, repo, _, _, _, _, classification, _ = _seed_coverage(
+        tmp_path,
+        include_observation=False,
+    )
+    tpex_anchor = _add_tpex_identity(db)
+    _add_tpex_corroborating_revision(db, tpex_anchor)
+    tpex_raw, tpex_hash = _raw(
+        db,
+        "tpex.eod.daily_close_quotes",
+        "tpex-universe-official",
+        "tpex-neutral-corroborating-2026-08-27",
+        "2026-08-27T05:00:00Z",
+    )
+    tpex_source = _tpex_source(repo, tpex_raw, tpex_hash)
+    tpex_classification = _insert_independent_classification_root(
+        db,
+        classification,
+        market_raw="上櫃",
+    )
+    _tpex_observation(
+        repo,
+        raw=tpex_raw,
+        raw_hash=tpex_hash,
+        source=tpex_source,
+        classification=tpex_classification,
+        anchor=tpex_anchor,
+        instrument_revision_id=_identity_revision_id(db, tpex_anchor["instrument_id"]),
+    )
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TPEX", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    item = result["items"][0]
+    assert result["status"] == "available"
+    assert item["coverage_status"] == "observed_eligible"
+    assert item["denominator_membership"] == "expected"
+    assert item["canonical_symbol"] == "2330.TWO"
+
+
+def test_revoked_master_chain_does_not_fallback_to_neutral_corroboration(
+    tmp_path,
+) -> None:
+    db, repo, _, _, _, _, classification, _ = _seed_coverage(
+        tmp_path,
+        include_observation=False,
+    )
+    tpex_anchor = _add_tpex_identity(db)
+    _add_tpex_corroborating_revision(db, tpex_anchor)
+    revoked = _add_tpex_master_revision(db, tpex_anchor, status="revoked")
+    tpex_raw, tpex_hash = _raw(
+        db,
+        "tpex.eod.daily_close_quotes",
+        "tpex-universe-official",
+        "tpex-revoked-master-2026-08-27",
+        "2026-08-27T05:00:00Z",
+    )
+    tpex_source = _tpex_source(repo, tpex_raw, tpex_hash)
+    tpex_classification = _insert_independent_classification_root(
+        db,
+        classification,
+        market_raw="上櫃",
+        at="2026-08-27T04:03:00Z",
+    )
+    _tpex_observation(
+        repo,
+        raw=tpex_raw,
+        raw_hash=tpex_hash,
+        source=tpex_source,
+        classification=tpex_classification,
+        anchor=tpex_anchor,
+        instrument_revision_id=_identity_revision_id(db, tpex_anchor["instrument_id"]),
+    )
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TPEX", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    item = result["items"][0]
+    assert result["status"] == "insufficient_data"
+    assert item["coverage_status"] == "identity_unresolved"
+    assert item["denominator_membership"] == "unresolved"
+    assert "identity_unresolved" in item["reason_codes"]
+    assert revoked["status"] == "revoked"
 
 
 @pytest.mark.parametrize("child_state", ["accepted", "blocked", "revoked"])

@@ -578,7 +578,10 @@ class EodCoverageRepository:
             FROM revision_temporal
             GROUP BY instrument_id
         ),
-        accepted_ranked AS (
+        accepted_master_ranked AS (
+            -- Optional corroborating/manual rows are neutral.  Select the
+            -- safe historical reference from the master channel before any
+            -- cross-role ranking can discard it.
             SELECT v.*,
                    ROW_NUMBER() OVER (
                      PARTITION BY v.instrument_id
@@ -588,16 +591,17 @@ class EodCoverageRepository:
                    ) AS rn
             FROM d_applicable_revision_rows v
             WHERE v.status = 'accepted'
+              AND v.resource_role = 'master_snapshot'
               AND NOT EXISTS (
                 SELECT 1 FROM excluded_revisions x
                 WHERE x.instrument_id = v.instrument_id
                   AND x.instrument_revision_id = v.instrument_revision_id
               )
         ),
-        latest_accepted AS (
-            SELECT * FROM accepted_ranked WHERE rn = 1
+        latest_accepted_master AS (
+            SELECT * FROM accepted_master_ranked WHERE rn = 1
         ),
-        partial_ranked AS (
+        partial_master_ranked AS (
             SELECT v.*,
                    ROW_NUMBER() OVER (
                      PARTITION BY v.instrument_id
@@ -607,43 +611,29 @@ class EodCoverageRepository:
                    ) AS rn
             FROM d_applicable_revision_rows v
             WHERE v.status = 'partial'
+              AND v.resource_role = 'master_snapshot'
         ),
-        latest_partial AS (
-            SELECT * FROM partial_ranked WHERE rn = 1
+        latest_partial_master AS (
+            SELECT * FROM partial_master_ranked WHERE rn = 1
         ),
         reference_candidates AS (
             SELECT a.*, 'accepted' AS reference_status
-            FROM latest_accepted a
-            WHERE a.resource_role = 'master_snapshot'
+            FROM latest_accepted_master a
             UNION ALL
             SELECT p.*, 'partial' AS reference_status
-            FROM latest_partial p
-            WHERE p.resource_role = 'master_snapshot'
-              AND NOT EXISTS (
-                SELECT 1 FROM latest_accepted a
+            FROM latest_partial_master p
+            WHERE NOT EXISTS (
+                SELECT 1 FROM latest_accepted_master a
                 WHERE a.instrument_id = p.instrument_id
-                  AND a.resource_role = 'master_snapshot'
               )
               AND NOT EXISTS (
                 SELECT 1 FROM excluded_revisions x
                 WHERE x.instrument_id = p.instrument_id
               )
         ),
-        master_ranked AS (
-            SELECT a.instrument_id, a.canonical_symbol, a.mapping_basis,
-                   ROW_NUMBER() OVER (
-                     PARTITION BY a.instrument_id
-                     ORDER BY a.revision_number DESC,
-                              COALESCE(a.available_at, '') DESC,
-                              a.ingested_at DESC, a.instrument_revision_id DESC
-                   ) AS rn
-            FROM accepted_ranked a
-            WHERE a.resource_role = 'master_snapshot'
-        ),
         latest_master AS (
             SELECT instrument_id, canonical_symbol, mapping_basis
-            FROM master_ranked
-            WHERE rn = 1
+            FROM latest_accepted_master
         ),
         reference_projected AS (
             SELECT r.*,
@@ -807,8 +797,14 @@ class EodCoverageRepository:
         ),
         observed_ranked AS (
             SELECT o.*,
+                   bound_revision.instrument_id AS observation_revision_instrument_id,
+                   bound_revision.venue AS observation_revision_venue,
+                   bound_revision.official_code AS observation_revision_official_code,
+                   bound_revision.anchor_identity_epoch AS observation_revision_identity_epoch,
+                   bound_revision.status AS observation_revision_status,
+                   bound_revision.revision_d_state AS observation_revision_d_state,
                    ROW_NUMBER() OVER (
-                     PARTITION BY o.venue, o.official_code
+                       PARTITION BY o.venue, o.official_code
                      ORDER BY o.revision_number DESC,
                               COALESCE(o.available_at, '') DESC,
                               o.ingested_at DESC, o.close_observation_id DESC
@@ -816,6 +812,8 @@ class EodCoverageRepository:
             FROM eod_close_observations o
             JOIN source_projected s
               ON s.source_snapshot_id = o.source_snapshot_id
+            LEFT JOIN revision_temporal bound_revision
+              ON bound_revision.instrument_revision_id = o.instrument_revision_id
             CROSS JOIN params p
             WHERE o.resource_id = p.resource_id
               AND o.venue = p.venue
@@ -993,6 +991,19 @@ class EodCoverageRepository:
                 eod_numeric_valid(obs.volume_value, 0) AS observation_volume_valid,
                 obs.source_record_reference AS observation_source_record_reference,
                 obs.quality_flags_json,
+                CASE
+                  WHEN obs.instrument_id IS NOT NULL
+                   AND obs.instrument_id <> ea.instrument_id THEN 1
+                  WHEN obs.instrument_revision_id IS NULL THEN 0
+                  WHEN obs.observation_revision_instrument_id IS NULL THEN 1
+                  WHEN obs.observation_revision_instrument_id <> ea.instrument_id THEN 1
+                  WHEN obs.observation_revision_venue <> ea.venue THEN 1
+                  WHEN obs.observation_revision_official_code <> ea.official_code THEN 1
+                  WHEN obs.observation_revision_identity_epoch <> ea.identity_epoch THEN 1
+                  WHEN obs.observation_revision_status <> 'accepted' THEN 1
+                  WHEN obs.observation_revision_d_state <> 1 THEN 1
+                  ELSE 0
+                END AS observation_identity_unresolved,
                 COALESCE(sp.source_state, 'unknown') AS source_state,
                 COALESCE(sp.status, 'no_exact_D') AS source_status,
                 CASE
@@ -1030,10 +1041,7 @@ class EodCoverageRepository:
                      WHEN (facts.observation_instrument_id IS NOT NULL
                            AND facts.instrument_id IS NOT NULL
                            AND facts.observation_instrument_id <> facts.instrument_id)
-                       OR (facts.observation_instrument_revision_id IS NOT NULL
-                           AND facts.reference_instrument_revision_id IS NOT NULL
-                           AND facts.observation_instrument_revision_id
-                               <> facts.reference_instrument_revision_id)
+                       OR facts.observation_identity_unresolved = 1
                        OR facts.identity_unresolved = 1
                        OR facts.event_unresolved = 1
                        THEN 'identity_unresolved'
@@ -1128,6 +1136,7 @@ class EodCoverageRepository:
                 eod_numeric_valid(o.volume_value, 0) AS observation_volume_valid,
                 o.source_record_reference AS observation_source_record_reference,
                 o.quality_flags_json,
+                1 AS observation_identity_unresolved,
                 COALESCE(sp.source_state, 'unknown') AS source_state,
                 COALESCE(sp.status, 'no_exact_D') AS source_status,
                 COALESCE(sp.reason, '') AS source_reason,
