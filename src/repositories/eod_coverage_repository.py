@@ -144,36 +144,78 @@ class EodCoverageRepository:
                 return True
         return False
 
+    @staticmethod
+    def _source_order_key(row: dict[str, Any]) -> tuple[str, str, int, str, str]:
+        """Apply the locked post-lineage source tie-break order."""
+
+        try:
+            revision_number = int(row.get("revision_number") or 0)
+        except (TypeError, ValueError):
+            revision_number = 0
+        return (
+            str(row.get("available_at") or ""),
+            str(row.get("ingested_at") or ""),
+            revision_number,
+            str(row.get("source_snapshot_id") or ""),
+            str(row.get("normalized_payload_sha256") or ""),
+        )
+
     def _source_context(
         self,
         conn: sqlite3.Connection,
         request: CoverageRequest,
     ) -> dict[str, Any]:
-        row = self._row(conn.execute(
+        visible_rows = conn.execute(
             """
-            SELECT s.*, dr.logical_resource_key, dp.display_name AS provider_name
-            FROM eod_close_source_snapshots s
-            JOIN data_resources dr ON dr.resource_id = s.resource_id
-            LEFT JOIN data_providers dp ON dp.provider_id = dr.provider_id
-            WHERE s.resource_id = ?
-              AND s.source_scope = ?
-              AND s.source_trade_date = ?
-              AND s.source_trade_date_status = 'valid'
-              AND s.available_at IS NOT NULL AND eod_timestamp_leq(s.available_at, ?) = 1
-              AND s.ingested_at IS NOT NULL AND eod_timestamp_leq(s.ingested_at, ?) = 1
-            ORDER BY s.revision_number DESC, s.available_at DESC,
-                     s.ingested_at DESC, s.source_snapshot_id DESC,
-                     s.normalized_payload_sha256 DESC
-            LIMIT 1
+            WITH RECURSIVE
+            source_visible_rows AS (
+                SELECT s.*
+                FROM eod_close_source_snapshots s
+                WHERE s.resource_id = ?
+                  AND s.source_scope = ?
+                  AND s.available_at IS NOT NULL
+                  AND eod_timestamp_leq(s.available_at, ?) = 1
+                  AND s.ingested_at IS NOT NULL
+                  AND eod_timestamp_leq(s.ingested_at, ?) = 1
+            ),
+            source_edges AS (
+                SELECT child.source_snapshot_id AS child_snapshot_id,
+                       child.supersedes_source_snapshot_id AS parent_snapshot_id
+                FROM source_visible_rows child
+                WHERE child.supersedes_source_snapshot_id IS NOT NULL
+            ),
+            source_excluded(source_snapshot_id) AS (
+                SELECT parent_snapshot_id
+                FROM source_edges
+                UNION
+                SELECT edge.parent_snapshot_id
+                FROM source_edges edge
+                JOIN source_excluded excluded
+                  ON excluded.source_snapshot_id = edge.child_snapshot_id
+            )
+            SELECT visible.*
+            FROM source_visible_rows visible
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM source_excluded excluded
+                WHERE excluded.source_snapshot_id = visible.source_snapshot_id
+            )
             """,
             (
                 request.resource_id,
                 request.source_scope,
-                request.source_trade_date,
                 request.knowledge_cutoff_at,
                 request.knowledge_cutoff_at,
             ),
-        ).fetchone())
+        ).fetchall()
+        effective_rows = [dict(candidate) for candidate in visible_rows]
+        exact_rows = [
+            candidate
+            for candidate in effective_rows
+            if candidate.get("source_trade_date_status") == "valid"
+            and candidate.get("source_trade_date") == request.source_trade_date
+        ]
+        row = max(exact_rows, key=self._source_order_key) if exact_rows else None
         if row is not None:
             state, reason = self._source_state(row)
             return {
@@ -193,29 +235,12 @@ class EodCoverageRepository:
                 "source_url": row.get("source_url"),
             }
 
-        invalid_rows = conn.execute(
-            """
-            SELECT s.*
-            FROM eod_close_source_snapshots s
-            WHERE s.resource_id = ?
-              AND s.source_scope = ?
-              AND s.source_trade_date_status = 'invalid'
-              AND s.available_at IS NOT NULL AND eod_timestamp_leq(s.available_at, ?) = 1
-              AND s.ingested_at IS NOT NULL AND eod_timestamp_leq(s.ingested_at, ?) = 1
-            ORDER BY s.revision_number DESC, s.available_at DESC,
-                     s.ingested_at DESC, s.source_snapshot_id DESC
-            """,
-            (
-                request.resource_id,
-                request.source_scope,
-                request.knowledge_cutoff_at,
-                request.knowledge_cutoff_at,
-            ),
-        ).fetchall()
-        bound_invalid = any(
-            self._safe_invalid_binding(dict(candidate), request.source_trade_date)
-            for candidate in invalid_rows
-        )
+        bound_invalid_rows = [
+            candidate
+            for candidate in effective_rows
+            if self._safe_invalid_binding(candidate, request.source_trade_date)
+        ]
+        bound_invalid = bool(bound_invalid_rows)
         return {
             "source_state": (
                 CoverageSourceState.BLOCKED.value
@@ -541,14 +566,49 @@ class EodCoverageRepository:
             FROM reference_candidates r
             LEFT JOIN latest_master m ON m.instrument_id = r.instrument_id
         ),
+        source_visible_rows AS (
+            SELECT s.*
+            FROM eod_close_source_snapshots s
+            CROSS JOIN params p
+            WHERE s.resource_id = p.resource_id
+              AND s.source_scope = p.source_scope
+              AND s.available_at IS NOT NULL
+              AND eod_timestamp_leq(s.available_at, p.cutoff) = 1
+              AND s.ingested_at IS NOT NULL
+              AND eod_timestamp_leq(s.ingested_at, p.cutoff) = 1
+        ),
+        source_edges AS (
+            SELECT child.source_snapshot_id AS child_snapshot_id,
+                   child.supersedes_source_snapshot_id AS parent_snapshot_id
+            FROM source_visible_rows child
+            WHERE child.supersedes_source_snapshot_id IS NOT NULL
+        ),
+        source_excluded(source_snapshot_id) AS (
+            SELECT parent_snapshot_id
+            FROM source_edges
+            UNION
+            SELECT edge.parent_snapshot_id
+            FROM source_edges edge
+            JOIN source_excluded excluded
+              ON excluded.source_snapshot_id = edge.child_snapshot_id
+        ),
+        source_effective_rows AS (
+            SELECT visible.*
+            FROM source_visible_rows visible
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM source_excluded excluded
+                WHERE excluded.source_snapshot_id = visible.source_snapshot_id
+            )
+        ),
         source_ranked AS (
             SELECT s.*,
                    ROW_NUMBER() OVER (
-                     ORDER BY s.revision_number DESC, s.available_at DESC,
-                              s.ingested_at DESC, s.source_snapshot_id DESC,
+                     ORDER BY s.available_at DESC, s.ingested_at DESC,
+                              s.revision_number DESC, s.source_snapshot_id DESC,
                               s.normalized_payload_sha256 DESC
                    ) AS rn
-            FROM eod_close_source_snapshots s
+            FROM source_effective_rows s
             CROSS JOIN params p
             WHERE s.resource_id = p.resource_id
               AND s.source_scope = p.source_scope
@@ -691,6 +751,12 @@ class EodCoverageRepository:
                 ref.reference_status,
                 ref.security_type,
                 CASE
+                  WHEN cc.classification_state = 'accepted'
+                   AND cc.official_code = ea.official_code
+                   AND cc.market_raw = CASE WHEN ea.venue = 'TWSE' THEN '上市' ELSE '上櫃' END
+                   AND cc.listing_date IS NOT NULL
+                   AND substr(cc.listing_date, 1, 10) > p.trade_date
+                   THEN 'not_yet_listed'
                   WHEN ll.lifecycle_event_id IS NULL THEN COALESCE(ref.listing_status, 'unknown')
                   WHEN ll.d_state = 'before' AND ll.status = 'accepted'
                     THEN CASE WHEN ll.event_type = 'terminated' THEN 'delisted' ELSE 'listed' END
@@ -714,6 +780,12 @@ class EodCoverageRepository:
                 cc.remarks_raw AS classification_remarks_raw,
                 COALESCE(cc.classification_d_unresolved, 0) AS classification_d_unresolved,
                 CASE
+                  WHEN cc.classification_state = 'accepted'
+                   AND cc.official_code = ea.official_code
+                   AND cc.market_raw = CASE WHEN ea.venue = 'TWSE' THEN '上市' ELSE '上櫃' END
+                   AND cc.listing_date IS NOT NULL
+                   AND substr(cc.listing_date, 1, 10) > p.trade_date
+                   THEN 'excluded'
                   WHEN cc.classification_d_unresolved = 1 THEN 'unresolved'
                   WHEN cc.classification_state = 'accepted'
                    AND cc.official_code = ea.official_code
@@ -731,8 +803,9 @@ class EodCoverageRepository:
                    AND cc.official_code = ea.official_code
                    AND cc.market_raw = CASE WHEN ea.venue = 'TWSE' THEN '上市' ELSE '上櫃' END
                    AND trim(COALESCE(cc.security_type_raw, '')) = '股票'
-                   AND upper(trim(COALESCE(cc.currency_raw, ''))) IN ('TWD','新台幣','台幣','')
-                   AND (cc.listing_date IS NULL OR substr(cc.listing_date, 1, 10) <= p.trade_date)
+                   AND upper(trim(COALESCE(cc.currency_raw, ''))) IN ('TWD','新台幣','台幣')
+                   AND cc.listing_date IS NOT NULL
+                   AND substr(cc.listing_date, 1, 10) <= p.trade_date
                    AND pp.currency = 'TWD' AND pp.unit = 'TWD_per_share'
                    THEN 'expected'
                   ELSE 'unresolved'
@@ -756,7 +829,14 @@ class EodCoverageRepository:
                     WHEN ll.lifecycle_event_id IS NULL THEN COALESCE(ref.listing_status, 'unknown')
                     WHEN ll.d_state = 'before' AND ll.status = 'accepted'
                       THEN CASE WHEN ll.event_type = 'terminated' THEN 'delisted' ELSE 'listed' END
-                    ELSE 'unknown' END) = 'delisted' THEN 1 ELSE 0
+                    ELSE 'unknown' END) = 'delisted'
+                    OR (
+                      cc.classification_state = 'accepted'
+                      AND cc.official_code = ea.official_code
+                      AND cc.market_raw = CASE WHEN ea.venue = 'TWSE' THEN '上市' ELSE '上櫃' END
+                      AND cc.listing_date IS NOT NULL
+                      AND substr(cc.listing_date, 1, 10) > p.trade_date
+                    ) THEN 1 ELSE 0
                 END AS listing_excluded,
                 CASE
                   WHEN (CASE
@@ -923,12 +1003,7 @@ class EodCoverageRepository:
                 sp.ingested_at AS source_ingested_at,
                 sp.coverage_state AS source_coverage_state,
                 COALESCE(sp.source_proof_present, 0) AS source_proof_present,
-                CASE
-                  WHEN sp.source_state = 'blocked' THEN 'source_blocked'
-                  WHEN sp.source_state = 'partial' THEN 'source_partial'
-                  WHEN sp.source_state = 'unknown' THEN 'source_unknown'
-                  ELSE 'source_observation_unmapped'
-                END AS coverage_status_hint,
+                'source_observation_unmapped' AS coverage_status_hint,
                 NULL AS denominator_membership_hint
             FROM observed_ranked o
             LEFT JOIN classification_context cc
@@ -1070,6 +1145,8 @@ class EodCoverageRepository:
             reasons.append("event_d_applicability_unresolved")
         if row.get("listing_excluded"):
             reasons.append("excluded_by_lifecycle")
+        if row.get("listing_status") == "not_yet_listed":
+            reasons.append("not_yet_listed_on_source_trade_date")
         if row.get("operational_excluded"):
             reasons.append("excluded_by_operational_state")
         classification_hint = str(row.get("classification_membership_hint") or "unresolved")

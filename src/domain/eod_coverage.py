@@ -394,6 +394,8 @@ def safe_source_dto(source: Mapping[str, Any]) -> dict[str, Any]:
         "source_status": source.get("source_status"),
         "coverage_state": source.get("coverage_state"),
         "partial_proof_present": bool(source.get("partial_proof_present", False)),
+        "source_scope_completeness_proven": False,
+        "reason_codes": normalize_reason_codes(source.get("reason_codes", ())),
     }
 
 

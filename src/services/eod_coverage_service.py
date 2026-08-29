@@ -38,6 +38,7 @@ class EodCoverageService:
             "source_status": source.get("source_status"),
             "coverage_state": source.get("source_coverage_state"),
             "partial_proof_present": bool(source.get("source_proof_present", False)),
+            "reason_codes": [source.get("source_reason")] if source.get("source_reason") else [],
         }
 
     @staticmethod

@@ -38,6 +38,7 @@ from tests.phase13_test_support import seed_raw_provenance
 
 TARGET_DATE = "2026-08-27"
 CUTOFF = "2026-08-28T00:00:00Z"
+_UNSET = object()
 FORBIDDEN_KEYS = {
     "raw_payload",
     "raw_payload_sha256",
@@ -148,6 +149,8 @@ def _insert_independent_classification_root(
     *,
     market_raw: str,
     at: str = "2026-08-27T04:02:00Z",
+    listing_date: str | None | object = _UNSET,
+    currency_raw: str | None | object = _UNSET,
 ) -> dict:
     """Insert an independent immutable root without invoking Phase 14 writes.
 
@@ -190,6 +193,10 @@ def _insert_independent_classification_root(
             "classification_state": template["classification_state"],
         }, ensure_ascii=False, sort_keys=True).encode()).hexdigest(),
     })
+    if listing_date is not _UNSET:
+        row["listing_date"] = listing_date
+    if currency_raw is not _UNSET:
+        row["currency_raw"] = currency_raw
     with sqlite3.connect(db) as conn:
         columns = ",".join(row)
         placeholders = ",".join("?" for _ in row)
@@ -422,6 +429,65 @@ def _add_bound_invalid_source(repo: EodCloseRepository, raw: dict, raw_hash: str
     })
 
 
+def _add_source_revision(
+    repo: EodCloseRepository,
+    db,
+    parent: dict,
+    *,
+    source_trade_date: str | None = TARGET_DATE,
+    source_trade_date_status: str = "valid",
+    status: str = "available",
+    coverage_state: str = "complete",
+    row_count: int = 1,
+    at: str = "2026-08-27T06:00:00Z",
+    available_at: str | None = None,
+    ingested_at: str | None = None,
+    query_dimensions: dict | None = None,
+) -> tuple[dict, dict, str]:
+    """Create a K-visible or K-invisible child for source-lineage regressions."""
+
+    raw, raw_hash = _raw(
+        db,
+        parent["resource_id"],
+        "twse-universe-official",
+        f"coverage-source-lineage:{parent['source_snapshot_id']}:{at}:{status}:{source_trade_date_status}",
+        at,
+    )
+    child = repo.add_source_snapshot({
+        "resource_id": parent["resource_id"],
+        "raw_resource_revision_id": raw["raw_resource_revision_id"],
+        "logical_revision_key": parent["logical_revision_key"],
+        "revision_number": int(parent["revision_number"]) + 1,
+        "supersedes_source_snapshot_id": parent["source_snapshot_id"],
+        "source_trade_date": source_trade_date,
+        "source_trade_date_status": source_trade_date_status,
+        "status": status,
+        "coverage_state": coverage_state,
+        "row_count": row_count,
+        "source_date_min": source_trade_date if source_trade_date_status == "valid" else None,
+        "source_date_max": source_trade_date if source_trade_date_status == "valid" else None,
+        "fetched_at": at,
+        "received_at": at,
+        "available_at": available_at or at,
+        "ingested_at": ingested_at or at,
+        "source_url": "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
+        "contract_version": "eod_close_v1",
+        "parser_version": "1",
+        "schema_fingerprint": hashlib.sha256(b"eod-lineage-schema").hexdigest(),
+        "raw_payload_sha256": raw_hash,
+        "normalized_payload_sha256": hashlib.sha256(
+            f"coverage-source-lineage-normalized:{raw_hash}".encode()
+        ).hexdigest(),
+        "query_dimensions_json": json.dumps(query_dimensions or {}),
+        "source_record_reference": (
+            f"twse.eod.stock_day_all:lineage:{parent['source_snapshot_id']}"
+        ),
+        "source_scope": parent["source_scope"],
+        "reason": "lineage fixture" if status != "available" else None,
+    })
+    return child, raw, raw_hash
+
+
 def test_domain_request_status_and_cursor_validation() -> None:
     request = CoverageRequest(
         venue="twse",
@@ -485,6 +551,8 @@ def test_valid_coverage_is_get_only_safe_and_not_a_completeness_assertion(tmp_pa
     assert body["aggregate_completeness_proven"] is False
     assert body["source"]["coverage_state"] == "complete"
     assert body["source"]["partial_proof_present"] is False
+    assert body["source"]["source_scope_completeness_proven"] is False
+    assert body["source"]["reason_codes"] == ["source_usable"]
     assert body["aggregate"]["denominator_expected_count"] == 1
     assert body["aggregate"]["denominator_excluded_count"] == 0
     assert body["aggregate"]["denominator_unresolved_count"] == 0
@@ -561,6 +629,51 @@ def test_full_counts_are_stable_across_keyset_pages_and_orphan_is_disjoint(tmp_p
     assert second["items"][0]["item_kind"] == "source_observation_orphan"
     assert second["items"][0]["denominator_membership"] is None
     assert first["items"][0]["official_code"] != second["items"][0]["official_code"]
+
+
+@pytest.mark.parametrize(
+    ("source_kwargs", "expected_top_level_status", "expected_source_reason"),
+    [
+        (
+            {
+                "status": "partial",
+                "coverage_state": "partial",
+                "coverage_proof_type": "explicit_row_bound",
+                "coverage_proof_reference": "fixture-orphan-partial",
+            },
+            "partial",
+            "source_partial",
+        ),
+        ({"status": "unknown", "row_count": 1}, "unknown", "schema fixture"),
+        ({"status": "schema_changed"}, "blocked", "schema fixture"),
+    ],
+)
+def test_source_orphan_status_is_unmapped_across_source_states(
+    tmp_path, source_kwargs: dict, expected_top_level_status: str, expected_source_reason: str,
+) -> None:
+    db, repo, _, raw, raw_hash, source, _, _ = _seed_coverage(
+        tmp_path,
+        source_kwargs=source_kwargs,
+    )
+    _add_orphan(repo, raw=raw, raw_hash=raw_hash, source=source)
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+    orphan = next(
+        item for item in result["items"]
+        if item["item_kind"] == "source_observation_orphan"
+    )
+
+    assert result["status"] == expected_top_level_status
+    assert orphan["coverage_status"] == "source_observation_unmapped"
+    assert orphan["denominator_membership"] is None
+    assert "source_observation_unmapped" in orphan["reason_codes"]
+    assert expected_source_reason in orphan["reason_codes"]
+    assert result["aggregate"]["source_observation_orphan_count"] == 1
+    assert result["aggregate"]["denominator_expected_count"] == 1
+    assert result["aggregate"]["denominator_excluded_count"] == 0
+    assert result["aggregate"]["denominator_unresolved_count"] == 0
 
 
 def test_source_selection_is_exact_no_fallback_and_partial_requires_proof(tmp_path) -> None:
@@ -1038,6 +1151,46 @@ def test_classification_exclusion_and_foreign_currency_are_fail_closed(tmp_path)
 
 
 @pytest.mark.parametrize(
+    ("listing_date", "currency_raw", "expected_status", "expected_membership", "expected_reason"),
+    [
+        ("2000-09-05", "新台幣", "observed_eligible", "expected", None),
+        (TARGET_DATE, "新台幣", "observed_eligible", "expected", None),
+        ("2026-08-28", "新台幣", "excluded_by_lifecycle", "excluded", "not_yet_listed_on_source_trade_date"),
+        (None, "新台幣", "classification_unresolved", "unresolved", "classification_unresolved"),
+        ("2000-09-05", None, "classification_unresolved", "unresolved", "classification_unresolved"),
+        ("2000-09-05", "USD", "classification_unresolved", "unresolved", "classification_unresolved"),
+    ],
+)
+def test_classifier_listing_date_and_currency_require_positive_evidence(
+    tmp_path,
+    listing_date: str | None,
+    currency_raw: str | None,
+    expected_status: str,
+    expected_membership: str,
+    expected_reason: str | None,
+) -> None:
+    db, _, _, _, _, _, classification, _ = _seed_coverage(tmp_path)
+    _insert_independent_classification_root(
+        db,
+        classification,
+        market_raw="上市",
+        at="2026-08-27T04:01:00Z",
+        listing_date=listing_date,
+        currency_raw=currency_raw,
+    )
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+    item = result["items"][0]
+
+    assert item["coverage_status"] == expected_status
+    assert item["denominator_membership"] == expected_membership
+    if expected_reason is not None:
+        assert expected_reason in item["reason_codes"]
+
+
+@pytest.mark.parametrize(
     "correction_available_at",
     [
         "2026-08-26T04:01:00Z",
@@ -1194,6 +1347,110 @@ def test_cross_market_supersedes_lineage_never_resurrects_parent(
     assert twse["items"][0]["venue"] == "TWSE"
     assert tpex["items"][0]["venue"] == "TPEX"
     assert child["classification_evidence_id"] != parent["classification_evidence_id"]
+
+
+def test_source_lineage_bound_invalid_child_blocks_parent_without_fallback(tmp_path) -> None:
+    db, repo, _, raw, raw_hash, parent, _, _ = _seed_coverage(tmp_path)
+    child, _, _ = _add_source_revision(
+        repo,
+        db,
+        parent,
+        source_trade_date="2026-08-28",
+        source_trade_date_status="invalid",
+        query_dimensions={"target_trade_date": TARGET_DATE},
+    )
+
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    assert result["status"] == "blocked"
+    assert result["aggregate_assertion_state"] == "blocked"
+    assert result["source"]["source_status"] == "blocked"
+    assert result["source"]["source_trade_date"] is None
+    assert result["source"]["reason_codes"] == ["source_date_in_future_or_invalid"]
+    assert result["items"][0]["coverage_status"] == "source_blocked"
+    assert result["aggregate"]["item_status_counts"] == {"source_blocked": 1}
+    assert child["source_snapshot_id"]
+    assert raw["raw_resource_revision_id"]
+    assert raw_hash
+
+
+def test_source_lineage_revoked_child_blocks_parent_observation(tmp_path) -> None:
+    db, repo, _, _, _, parent, _, _ = _seed_coverage(tmp_path)
+    child, _, _ = _add_source_revision(
+        repo,
+        db,
+        parent,
+        status="revoked",
+    )
+    projection = EodCoverageRepository(str(db)).read(
+        CoverageRequest(
+            venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+        )
+    )
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    assert projection.source["source_snapshot_id"] == child["source_snapshot_id"]
+    assert result["source"]["source_status"] == "revoked"
+    assert result["source"]["reason_codes"] == ["source_revoke_without_replacement"]
+    assert result["items"][0]["coverage_status"] == "source_blocked"
+
+
+def test_source_lineage_post_k_child_does_not_hide_parent(tmp_path) -> None:
+    db, repo, _, _, _, parent, _, _ = _seed_coverage(tmp_path)
+    child, _, _ = _add_source_revision(
+        repo,
+        db,
+        parent,
+        at="2026-08-28T01:00:00Z",
+        available_at="2026-08-28T01:00:00Z",
+        ingested_at="2026-08-28T01:00:00Z",
+    )
+    projection = EodCoverageRepository(str(db)).read(
+        CoverageRequest(
+            venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+        )
+    )
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    assert projection.source["source_snapshot_id"] == parent["source_snapshot_id"]
+    assert projection.source["source_snapshot_id"] != child["source_snapshot_id"]
+    assert result["source"]["source_status"] == "available"
+    assert result["items"][0]["coverage_status"] == "observed_eligible"
+
+
+def test_source_lineage_corrected_valid_replacement_is_selected(tmp_path) -> None:
+    db, repo, anchor, _, _, parent, classification, _ = _seed_coverage(tmp_path)
+    child, child_raw, child_hash = _add_source_revision(repo, db, parent)
+    _observation(
+        repo,
+        raw=child_raw,
+        raw_hash=child_hash,
+        source=child,
+        classification=classification,
+        anchor=anchor,
+        instrument_revision_id=_identity_revision_id(db, anchor["instrument_id"]),
+        at="2026-08-27T06:02:00Z",
+        revision_number=2,
+        supersedes_observation_id=_observation_id(db),
+    )
+    projection = EodCoverageRepository(str(db)).read(
+        CoverageRequest(
+            venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+        )
+    )
+    result = EodCoverageService(str(db)).as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    assert projection.source["source_snapshot_id"] == child["source_snapshot_id"]
+    assert result["source"]["source_status"] == "available"
+    assert result["items"][0]["coverage_status"] == "observed_eligible"
 
 
 def test_bound_invalid_source_date_is_blocked_without_older_fallback(tmp_path) -> None:
