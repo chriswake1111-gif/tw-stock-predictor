@@ -3,10 +3,10 @@
 ## Status
 
 This document records the LUK-29 Phase 14 Implementation scope and the latest
-Third Code Review remediation. The implementation is isolated from the Phase
-13 baseline `be8e931038bf818cf7d9f578e18fa91b8f068cd4` and remains in one Draft
-PR for the Fourth Code Review gate. It is not a merge, deployment, production
-activation, or Phase 15 authorization.
+Third Code Review remediation. Phase 14 subsequently completed its merge and
+post-merge main CI closure. Phase 15 is separately authorized under LUK-39;
+this document does not authorize or describe Phase 15 implementation,
+deployment, production activation, or Phase 16.
 
 ## Purpose and boundary
 

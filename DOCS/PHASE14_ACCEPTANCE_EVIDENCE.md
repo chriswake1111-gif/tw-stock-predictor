@@ -3,9 +3,9 @@
 ## Scope
 
 This evidence file covers the Phase 14 Implementation and the latest Third
-Code Review remediation. Baseline: `be8e931038bf818cf7d9f578e18fa91b8f068cd4`.
-The implementation must remain in one Draft PR through the review gates before
-any merge or deployment. Phase 15 is not started.
+Code Review remediation. Phase 14 subsequently completed its merge and
+post-merge main CI closure. Phase 15 implementation is separately authorized
+under LUK-39 and is not covered by this Phase 14 evidence file.
 
 ## Acceptance mapping
 
@@ -20,7 +20,7 @@ any merge or deployment. Phase 15 is not started.
 | AC-26–AC-29 | GET-only current/as-of routes, 422/503 handling, absence of a `trade_date` query parameter, stable DTO redaction, and query-only public reads are covered by `src/api/routes/v2_eod_close.py` and API tests. |
 | AC-30–AC-31 | The `/eod-close` frontend page, API client/types, neutral disclosure, backend-only GET calls, and non-available null rendering are covered by the frontend unit test. |
 | AC-32–AC-34 | Evidence backup/restore includes the six EOD tables, including command reservations; the Phase 14 repository/service tests cover migration, lineage, idempotency, atomic failure recovery, classifier fixtures, as-of blocker behavior, backup/restore, and Phase 10/13 regression boundaries. |
-| AC-35 | Phase 14 scope/boundary documentation, acceptance evidence, explicit no-calendar/no-fallback policy, Draft PR-only gate, and “Phase 15 not started” state are recorded in this file and `DOCS/EVIDENCE_MODEL_V2_PHASE14.md`. |
+| AC-35 | Phase 14 scope/boundary documentation, acceptance evidence, explicit no-calendar/no-fallback policy, and the completed Phase 14 merge/CI closure are recorded in this file and `DOCS/EVIDENCE_MODEL_V2_PHASE14.md`; Phase 15 implementation evidence remains in LUK-39. |
 
 ## First Code Review remediation evidence
 
