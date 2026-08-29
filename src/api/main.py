@@ -19,6 +19,7 @@ from src.api.routes.research_workflow import router as research_workflow_router
 from src.api.routes.v2_universe import router as v2_universe_router
 from src.api.routes.v2_eod_close import router as v2_eod_close_router
 from src.api.routes.v2_eod_coverage import router as v2_eod_coverage_router
+from src.api.routes.v2_market_context import router as v2_market_context_router
 from src.api.workflow_security import ResearchBoundaryMiddleware
 from src.domain.model_status import LEGACY_V1_MODEL_METADATA
 from src.scheduler import AutoScheduler
@@ -69,6 +70,7 @@ app.include_router(research_workflow_router)
 app.include_router(v2_universe_router)
 app.include_router(v2_eod_close_router)
 app.include_router(v2_eod_coverage_router)
+app.include_router(v2_market_context_router)
 
 @app.get("/api/health")
 def health_check():
