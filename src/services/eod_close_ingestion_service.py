@@ -1027,7 +1027,7 @@ class EodCloseIngestionService:
             raw_revision = self.foundation.add_raw_revision(revision, connection=conn)
             self._inject_failure("after_raw_revision")
             previous_classification = self.repository.latest_classification_for_code(
-                official_code.strip(), market_raw=parsed.market_raw, connection=conn
+                official_code.strip(), connection=conn
             )
             evidence = self.repository.add_classification_evidence({
                 "resource_id": CLASSIFICATION_RESOURCE_ID,

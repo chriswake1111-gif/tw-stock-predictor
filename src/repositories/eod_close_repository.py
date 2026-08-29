@@ -417,24 +417,15 @@ class EodCloseRepository:
         self,
         official_code: str,
         *,
-        market_raw: str | None = None,
         connection: sqlite3.Connection | None = None,
     ) -> dict[str, Any] | None:
         with self._connection(connection) as conn:
-            clauses = [
-                "resource_id = ?",
-                "official_code = ?",
-            ]
-            params: list[Any] = [CLASSIFICATION_RESOURCE_ID, official_code]
-            if market_raw is not None:
-                clauses.append("market_raw = ?")
-                params.append(market_raw)
             return self._row(conn.execute(
-                f"""SELECT * FROM eod_product_classification_evidence
-                   WHERE {' AND '.join(clauses)}
+                """SELECT * FROM eod_product_classification_evidence
+                   WHERE resource_id = ? AND official_code = ?
                    ORDER BY revision_number DESC, ingested_at DESC,
                             classification_evidence_id DESC LIMIT 1""",
-                params,
+                (CLASSIFICATION_RESOURCE_ID, official_code),
             ).fetchone())
 
     def latest_observation(
@@ -489,7 +480,6 @@ class EodCloseRepository:
         conn: sqlite3.Connection,
         *,
         official_code: str,
-        market_raw: str | None = None,
         as_of: bool = False,
         cutoff: str | None = None,
     ) -> dict[str, Any] | None:
@@ -498,9 +488,6 @@ class EodCloseRepository:
             "official_code = ?",
         ]
         params: list[Any] = [CLASSIFICATION_RESOURCE_ID, official_code]
-        if market_raw is not None:
-            clauses.append("market_raw = ?")
-            params.append(market_raw)
         if as_of:
             if not cutoff:
                 raise ValueError("cutoff is required for as-of classification selection")
@@ -582,10 +569,7 @@ class EodCloseRepository:
                 cutoff=evaluated_at,
             ) if snapshot else None,
             "classification": self.latest_classification(
-                conn,
-                official_code=code,
-                market_raw="上市" if venue.value == "TWSE" else "上櫃",
-                cutoff=evaluated_at,
+                conn, official_code=code, cutoff=evaluated_at
             ),
             "identity": self.identity_for_eod(
                 conn, canonical_symbol=canonical_symbol, cutoff=evaluated_at
@@ -639,11 +623,7 @@ class EodCloseRepository:
                 as_of=True, cutoff=cutoff,
             ) if snapshot else None,
             "classification": self.latest_classification(
-                conn,
-                official_code=code,
-                market_raw="上市" if venue.value == "TWSE" else "上櫃",
-                as_of=True,
-                cutoff=cutoff,
+                conn, official_code=code, as_of=True, cutoff=cutoff
             ),
             "identity": self.identity_for_eod(
                 conn, canonical_symbol=canonical_symbol, cutoff=cutoff
@@ -787,16 +767,12 @@ class EodCloseRepository:
             ).fetchone()
             if existing:
                 return {**dict(existing), "created": False}
-            market_raw = payload.get("market_raw")
-            market_clause = "market_raw = ?" if market_raw is not None else "market_raw IS NULL"
-            market_params = [market_raw] if market_raw is not None else []
             previous = conn.execute(
-                f"""SELECT * FROM eod_product_classification_evidence
+                """SELECT * FROM eod_product_classification_evidence
                    WHERE resource_id = ? AND official_code = ?
-                     AND {market_clause}
                    ORDER BY revision_number DESC, ingested_at DESC,
                             classification_evidence_id DESC LIMIT 1""",
-                [resource_id, official_code, *market_params],
+                (resource_id, official_code),
             ).fetchone()
             supersedes = payload.get("supersedes_classification_evidence_id")
             if previous and supersedes != previous["classification_evidence_id"]:

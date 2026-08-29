@@ -594,20 +594,44 @@ class EodCoverageRepository:
             FROM source_ranked s
             WHERE s.rn = 1
         ),
-        classification_ranked AS (
-            SELECT c.*,
-                   ROW_NUMBER() OVER (
-                     PARTITION BY c.official_code, c.market_raw
-                     ORDER BY c.revision_number DESC,
-                              COALESCE(c.available_at, '') DESC,
-                              c.ingested_at DESC,
-                              c.classification_evidence_id DESC
-                   ) AS rn
+        classification_visible_rows AS (
+            SELECT c.*
             FROM eod_product_classification_evidence c
             CROSS JOIN params p
             WHERE c.resource_id = 'twse.isin.security_classification'
               AND c.available_at IS NOT NULL AND eod_timestamp_leq(c.available_at, p.cutoff) = 1
               AND c.ingested_at IS NOT NULL AND eod_timestamp_leq(c.ingested_at, p.cutoff) = 1
+        ),
+        classification_edges AS (
+            SELECT child.classification_evidence_id AS child_evidence_id,
+                   child.supersedes_classification_evidence_id AS parent_evidence_id
+            FROM classification_visible_rows child
+            WHERE child.supersedes_classification_evidence_id IS NOT NULL
+        ),
+        classification_excluded(classification_evidence_id) AS (
+            SELECT parent_evidence_id
+            FROM classification_edges
+            UNION
+            SELECT edge.parent_evidence_id
+            FROM classification_edges edge
+            JOIN classification_excluded excluded
+              ON excluded.classification_evidence_id = edge.child_evidence_id
+        ),
+        classification_ranked AS (
+            SELECT c.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY c.official_code, c.market_raw
+                     ORDER BY c.revision_number DESC,
+                              COALESCE(c.available_at, '') DESC,
+                              c.ingested_at DESC,
+                              c.classification_evidence_id DESC
+                   ) AS rn
+            FROM classification_visible_rows c
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM classification_excluded excluded
+                WHERE excluded.classification_evidence_id = c.classification_evidence_id
+            )
         ),
         classification_context AS (
             -- Phase 14 classifier evidence has no approved D-effective field.

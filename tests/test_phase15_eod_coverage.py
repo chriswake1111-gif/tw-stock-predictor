@@ -142,6 +142,72 @@ def _seed_coverage(
     return db, repo, anchor, raw, raw_hash, source, classification, observation
 
 
+def _insert_independent_classification_root(
+    db,
+    template: dict,
+    *,
+    market_raw: str,
+    at: str = "2026-08-27T04:02:00Z",
+) -> dict:
+    """Insert an independent immutable root without invoking Phase 14 writes.
+
+    Phase 14's existing write path keys a classification correction by code.
+    This fixture represents a genuinely independent cross-venue root directly
+    so the Phase 15 projection can test exact market-lane selection without
+    broadening that prior-phase behavior.
+    """
+
+    raw, raw_hash = _raw(
+        db,
+        "twse.isin.security_classification",
+        "twse-isin-official",
+        f"independent-class:{market_raw}:{at}",
+        at,
+    )
+    row = dict(template)
+    row.pop("created", None)
+    row.update({
+        "classification_evidence_id": f"fixture-class-{raw_hash[:24]}",
+        "raw_resource_revision_id": raw["raw_resource_revision_id"],
+        "market_raw": market_raw,
+        "raw_payload_sha256": raw_hash,
+        "normalized_payload_sha256": hashlib.sha256(
+            f"independent-class-normalized:{market_raw}:{at}".encode()
+        ).hexdigest(),
+        "fetched_at": at,
+        "received_at": at,
+        "available_at": at,
+        "ingested_at": at,
+        "source_record_reference": (
+            f"twse.isin.security_classification:2330:{market_raw}"
+        ),
+        "revision_number": 1,
+        "supersedes_classification_evidence_id": None,
+        "identity_fingerprint": hashlib.sha256(json.dumps({
+            "resource_id": template["resource_id"],
+            "official_code": template["official_code"],
+            "raw_payload_sha256": raw_hash,
+            "classification_state": template["classification_state"],
+        }, ensure_ascii=False, sort_keys=True).encode()).hexdigest(),
+    })
+    with sqlite3.connect(db) as conn:
+        columns = ",".join(row)
+        placeholders = ",".join("?" for _ in row)
+        conn.execute(
+            f"INSERT INTO eod_product_classification_evidence ({columns}) "
+            f"VALUES ({placeholders})",
+            tuple(row.values()),
+        )
+        cursor = conn.execute(
+            "SELECT * FROM eod_product_classification_evidence "
+            "WHERE classification_evidence_id = ?",
+            (row["classification_evidence_id"],),
+        )
+        inserted = cursor.fetchone()
+        column_names = [description[0] for description in cursor.description]
+    return dict(zip(column_names, inserted))
+
+
 def _add_tpex_identity(db) -> dict:
     universe = UniverseRepository(str(db), guard=UniverseWriteGuard(True))
     context = UniverseOperatorContext(
@@ -961,7 +1027,7 @@ def test_non_material_classifier_correction_keeps_latest_k_visible_state(tmp_pat
 
 
 def test_same_code_classifier_selection_is_separate_for_twse_and_tpex(tmp_path) -> None:
-    db, repo, _, _, _, _, _, _ = _seed_coverage(tmp_path)
+    db, repo, _, _, _, _, classification, _ = _seed_coverage(tmp_path)
     tpex_anchor = _add_tpex_identity(db)
     tpex_raw, tpex_hash = _raw(
         db,
@@ -971,10 +1037,9 @@ def test_same_code_classifier_selection_is_separate_for_twse_and_tpex(tmp_path) 
         "2026-08-27T05:00:00Z",
     )
     tpex_source = _tpex_source(repo, tpex_raw, tpex_hash)
-    tpex_classification = _classification(
-        repo,
+    tpex_classification = _insert_independent_classification_root(
         db,
-        at="2026-08-27T04:02:00Z",
+        classification,
         market_raw="上櫃",
     )
     _tpex_observation(
@@ -1004,6 +1069,61 @@ def test_same_code_classifier_selection_is_separate_for_twse_and_tpex(tmp_path) 
         assert result["items"][0]["denominator_membership"] == "expected"
     assert twse["items"][0]["venue"] == "TWSE"
     assert tpex["items"][0]["venue"] == "TPEX"
+
+
+@pytest.mark.parametrize("child_state", ["accepted", "blocked", "revoked"])
+def test_cross_market_supersedes_lineage_never_resurrects_parent(
+    tmp_path, child_state: str,
+) -> None:
+    db, repo, _, _, _, _, parent, _ = _seed_coverage(tmp_path)
+    child = _classification(
+        repo,
+        db,
+        at="2026-08-27T04:01:00Z",
+        state=child_state,
+        market_raw="上櫃",
+        revision_number=2,
+        supersedes_classification_evidence_id=parent["classification_evidence_id"],
+    )
+
+    tpex_anchor = _add_tpex_identity(db)
+    tpex_raw, tpex_hash = _raw(
+        db,
+        "tpex.eod.daily_close_quotes",
+        "tpex-universe-official",
+        "tpex-cross-market-lineage-2026-08-27",
+        "2026-08-27T05:00:00Z",
+    )
+    tpex_source = _tpex_source(repo, tpex_raw, tpex_hash)
+    _tpex_observation(
+        repo,
+        raw=tpex_raw,
+        raw_hash=tpex_hash,
+        source=tpex_source,
+        classification=child,
+        anchor=tpex_anchor,
+        instrument_revision_id=_identity_revision_id(db, tpex_anchor["instrument_id"]),
+    )
+
+    service = EodCoverageService(str(db))
+    twse = service.as_of(
+        venue="TWSE", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+    tpex = service.as_of(
+        venue="TPEX", source_trade_date=TARGET_DATE, knowledge_cutoff_at=CUTOFF,
+    )
+
+    for result in (twse, tpex):
+        item = result["items"][0]
+        assert result["status"] == "insufficient_data"
+        assert result["aggregate"]["denominator_expected_count"] == 0
+        assert result["aggregate"]["denominator_excluded_count"] == 0
+        assert result["aggregate"]["denominator_unresolved_count"] == 1
+        assert item["coverage_status"] == "classification_unresolved"
+        assert item["denominator_membership"] == "unresolved"
+    assert twse["items"][0]["venue"] == "TWSE"
+    assert tpex["items"][0]["venue"] == "TPEX"
+    assert child["classification_evidence_id"] != parent["classification_evidence_id"]
 
 
 def test_bound_invalid_source_date_is_blocked_without_older_fallback(tmp_path) -> None:
