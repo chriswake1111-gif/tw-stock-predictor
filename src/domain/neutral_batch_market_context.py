@@ -528,19 +528,27 @@ def _phase14_reason_codes(item: Mapping[str, Any]) -> list[str]:
 
     reasons: list[str] = []
 
+    source_state = str(item.get("_source_state") or CoverageSourceState.UNKNOWN.value)
+
     def add(reason: Any) -> None:
         mapped = _PHASE14_REASON_MAP.get(str(reason).strip())
         if mapped in _PHASE14_REASON_SET and mapped not in reasons:
             reasons.append(mapped)
 
     for reason in item.get("reason_codes", ()) or ():
+        # A proof-bearing partial source is a venue-level coverage diagnostic.
+        # It must not invalidate an independently exact and eligible item
+        # observation.  The venue assembly still consumes source_state and
+        # reports the partial aggregate separately.
+        if source_state == CoverageSourceState.PARTIAL.value and str(reason).strip() in {
+            "source_partial",
+            "partial_venue_payload",
+        }:
+            continue
         add(reason)
 
-    source_state = str(item.get("_source_state") or CoverageSourceState.UNKNOWN.value)
     if source_state == CoverageSourceState.BLOCKED.value:
         add(item.get("_source_reason") or "source_blocked")
-    elif source_state == CoverageSourceState.PARTIAL.value:
-        add("source_partial")
     elif source_state == CoverageSourceState.UNKNOWN.value:
         add(item.get("_source_reason") or "no_exact_D")
 
@@ -634,7 +642,13 @@ def _public_eod_close(item: Mapping[str, Any]) -> dict[str, Any] | None:
     eligible = (
         item.get("coverage_status") == CoverageStatus.OBSERVED_ELIGIBLE.value
         and item.get("item_state") == "available"
-        and item.get("_source_state") == CoverageSourceState.USABLE.value
+        and (
+            item.get("_source_state") == CoverageSourceState.USABLE.value
+            or (
+                item.get("_source_state") == CoverageSourceState.PARTIAL.value
+                and item.get("_source_proof_present") is True
+            )
+        )
         and item.get("public_eligibility_status") == "eligible"
         and close_state == "valid"
         and close_decimal is not None

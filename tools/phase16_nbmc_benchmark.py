@@ -60,6 +60,80 @@ TWSE_COUNT = 1200
 TPEX_COUNT = 800
 ORPHAN_COUNT = 40
 ADDITIONAL_ROWS = 240
+ADDITIONAL_ROW_MIX = {
+    "accepted_correction_lineage": 80,
+    "revoke_replacement_lineage": 80,
+    "identity_epoch_reuse": 40,
+    "lifecycle_operational": 40,
+}
+VARIANT_SEMANTICS = {
+    "both_available": {
+        "twse_source": "usable",
+        "tpex_source": "usable",
+        "tpex_denominator": "expected",
+        "post_d_evidence": False,
+    },
+    "twse_partial_tpex_available": {
+        "twse_source": "partial",
+        "tpex_source": "usable",
+        "tpex_denominator": "expected",
+        "post_d_evidence": False,
+    },
+    "twse_available_tpex_blocked": {
+        "twse_source": "usable",
+        "tpex_source": "blocked",
+        "tpex_denominator": "expected",
+        "post_d_evidence": False,
+    },
+    "one_venue_no_exact_d_other_available": {
+        "twse_source": "usable",
+        "tpex_source": "unknown_no_exact_D",
+        "tpex_denominator": "expected",
+        "post_d_evidence": False,
+    },
+    "one_venue_usable_other_unresolved_or_empty": {
+        "twse_source": "usable",
+        "tpex_source": "unknown_no_source",
+        "tpex_denominator": "unresolved",
+        "post_d_evidence": False,
+    },
+    "post_k_post_d_evidence": {
+        "twse_source": "usable",
+        "tpex_source": "usable",
+        "tpex_denominator": "expected",
+        "post_d_evidence": True,
+    },
+    "same_d_date_only_ambiguity": {
+        "twse_source": "usable",
+        "tpex_source": "usable",
+        "tpex_denominator": "expected",
+        "post_d_evidence": False,
+    },
+    "classification_ambiguity": {
+        "twse_source": "usable",
+        "tpex_source": "usable",
+        "tpex_denominator": "expected",
+        "post_d_evidence": False,
+    },
+    "asymmetric_orphan_distribution": {
+        "twse_source": "usable",
+        "tpex_source": "usable",
+        "tpex_denominator": "expected",
+        "post_d_evidence": False,
+    },
+    "first_page_and_continuation_page": {
+        "twse_source": "usable",
+        "tpex_source": "usable",
+        "tpex_denominator": "expected",
+        "post_d_evidence": False,
+    },
+    "limit_100": {
+        "twse_source": "usable",
+        "tpex_source": "usable",
+        "tpex_denominator": "expected",
+        "post_d_evidence": False,
+    },
+}
 
 
 def canonical_manifest_bytes(manifest: dict[str, Any]) -> bytes:
@@ -102,6 +176,12 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("benchmark_candidate_count_mismatch")
     if manifest.get("additional_identity_revision_event_rows") != ADDITIONAL_ROWS:
         raise ValueError("benchmark_additional_row_count_mismatch")
+    if manifest.get("additional_row_mix") != ADDITIONAL_ROW_MIX:
+        raise ValueError("benchmark_additional_row_mix_mismatch")
+    if manifest.get("variant_semantics") != VARIANT_SEMANTICS:
+        raise ValueError("benchmark_variant_semantics_mismatch")
+    if sum(ADDITIONAL_ROW_MIX.values()) != ADDITIONAL_ROWS:
+        raise ValueError("benchmark_additional_row_mix_total_mismatch")
     if manifest.get("combined_source_observation_orphan_count") != ORPHAN_COUNT:
         raise ValueError("benchmark_orphan_count_mismatch")
     if tuple(manifest.get("variants") or ()) != DEFAULT_VARIANTS:
@@ -330,10 +410,21 @@ def _insert_universe(conn: sqlite3.Connection, raw: dict[str, str]) -> dict[tupl
     return anchors
 
 
-def _insert_classification(conn: sqlite3.Connection, raw: dict[str, str]) -> dict[str, str]:
+def _insert_classification(
+    conn: sqlite3.Connection,
+    raw: dict[str, str],
+    variant: str = "both_available",
+) -> dict[str, str]:
     rows = []
     classifications: dict[str, str] = {}
     for venue, count in (("TWSE", TWSE_COUNT), ("TPEX", TPEX_COUNT)):
+        if (
+            variant == "one_venue_usable_other_unresolved_or_empty"
+            and venue == "TPEX"
+        ):
+            # The variant deliberately leaves the TPEX denominator universe
+            # present while omitting its classification evidence.
+            continue
         market = "上市" if venue == "TWSE" else "上櫃"
         for index in range(count):
             code = _code(venue, index)
@@ -509,7 +600,7 @@ def _insert_sources_and_observations(
         for index in range(count):
             code = _code(venue, index)
             instrument_id, instrument_revision_id = anchors[(venue, code)]
-            evidence_id = classifications[f"{venue}:{code}"]
+            evidence_id = classifications.get(f"{venue}:{code}")
             observation_id = f"phase16-observation-{venue.lower()}-{index:04d}"
             row_hash = _sha("observation:" + observation_id)
             observation_rows.append(
@@ -619,6 +710,190 @@ def _insert_sources_and_observations(
     )
 
 
+def _copy_table_row(
+    conn: sqlite3.Connection,
+    table: str,
+    key_column: str,
+    key_value: str,
+    overrides: dict[str, Any],
+) -> dict[str, Any]:
+    """Copy a fixture row while keeping schema additions explicit and safe."""
+
+    template = conn.execute(
+        f"SELECT * FROM {table} WHERE {key_column} = ?",
+        (key_value,),
+    ).fetchone()
+    if template is None:
+        raise RuntimeError(f"benchmark_fixture_template_missing:{table}:{key_value}")
+    template_values = dict(template)
+    columns = [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
+    values = [overrides.get(column, template_values.get(column)) for column in columns]
+    placeholders = ",".join("?" for _ in columns)
+    conn.execute(
+        f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})",
+        values,
+    )
+    return {column: value for column, value in zip(columns, values)}
+
+
+def _insert_master_lineage_row(
+    conn: sqlite3.Connection,
+    *,
+    template_instrument_revision_id: str,
+    instrument_id: str,
+    revision_number: int,
+    status: str,
+    marker: str,
+    supersedes_instrument_revision_id: str | None,
+    supersedes_universe_revision_id: str | None,
+    logical_revision_key: str | None = None,
+    available_at: str = "2026-08-28T00:00:00Z",
+    first_observed_at: str | None = None,
+) -> dict[str, str]:
+    """Insert a real accepted/revoked master correction lineage pair."""
+
+    template_ir = dict(conn.execute(
+        "SELECT * FROM universe_instrument_revisions WHERE instrument_revision_id = ?",
+        (template_instrument_revision_id,),
+    ).fetchone() or {})
+    if not template_ir:
+        raise RuntimeError(f"benchmark_fixture_instrument_revision_missing:{template_instrument_revision_id}")
+    template_ur = dict(conn.execute(
+        "SELECT * FROM universe_revisions WHERE universe_revision_id = ?",
+        (template_ir["universe_revision_id"],),
+    ).fetchone() or {})
+    if not template_ur:
+        raise RuntimeError(f"benchmark_fixture_universe_revision_missing:{template_ir['universe_revision_id']}")
+
+    universe_revision_id = f"phase16-urev-{_sha(marker)[:24]}"
+    instrument_revision_id = f"phase16-uirev-{_sha(marker)[:24]}"
+    payload_hash = _sha("payload:" + marker)
+    normalized_hash = _sha("normalized:" + marker)
+    source_reference = marker
+    observed_at = first_observed_at or str(template_ir.get("first_observed_at") or available_at)
+    accepted = status == "accepted"
+    if accepted:
+        listing_status = "listed"
+        trading_state = "normal"
+        membership_state = "visible"
+        freshness_status = "current"
+        current_complete = 1
+        coverage_complete = 1
+        reason = None
+    else:
+        listing_status = "unknown"
+        trading_state = "unknown"
+        membership_state = "blocked"
+        freshness_status = "blocked"
+        current_complete = 0
+        coverage_complete = 0
+        reason = marker
+
+    _copy_table_row(
+        conn,
+        "universe_revisions",
+        "universe_revision_id",
+        template_ur["universe_revision_id"],
+        {
+            "universe_revision_id": universe_revision_id,
+            "revision_number": revision_number,
+            "logical_revision_key": logical_revision_key or template_ur["logical_revision_key"],
+            "supersedes_revision_id": supersedes_universe_revision_id,
+            "source_effective_date": template_ur.get("source_effective_date"),
+            "first_observed_at": observed_at,
+            "fetched_at": available_at,
+            "received_at": available_at,
+            "available_at": available_at,
+            "ingested_at": available_at,
+            "status": status,
+            "reason": reason,
+            "payload_sha256": payload_hash,
+            "raw_payload_sha256": payload_hash,
+            "normalized_payload_sha256": normalized_hash,
+            "query_dimensions_json": "{}",
+            "source_record_reference": source_reference,
+            "parser_evidence_fingerprint": _sha("parser:" + marker),
+            "schema_evidence_fingerprint": _sha("schema-evidence:" + marker),
+            "source_reference": source_reference,
+            "freshness_status": freshness_status,
+            "current_complete": current_complete,
+            "coverage_complete": coverage_complete,
+        },
+    )
+    _copy_table_row(
+        conn,
+        "universe_instrument_revisions",
+        "instrument_revision_id",
+        template_instrument_revision_id,
+        {
+            "instrument_revision_id": instrument_revision_id,
+            "instrument_id": instrument_id,
+            "universe_revision_id": universe_revision_id,
+            "revision_number": revision_number,
+            "listing_status": listing_status,
+            "trading_state": trading_state,
+            "membership_state": membership_state,
+            "first_observed_at": observed_at,
+            "received_at": available_at,
+            "fetched_at": available_at,
+            "available_at": available_at,
+            "ingested_at": available_at,
+            "freshness_status": freshness_status,
+            "current_complete": current_complete,
+            "coverage_complete": coverage_complete,
+            "status": status,
+            "reason": reason,
+            "source_reference": source_reference,
+            "payload_sha256": payload_hash,
+            "normalized_payload_sha256": normalized_hash,
+            "raw_payload_sha256": payload_hash,
+            "raw_resource_revision_id": template_ur.get("raw_resource_revision_id"),
+            "query_dimensions_json": "{}",
+            "source_record_reference": source_reference,
+            "parser_evidence_fingerprint": _sha("parser:" + marker),
+            "schema_evidence_fingerprint": _sha("schema-evidence:" + marker),
+            "supersedes_revision_id": supersedes_instrument_revision_id,
+        },
+    )
+    return {
+        "universe_revision_id": universe_revision_id,
+        "instrument_revision_id": instrument_revision_id,
+    }
+
+
+def _copy_observation_lineage(
+    conn: sqlite3.Connection,
+    *,
+    base_observation_id: str,
+    instrument_id: str,
+    instrument_revision_id: str,
+    revision_number: int,
+    marker: str,
+) -> str:
+    observation_id = f"phase16-obs-{_sha(marker)[:24]}"
+    payload_hash = _sha("payload:" + marker)
+    _copy_table_row(
+        conn,
+        "eod_close_observations",
+        "close_observation_id",
+        base_observation_id,
+        {
+            "close_observation_id": observation_id,
+            "instrument_id": instrument_id,
+            "instrument_revision_id": instrument_revision_id,
+            "revision_number": revision_number,
+            "supersedes_observation_id": base_observation_id,
+            "row_fingerprint": _sha("row:" + marker),
+            "raw_payload_sha256": payload_hash,
+            "normalized_payload_sha256": _sha("normalized:" + marker),
+            "source_record_reference": marker,
+            "source_note": "Phase 16 semantic lineage fixture",
+            "identity_fingerprint": _sha("identity:" + marker),
+        },
+    )
+    return observation_id
+
+
 def _insert_additional_rows(
     conn: sqlite3.Connection,
     anchors: dict[tuple[str, str], tuple[str, str]],
@@ -626,22 +901,180 @@ def _insert_additional_rows(
     raw: dict[str, str],
     variant: str,
 ) -> None:
-    rows = []
-    anchor_values = list(anchors.items())[:ADDITIONAL_ROWS]
-    for index, ((venue, code), (instrument_id, _)) in enumerate(anchor_values):
-        event_id = f"phase16-post-k-event-{index:03d}"
-        rows.append(
+    # 80 accepted corrections: each is a K-visible accepted child that
+    # supersedes the original master and observation.
+    for index in range(40, 120):
+        venue, code = "TWSE", _code("TWSE", index)
+        instrument_id, base_ir_id = anchors[(venue, code)]
+        base_ur_id = conn.execute(
+            "SELECT universe_revision_id FROM universe_instrument_revisions WHERE instrument_revision_id = ?",
+            (base_ir_id,),
+        ).fetchone()[0]
+        marker = f"phase16:accepted-correction:{venue}:{code}"
+        child = _insert_master_lineage_row(
+            conn,
+            template_instrument_revision_id=base_ir_id,
+            instrument_id=instrument_id,
+            revision_number=2,
+            status="accepted",
+            marker=marker,
+            supersedes_instrument_revision_id=base_ir_id,
+            supersedes_universe_revision_id=base_ur_id,
+        )
+        base_observation_id = conn.execute(
+            "SELECT close_observation_id FROM eod_close_observations WHERE instrument_id = ? AND revision_number = 1",
+            (instrument_id,),
+        ).fetchone()[0]
+        _copy_observation_lineage(
+            conn,
+            base_observation_id=base_observation_id,
+            instrument_id=instrument_id,
+            instrument_revision_id=child["instrument_revision_id"],
+            revision_number=2,
+            marker=marker,
+        )
+
+    # 40 revoke/replacement cases: a revoked child is itself superseded by a
+    # K-visible accepted replacement.  Both edges are retained in the
+    # immutable revision graph.
+    for index in range(120, 160):
+        venue, code = "TWSE", _code("TWSE", index)
+        instrument_id, base_ir_id = anchors[(venue, code)]
+        base_ur_id = conn.execute(
+            "SELECT universe_revision_id FROM universe_instrument_revisions WHERE instrument_revision_id = ?",
+            (base_ir_id,),
+        ).fetchone()[0]
+        revoke_marker = f"phase16:revoke:{venue}:{code}"
+        revoked = _insert_master_lineage_row(
+            conn,
+            template_instrument_revision_id=base_ir_id,
+            instrument_id=instrument_id,
+            revision_number=2,
+            status="revoked",
+            marker=revoke_marker,
+            supersedes_instrument_revision_id=base_ir_id,
+            supersedes_universe_revision_id=base_ur_id,
+        )
+        replacement_marker = f"phase16:replacement:{venue}:{code}"
+        replacement = _insert_master_lineage_row(
+            conn,
+            template_instrument_revision_id=revoked["instrument_revision_id"],
+            instrument_id=instrument_id,
+            revision_number=3,
+            status="accepted",
+            marker=replacement_marker,
+            supersedes_instrument_revision_id=revoked["instrument_revision_id"],
+            supersedes_universe_revision_id=revoked["universe_revision_id"],
+        )
+        base_observation_id = conn.execute(
+            "SELECT close_observation_id FROM eod_close_observations WHERE instrument_id = ? AND revision_number = 1",
+            (instrument_id,),
+        ).fetchone()[0]
+        _copy_observation_lineage(
+            conn,
+            base_observation_id=base_observation_id,
+            instrument_id=instrument_id,
+            instrument_revision_id=replacement["instrument_revision_id"],
+            revision_number=2,
+            marker=replacement_marker,
+        )
+
+    # 40 identity-epoch reuses: terminate the first epoch before D, allocate
+    # a distinct immutable anchor, and bind a new master/observation epoch.
+    for index in range(160, 200):
+        venue, code = "TWSE", _code("TWSE", index)
+        old_instrument_id, base_ir_id = anchors[(venue, code)]
+        marker = f"phase16:identity-epoch-reuse:{venue}:{code}"
+        new_instrument_id = f"phase16-instrument-epoch2-{venue.lower()}-{index:04d}"
+        _copy_table_row(
+            conn,
+            "universe_instruments",
+            "instrument_id",
+            old_instrument_id,
+            {
+                "instrument_id": new_instrument_id,
+                "identity_epoch": 2,
+                "identity_binding_fingerprint": _sha("binding:" + marker),
+                "first_observed_at": "2026-08-27T00:00:00Z",
+                "first_source_reference": marker,
+                "source_identity": marker,
+                "display_name": f"Benchmark {venue} {code} epoch 2",
+                "created_at": "2026-08-27T00:00:00Z",
+            },
+        )
+        child = _insert_master_lineage_row(
+            conn,
+            template_instrument_revision_id=base_ir_id,
+            instrument_id=new_instrument_id,
+            revision_number=1,
+            status="accepted",
+            marker=marker,
+            supersedes_instrument_revision_id=None,
+            supersedes_universe_revision_id=None,
+            logical_revision_key=marker,
+            available_at="2026-08-27T00:00:00Z",
+            first_observed_at="2026-08-27T00:00:00Z",
+        )
+        base_observation_id = conn.execute(
+            "SELECT close_observation_id FROM eod_close_observations WHERE instrument_id = ? AND revision_number = 1",
+            (old_instrument_id,),
+        ).fetchone()[0]
+        _copy_observation_lineage(
+            conn,
+            base_observation_id=base_observation_id,
+            instrument_id=new_instrument_id,
+            instrument_revision_id=child["instrument_revision_id"],
+            revision_number=2,
+            marker=marker,
+        )
+        conn.execute(
+            """INSERT INTO universe_lifecycle_events (
+                lifecycle_event_id, instrument_id, event_type, event_date,
+                effective_at, available_at, ingested_at, source_reference,
+                status, reason
+            ) VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (
-                event_id,
-                instrument_id,
-                "listed",
-                "2026-08-28",
-                None,
-                "2026-08-30T00:00:00Z",
-                "2026-08-30T00:00:00Z",
-                f"phase16:post-k:{venue}:{code}",
+                f"phase16-lifecycle-{_sha(marker)[:24]}",
+                old_instrument_id,
+                "terminated",
+                "2026-08-27",
+                "2026-08-27T00:00:00Z",
+                "2026-08-27T06:00:00Z",
+                "2026-08-27T06:00:00Z",
+                marker,
                 "accepted",
-                "post-K benchmark evidence",
+                "identity epoch reuse before D",
+            ),
+        )
+
+    # 40 lifecycle/operational evidence rows.  Only this named variant has an
+    # actual post-D and post-K branch; the other variants keep the events
+    # D-visible.  A date-only event is intentional: the projection must use
+    # its conservative calendar-date boundary rather than inventing an
+    # intraday timestamp.
+    if variant == "post_k_post_d_evidence":
+        event_date = "2026-08-29"
+        available_at = "2026-08-29T01:00:00Z"
+    else:
+        event_date = "2026-08-27"
+        available_at = "2026-08-27T06:00:00Z"
+    lifecycle_rows = []
+    for index in range(200, 240):
+        venue, code = "TWSE", _code("TWSE", index)
+        instrument_id = anchors[(venue, code)][0]
+        marker = f"phase16:operational:{variant}:{venue}:{code}"
+        lifecycle_rows.append(
+            (
+                f"phase16-lifecycle-operational-{_sha(marker)[:24]}",
+                instrument_id,
+                "resumed",
+                event_date,
+                None,
+                available_at,
+                available_at,
+                marker,
+                "accepted",
+                "Phase 16 operational workload evidence",
             )
         )
     conn.executemany(
@@ -650,7 +1083,7 @@ def _insert_additional_rows(
             effective_at, available_at, ingested_at, source_reference,
             status, reason
         ) VALUES (?,?,?,?,?,?,?,?,?,?)""",
-        rows,
+        lifecycle_rows,
     )
     if variant == "same_d_date_only_ambiguity":
         venue, code = "TWSE", _code("TWSE", 0)
@@ -710,7 +1143,7 @@ def _insert_additional_rows(
                 "same-D classification ambiguity",
                 "eod_product_scope_v1",
                 2,
-                classifications[f"{venue}:{code}"],
+                classifications.get(f"{venue}:{code}"),
                 None,
                 None,
                 "2026-08-28T00:00:00Z",
@@ -728,45 +1161,195 @@ def _insert_additional_rows(
         )
 
 
+def assert_fixture_semantics(path: Path, variant: str) -> None:
+    """Fail fast if a named benchmark variant loses its locked workload."""
+
+    expected = VARIANT_SEMANTICS[variant]
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        marker_counts = {
+            "accepted_correction_lineage": conn.execute(
+                "SELECT COUNT(*) FROM universe_instrument_revisions WHERE source_reference LIKE 'phase16:accepted-correction:%'"
+            ).fetchone()[0],
+            "revoke_lineage": conn.execute(
+                "SELECT COUNT(*) FROM universe_instrument_revisions WHERE source_reference LIKE 'phase16:revoke:%' AND status = 'revoked'"
+            ).fetchone()[0],
+            "replacement_lineage": conn.execute(
+                "SELECT COUNT(*) FROM universe_instrument_revisions WHERE source_reference LIKE 'phase16:replacement:%' AND status = 'accepted'"
+            ).fetchone()[0],
+            "identity_epoch_reuse": conn.execute(
+                "SELECT COUNT(*) FROM universe_instruments WHERE source_identity LIKE 'phase16:identity-epoch-reuse:%'"
+            ).fetchone()[0],
+            "identity_termination_events": conn.execute(
+                "SELECT COUNT(*) FROM universe_lifecycle_events WHERE source_reference LIKE 'phase16:identity-epoch-reuse:%' AND event_type = 'terminated' AND status = 'accepted'"
+            ).fetchone()[0],
+            "lifecycle_operational": conn.execute(
+                "SELECT COUNT(*) FROM universe_lifecycle_events WHERE source_reference LIKE 'phase16:operational:%' AND event_type = 'resumed' AND status = 'accepted'"
+            ).fetchone()[0],
+        }
+        if marker_counts != {
+            "accepted_correction_lineage": 80,
+            "revoke_lineage": 40,
+            "replacement_lineage": 40,
+            "identity_epoch_reuse": 40,
+            "identity_termination_events": 40,
+            "lifecycle_operational": 40,
+        }:
+            raise RuntimeError(f"benchmark_fixture_lineage_mix_mismatch:{variant}:{marker_counts}")
+
+        post_d_count = conn.execute(
+            """SELECT COUNT(*)
+               FROM universe_lifecycle_events
+               WHERE source_reference LIKE 'phase16:operational:%'
+                 AND event_date > ?
+                 AND available_at > ?
+                 AND ingested_at > ?""",
+            (D, K, K),
+        ).fetchone()[0]
+        if bool(post_d_count) != expected["post_d_evidence"]:
+            raise RuntimeError(f"benchmark_fixture_post_d_semantics_mismatch:{variant}")
+
+        tpex_source_count = conn.execute(
+            "SELECT COUNT(*) FROM eod_close_source_snapshots WHERE resource_id = 'tpex.eod.daily_close_quotes'"
+        ).fetchone()[0]
+        tpex_classification_count = conn.execute(
+            "SELECT COUNT(*) FROM eod_product_classification_evidence WHERE venue_raw = 'TPEX'"
+        ).fetchone()[0]
+        tpex_universe_count = conn.execute(
+            "SELECT COUNT(*) FROM universe_instruments WHERE venue = 'TPEX'"
+        ).fetchone()[0]
+        if variant == "one_venue_usable_other_unresolved_or_empty":
+            if (tpex_source_count, tpex_classification_count, tpex_universe_count) != (0, 0, TPEX_COUNT):
+                raise RuntimeError(f"benchmark_fixture_unresolved_denominator_mismatch:{variant}")
+        elif (tpex_source_count, tpex_classification_count, tpex_universe_count) != (1, TPEX_COUNT, TPEX_COUNT):
+            raise RuntimeError(f"benchmark_fixture_tpex_scope_mismatch:{variant}")
+
+        if variant == "one_venue_no_exact_d_other_available":
+            exact_tpex = conn.execute(
+                "SELECT COUNT(*) FROM eod_close_source_snapshots WHERE resource_id = 'tpex.eod.daily_close_quotes' AND source_trade_date = ? AND source_trade_date_status = 'valid'",
+                (D,),
+            ).fetchone()[0]
+            if exact_tpex != 0:
+                raise RuntimeError("benchmark_fixture_no_exact_d_branch_missing")
+
+    # Exercise the actual read contract in addition to the SQL marker audit.
+    service = NeutralBatchMarketContextService(str(path))
+    body = service.as_of(
+        market_date=D,
+        knowledge_cutoff_at=K,
+        venue_scope="TWSE_TPEX",
+        limit=1,
+    )
+    source_states = {
+        venue: body["per_venue"][venue]["source"]["state"]
+        for venue in ("TWSE", "TPEX")
+    }
+    expected_states = {
+        "TWSE": expected["twse_source"].split("_", 1)[0],
+        "TPEX": expected["tpex_source"].split("_", 1)[0],
+    }
+    if source_states != expected_states:
+        raise RuntimeError(f"benchmark_fixture_source_semantics_mismatch:{variant}:{source_states}")
+    tpex_aggregate = body["per_venue"]["TPEX"]["aggregate"]
+    if expected["tpex_denominator"] == "expected":
+        if tpex_aggregate["denominator_expected_count"] != TPEX_COUNT:
+            raise RuntimeError(f"benchmark_fixture_expected_denominator_mismatch:{variant}")
+    elif tpex_aggregate["denominator_unresolved_count"] != TPEX_COUNT:
+        raise RuntimeError(f"benchmark_fixture_unresolved_denominator_mismatch:{variant}")
+
+
 def build_database(path: Path, variant: str) -> None:
     migration = apply_valuation_migration(str(path))
     applied_migrations = tuple(migration.get("applied_additive_migration_ids") or ())
     if not applied_migrations or applied_migrations[-1] != BENCHMARK_MIGRATION_VERSION:
         raise RuntimeError("benchmark_migration_version_mismatch")
     with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         raw = _insert_raw_provenance(conn)
         anchors = _insert_universe(conn, raw)
-        classifications = _insert_classification(conn, raw)
+        classifications = _insert_classification(conn, raw, variant)
         _insert_sources_and_observations(conn, raw, anchors, classifications, variant)
         _insert_additional_rows(conn, anchors, classifications, raw, variant)
+    assert_fixture_semantics(path, variant)
 
 
 class CountingStorage:
-    def __init__(self, db_path: Path):
+    """Benchmark-only storage with optional persistent read connection."""
+
+    def __init__(self, db_path: Path, *, reuse_connection: bool = False):
         self.inner = EodCloseRepository(str(db_path))
+        self.reuse_connection = reuse_connection
         self.query_count = 0
+        self.connection_open_count = 0
+        self.transaction_count = 0
+        self.connection_ids: list[int] = []
+        self._connection: sqlite3.Connection | None = None
+
+    @staticmethod
+    def _trace_counter() -> tuple[Any, Any]:
+        count = 0
+
+        def trace(statement: str) -> None:
+            nonlocal count
+            normalized = statement.lstrip().upper()
+            if normalized.startswith(("WITH", "SELECT")):
+                count += 1
+
+        return trace, lambda: count
 
     @contextmanager
     def read_transaction(self):
-        with self.inner.read_transaction() as conn:
-            count = 0
+        if not self.reuse_connection:
+            with self.inner.read_transaction() as conn:
+                self.connection_open_count += 1
+                self.connection_ids.append(id(conn))
+                self.transaction_count += 1
+                trace, get_count = self._trace_counter()
+                conn.set_trace_callback(trace)
+                try:
+                    yield conn
+                finally:
+                    conn.set_trace_callback(None)
+                    self.query_count += get_count()
+            return
 
-            def trace(statement: str) -> None:
-                nonlocal count
-                normalized = statement.lstrip().upper()
-                if normalized.startswith(("WITH", "SELECT")):
-                    count += 1
+        if self._connection is None:
+            # The benchmark explicitly models a long-lived worker/storage
+            # connection.  Production repositories keep their normal
+            # per-request transaction lifecycle.
+            self._connection = self.inner._connect(query_only=True)
+            self.connection_open_count += 1
+        conn = self._connection
+        self.connection_ids.append(id(conn))
+        self.transaction_count += 1
+        trace, get_count = self._trace_counter()
+        conn.set_trace_callback(trace)
+        try:
+            conn.execute("BEGIN")
+            yield conn
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            # Rollback ends the read snapshot while retaining the same
+            # query-only connection for the next request.
+            if conn.in_transaction:
+                conn.rollback()
+            conn.set_trace_callback(None)
+            self.query_count += get_count()
 
-            conn.set_trace_callback(trace)
-            try:
-                yield conn
-            finally:
-                self.query_count += count
+    def close(self) -> None:
+        if self._connection is not None:
+            if self._connection.in_transaction:
+                self._connection.rollback()
+            self._connection.close()
+            self._connection = None
 
 
 def run_request(service: NeutralBatchMarketContextService, storage: CountingStorage, *, limit: int) -> dict[str, Any]:
     before = storage.query_count
+    before_connections = len(storage.connection_ids)
     started = time.perf_counter()
     first = service.as_of(
         market_date=D,
@@ -789,12 +1372,17 @@ def run_request(service: NeutralBatchMarketContextService, storage: CountingStor
     rows = [len(page.get("items", [])) for page in pages]
     if any(row_count > limit for row_count in rows):
         raise RuntimeError("benchmark_page_limit_violation")
+    connection_ids = storage.connection_ids[before_connections:]
     return {
         "elapsed_seconds": elapsed,
         "query_count": storage.query_count - before,
         "page_rows": rows,
         "bounded_projection_rows": limit + 1,
         "status": first.get("status"),
+        "process_pid": os.getpid(),
+        "connection_id": connection_ids[0] if connection_ids and len(set(connection_ids)) == 1 else None,
+        "connection_ids": connection_ids,
+        "connection_reused": storage.reuse_connection,
     }
 
 
@@ -866,7 +1454,7 @@ def run_benchmark(manifest: dict[str, Any], *, variants: tuple[str, ...], work_d
                     sample = run_cold_sample(database, limit=limit)
                 else:
                     if warm_service is None:
-                        warm_storage = CountingStorage(database)
+                        warm_storage = CountingStorage(database, reuse_connection=True)
                         warm_service = NeutralBatchMarketContextService(
                             repository=NeutralBatchMarketContextRepository(storage=warm_storage)
                         )
@@ -876,6 +1464,15 @@ def run_benchmark(manifest: dict[str, Any], *, variants: tuple[str, ...], work_d
                 sample.update({"mode": mode, "sample_index": sample_index})
                 samples.append(sample)
                 (cold_samples if mode == "cold" else warm_samples).append(sample["elapsed_seconds"])
+        warm_records = [sample for sample in samples if sample["mode"] == "warm"]
+        if len({sample.get("process_pid") for sample in warm_records}) != 1:
+            raise RuntimeError("benchmark_warm_process_identity_not_reused")
+        if len({sample.get("connection_id") for sample in warm_records}) != 1:
+            raise RuntimeError("benchmark_warm_connection_identity_not_reused")
+        if not all(sample.get("connection_reused") for sample in warm_records):
+            raise RuntimeError("benchmark_warm_connection_reuse_not_recorded")
+        if warm_storage is None or warm_storage.connection_open_count != 1:
+            raise RuntimeError("benchmark_warm_connection_opened_per_request")
         results[variant] = {
             "cold": percentile_summary(cold_samples),
             "warm": percentile_summary(warm_samples),
@@ -883,6 +1480,8 @@ def run_benchmark(manifest: dict[str, Any], *, variants: tuple[str, ...], work_d
             "query_count_max": max(sample["query_count"] for sample in samples),
             "max_page_rows": max(max(sample["page_rows"]) for sample in samples),
         }
+        if warm_storage is not None:
+            warm_storage.close()
         del warm_service
         del warm_storage
         gc.collect()
@@ -902,9 +1501,11 @@ def run_benchmark(manifest: dict[str, Any], *, variants: tuple[str, ...], work_d
         "environment": environment_metadata(),
         "sample_method": {
             "cold": "new subprocess and query-only connection per sample",
-            "warm": "reused service object and process; each request uses one query-only connection",
+            "warm": "reused service, process, and query-only SQLite connection; each request starts a fresh read transaction/snapshot",
             "cold_process_isolated": True,
             "warm_process_reused": True,
+            "warm_connection_reused": True,
+            "warm_snapshot_restarted_per_request": True,
             "sample_count_per_mode": 30,
             "total_per_variant": 60,
             "percentile": "nearest_rank",
@@ -989,7 +1590,12 @@ def main() -> int:
         return 0 if result["acceptance_gate"]["status"] == "pass" or not args.enforce_gate else 1
     finally:
         if work_dir == default_root and work_dir.exists():
-            shutil.rmtree(work_dir)
+            try:
+                shutil.rmtree(work_dir)
+            except PermissionError:
+                # Windows may release a worker SQLite handle just after the
+                # final subprocess exits; benchmark output remains valid.
+                pass
 
 
 if __name__ == "__main__":

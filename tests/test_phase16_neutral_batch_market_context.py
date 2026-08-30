@@ -16,6 +16,7 @@ from src.domain.neutral_batch_market_context import (
     NeutralBatchMarketContextRequest,
     decode_neutral_batch_cursor,
     neutral_batch_context_assembly_v1,
+    neutral_batch_market_context_status_v1,
 )
 from src.repositories.eod_close_repository import EodCloseRepository
 from src.repositories.neutral_batch_market_context_repository import (
@@ -25,15 +26,22 @@ from src.repositories.migration_runner import apply_valuation_migration
 from src.services.neutral_batch_market_context_service import (
     NeutralBatchMarketContextService,
 )
+from src.api.routes import v2_market_context
 from src.api.routes.v2_market_context import router
 from tools.phase16_nbmc_benchmark import build_database
 from tests.test_phase15_eod_coverage import (
     TARGET_DATE,
     _add_orphan,
+    _add_tpex_identity,
     _add_source_revision,
+    _classification,
+    _identity_revision_id,
+    _insert_independent_classification_root,
     _observation,
     _raw,
     _seed_coverage,
+    _tpex_observation,
+    _tpex_source,
 )
 
 
@@ -413,13 +421,358 @@ def test_partial_source_and_observed_ineligible_keep_distinct_typed_states(tmp_p
     assert ineligible["per_venue"]["TWSE"]["assembly_status"] == "partial"
     eod_close = ineligible["items"][0]["eod_close"]
     assert set(eod_close) == EOD_CLOSE_KEYS
-    assert eod_close["status"] == "partial"
+    # The venue-level proof-bearing partial state is intentionally separate
+    # from this item's exact-but-ineligible close status.
+    assert eod_close["status"] == "unknown"
     assert eod_close["freshness_state"] == "current"
     assert eod_close["public_eligibility_status"] == "ineligible"
     assert eod_close["close_value"] is None
     assert eod_close["currency"] is None
     assert eod_close["unit"] is None
     assert eod_close["price_semantics"] is None
+
+
+def test_proof_bearing_partial_source_keeps_exact_eligible_close_available(tmp_path) -> None:
+    db, *_ = _seed_coverage(
+        tmp_path,
+        source_kwargs={
+            "status": "partial",
+            "coverage_state": "partial",
+            "coverage_proof_type": "coverage_manifest",
+            "coverage_proof_reference": "fixture-proof",
+        },
+    )
+
+    body = NeutralBatchMarketContextService(str(db)).as_of(
+        market_date=TARGET_DATE,
+        knowledge_cutoff_at=CUTOFF,
+        venue_scope="TWSE",
+    )
+
+    venue = body["per_venue"]["TWSE"]
+    item = body["items"][0]
+    assert venue["source"]["state"] == "partial"
+    assert venue["assembly_status"] == "partial"
+    assert item["coverage_status"] == "observed_eligible"
+    assert item["item_state"] == "available"
+    assert item["eod_close"]["status"] == "available"
+    assert item["eod_close"]["close_value"] == "1005"
+    assert item["eod_close"]["freshness_state"] == "current"
+
+
+def test_source_lineage_blocks_k_visible_revoke_child_before_exact_d_filter(tmp_path) -> None:
+    db, repo, _, _, _, source, _, _ = _seed_coverage(tmp_path)
+    _add_source_revision(
+        repo,
+        db,
+        source,
+        source_trade_date=TARGET_DATE,
+        source_trade_date_status="invalid",
+        status="revoked",
+        at="2026-08-27T06:00:00Z",
+    )
+
+    body = NeutralBatchMarketContextService(str(db)).as_of(
+        market_date=TARGET_DATE,
+        knowledge_cutoff_at=CUTOFF,
+        venue_scope="TWSE",
+    )
+    venue = body["per_venue"]["TWSE"]
+    assert venue["source"]["state"] == "blocked"
+    assert venue["source"]["status"] == "revoked"
+    assert venue["source"]["reason_codes"] == ["source_revoke_without_replacement"]
+    assert body["items"][0]["coverage_status"] == "source_blocked"
+    assert body["items"][0]["item_state"] == "blocked"
+    assert body["items"][0]["eod_close"] is None
+    assert body["status"] == "blocked"
+
+
+def test_source_lineage_ignores_post_k_revoke_child_for_earlier_d(tmp_path) -> None:
+    db, repo, _, _, _, source, _, _ = _seed_coverage(tmp_path)
+    _add_source_revision(
+        repo,
+        db,
+        source,
+        source_trade_date=TARGET_DATE,
+        source_trade_date_status="invalid",
+        status="revoked",
+        at="2026-08-30T06:00:00Z",
+        available_at="2026-08-30T06:00:00Z",
+        ingested_at="2026-08-30T06:00:00Z",
+    )
+
+    body = NeutralBatchMarketContextService(str(db)).as_of(
+        market_date=TARGET_DATE,
+        knowledge_cutoff_at=CUTOFF,
+        venue_scope="TWSE",
+    )
+    item = body["items"][0]
+    assert body["per_venue"]["TWSE"]["source"]["state"] == "usable"
+    assert item["coverage_status"] == "observed_eligible"
+    assert item["eod_close"]["status"] == "available"
+    assert item["eod_close"]["close_value"] == "1005"
+
+
+def test_source_lineage_selects_k_visible_corrected_replacement(tmp_path) -> None:
+    db, repo, anchor, raw, raw_hash, source, classification, observation = _seed_coverage(tmp_path)
+    child, child_raw, child_hash = _add_source_revision(
+        repo,
+        db,
+        source,
+        source_trade_date=TARGET_DATE,
+        source_trade_date_status="valid",
+        status="available",
+        at="2026-08-27T06:00:00Z",
+    )
+    _observation(
+        repo,
+        raw=child_raw,
+        raw_hash=child_hash,
+        source=child,
+        classification=classification,
+        anchor=anchor,
+        instrument_revision_id=_identity_revision_id(db, anchor["instrument_id"]),
+        at="2026-08-27T06:01:00Z",
+        revision_number=2,
+        supersedes_observation_id=observation["close_observation_id"],
+    )
+
+    body = NeutralBatchMarketContextService(str(db)).as_of(
+        market_date=TARGET_DATE,
+        knowledge_cutoff_at=CUTOFF,
+        venue_scope="TWSE",
+    )
+    item = body["items"][0]
+    assert body["per_venue"]["TWSE"]["source"]["source_record_reference"] == child["source_record_reference"]
+    assert item["coverage_status"] == "observed_eligible"
+    assert item["eod_close"]["status"] == "available"
+    assert item["eod_close"]["close_value"] == "1005"
+
+
+def test_unbound_invalid_child_does_not_block_or_resurrect_parent(tmp_path) -> None:
+    db, repo, _, _, _, source, _, _ = _seed_coverage(tmp_path)
+    _add_source_revision(
+        repo,
+        db,
+        source,
+        source_trade_date=TARGET_DATE,
+        source_trade_date_status="invalid",
+        status="available",
+        query_dimensions={},
+        at="2026-08-27T06:00:00Z",
+    )
+
+    body = NeutralBatchMarketContextService(str(db)).as_of(
+        market_date=TARGET_DATE,
+        knowledge_cutoff_at=CUTOFF,
+        venue_scope="TWSE",
+    )
+    assert body["per_venue"]["TWSE"]["source"]["state"] == "unknown"
+    assert body["per_venue"]["TWSE"]["source"]["reason_codes"] == ["no_exact_D"]
+    assert body["items"][0]["coverage_status"] == "source_unknown"
+    assert body["items"][0]["eod_close"] is None
+
+
+def test_first_observed_after_cutoff_has_usable_source_but_no_candidates(tmp_path) -> None:
+    db, *_ = _seed_coverage(
+        tmp_path,
+        first_observed_at="2026-08-29T00:00:00Z",
+    )
+    body = NeutralBatchMarketContextService(str(db)).as_of(
+        market_date=TARGET_DATE,
+        knowledge_cutoff_at=CUTOFF,
+        venue_scope="TWSE",
+    )
+    venue = body["per_venue"]["TWSE"]
+    assert venue["source"]["state"] == "usable"
+    assert venue["aggregate"]["denominator_candidate_count"] == 0
+    assert venue["assembly_status"] == "insufficient_data"
+    assert all(item["item_kind"] != "denominator_candidate" for item in body["items"])
+
+
+def test_missing_expected_observation_is_not_observed_unproven(tmp_path) -> None:
+    db, *_ = _seed_coverage(tmp_path, include_observation=False)
+    body = NeutralBatchMarketContextService(str(db)).as_of(
+        market_date=TARGET_DATE,
+        knowledge_cutoff_at=CUTOFF,
+        venue_scope="TWSE",
+    )
+    item = body["items"][0]
+    assert body["per_venue"]["TWSE"]["source"]["state"] == "usable"
+    assert body["per_venue"]["TWSE"]["assembly_status"] == "available"
+    assert item["coverage_status"] == "not_observed_unproven"
+    assert item["eod_close"] is None
+
+
+def test_all_unresolved_and_only_exclusions_have_distinct_projection_states(tmp_path) -> None:
+    unresolved_db, *_ = _seed_coverage(
+        tmp_path / "unresolved",
+        include_observation=False,
+        classification_kwargs={"state": "ambiguous"},
+    )
+    unresolved = NeutralBatchMarketContextService(str(unresolved_db)).as_of(
+        market_date=TARGET_DATE,
+        knowledge_cutoff_at=CUTOFF,
+        venue_scope="TWSE",
+    )
+    unresolved_venue = unresolved["per_venue"]["TWSE"]
+    assert unresolved_venue["aggregate"]["denominator_unresolved_count"] == 1
+    assert unresolved_venue["assembly_status"] == "insufficient_data"
+    assert unresolved["items"][0]["coverage_status"] == "classification_unresolved"
+
+    excluded_db, *_ = _seed_coverage(
+        tmp_path / "excluded",
+        include_observation=False,
+        classification_kwargs={
+            "classification_decision": "not_applicable",
+            "security_type_raw": "ETF",
+        },
+    )
+    excluded = NeutralBatchMarketContextService(str(excluded_db)).as_of(
+        market_date=TARGET_DATE,
+        knowledge_cutoff_at=CUTOFF,
+        venue_scope="TWSE",
+    )
+    excluded_venue = excluded["per_venue"]["TWSE"]
+    assert excluded_venue["aggregate"]["denominator_excluded_count"] == 1
+    assert excluded_venue["aggregate"]["denominator_unresolved_count"] == 0
+    assert excluded_venue["assembly_status"] == "available"
+    assert excluded["items"][0]["coverage_status"] == "excluded_by_product_scope"
+    assert excluded["items"][0]["item_state"] == "not_applicable"
+
+
+@pytest.mark.parametrize(
+    ("source_state", "proof", "projection_state", "expected"),
+    [
+        ("blocked", False, "blocked", "blocked"),
+        ("blocked", False, "empty", "blocked"),
+        ("blocked", False, "entirely_unresolved", "blocked"),
+        ("blocked", False, "usable", "blocked"),
+        ("partial", True, "blocked", "blocked"),
+        ("partial", True, "empty", "insufficient_data"),
+        ("partial", True, "entirely_unresolved", "insufficient_data"),
+        ("partial", True, "usable", "partial"),
+        ("unknown", False, "blocked", "blocked"),
+        ("unknown", False, "empty", "insufficient_data"),
+        ("unknown", False, "entirely_unresolved", "insufficient_data"),
+        ("unknown", False, "usable", "unknown"),
+        ("usable", False, "blocked", "blocked"),
+        ("usable", False, "empty", "insufficient_data"),
+        ("usable", False, "entirely_unresolved", "insufficient_data"),
+        ("usable", False, "usable", "available"),
+    ],
+)
+def test_complete_per_venue_assembly_matrix(
+    source_state, proof, projection_state, expected
+) -> None:
+    result = neutral_batch_context_assembly_v1(
+        source_state=source_state,
+        denominator_projection_state=projection_state,
+        partial_proof_present=proof,
+        aggregate={
+            "denominator_candidate_count": 1,
+            "denominator_unresolved_count": 0,
+        },
+    )
+    assert result["status"] == expected
+
+
+def test_assembly_invalid_state_fails_closed() -> None:
+    for kwargs in (
+        {"source_state": "invalid", "denominator_projection_state": "usable"},
+        {"source_state": "usable", "denominator_projection_state": "invalid"},
+    ):
+        result = neutral_batch_context_assembly_v1(
+            **kwargs,
+            aggregate={
+                "denominator_candidate_count": 1,
+                "denominator_unresolved_count": 0,
+            },
+        )
+        assert result["status"] == "blocked"
+
+
+@pytest.mark.parametrize(
+    ("statuses", "candidate_count", "unresolved_count", "expected"),
+    [
+        (["available", "blocked"], 2, 0, "blocked"),
+        (["partial", "available"], 2, 0, "partial"),
+        (["unknown", "available"], 2, 0, "partial"),
+        (["available", "insufficient_data"], 1, 0, "partial"),
+        (["insufficient_data", "insufficient_data"], 0, 0, "insufficient_data"),
+        (["unknown", "unknown"], 2, 0, "unknown"),
+    ],
+)
+def test_global_status_reducer_complete_table(
+    statuses, candidate_count, unresolved_count, expected
+) -> None:
+    result = neutral_batch_market_context_status_v1(
+        per_venue=[{"assembly_status": status} for status in statuses],
+        aggregate={
+            "denominator_candidate_count": candidate_count,
+            "denominator_unresolved_count": unresolved_count,
+        },
+    )
+    assert result["status"] == expected
+
+
+def test_combined_pagination_crosses_twse_to_tpex_boundary(tmp_path) -> None:
+    db, repo, _, _, _, _, twse_classification, _ = _seed_coverage(tmp_path)
+    tpex_anchor = _add_tpex_identity(db)
+    tpex_raw, tpex_hash = _raw(
+        db,
+        "tpex.eod.daily_close_quotes",
+        "tpex-universe-official",
+        "phase16-tpex-boundary",
+        "2026-08-27T05:00:00Z",
+    )
+    tpex_source = _tpex_source(repo, tpex_raw, tpex_hash)
+    tpex_classification = _insert_independent_classification_root(
+        db,
+        twse_classification,
+        at="2026-08-27T05:01:00Z",
+        market_raw="上櫃",
+    )
+    _tpex_observation(
+        repo,
+        raw=tpex_raw,
+        raw_hash=tpex_hash,
+        source=tpex_source,
+        classification=tpex_classification,
+        anchor=tpex_anchor,
+        instrument_revision_id=_identity_revision_id(db, tpex_anchor["instrument_id"]),
+    )
+
+    service = NeutralBatchMarketContextService(str(db))
+    first = service.as_of(
+        market_date=TARGET_DATE,
+        knowledge_cutoff_at=CUTOFF,
+        venue_scope="TWSE_TPEX",
+        limit=1,
+    )
+    second = service.as_of(
+        market_date=TARGET_DATE,
+        knowledge_cutoff_at=CUTOFF,
+        venue_scope="TWSE_TPEX",
+        limit=1,
+        cursor=first["next_cursor"],
+    )
+    assert first["items"][0]["venue"] == "TWSE"
+    assert second["items"][0]["venue"] == "TPEX"
+    assert first["items"][0]["official_code"] == second["items"][0]["official_code"] == "2330"
+    assert second["next_cursor"] is None
+
+
+def test_storage_failure_returns_safe_503_without_private_detail(monkeypatch) -> None:
+    def fail_service():
+        raise sqlite3.Error("private db detail")
+
+    monkeypatch.setattr(v2_market_context, "_service", fail_service)
+    response = _get(TestClient(_app()))
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "neutral_batch_market_context_storage_unavailable"
+    }
 
 
 @pytest.mark.parametrize(

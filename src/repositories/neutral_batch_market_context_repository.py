@@ -29,6 +29,15 @@ from src.repositories.eod_coverage_repository import (
 )
 
 
+_SOURCE_BLOCKING_STATUSES = frozenset({
+    "provider_error",
+    "schema_changed",
+    "blocked",
+    "revoked",
+    "rejected",
+})
+
+
 @dataclass(frozen=True)
 class NeutralBatchMarketContextProjection:
     """Internal projection assembled from one query-only SQLite snapshot."""
@@ -160,6 +169,22 @@ class NeutralBatchMarketContextRepository:
         """Return safe source state after K visibility and correction lineage."""
 
         effective_rows = self._lineage_visible_rows(conn, coverage_request)
+        blocking_rows = [
+            row
+            for row in effective_rows
+            if str(row.get("status") or "") in _SOURCE_BLOCKING_STATUSES
+        ]
+        if blocking_rows:
+            # A K-visible blocker is a surviving lineage leaf.  It must be
+            # classified before the ordinary exact-D filter; otherwise a
+            # revoked/blocked child with an invalid or missing D status could
+            # silently fall through to no_exact_D and resurrect its parent.
+            blocker = max(
+                blocking_rows,
+                key=EodCoverageRepository._source_order_key,
+            )
+            state, reason = EodCoverageRepository._source_state(blocker)
+            return self._source_public_context(mapping, blocker, state, reason)
         exact_rows = [
             row
             for row in effective_rows
@@ -350,7 +375,6 @@ class NeutralBatchMarketContextRepository:
             NeutralBatchMarketContextRepository._projection_params(coverage_request),
             bound_invalid_source=(
                 source["source_state"] == CoverageSourceState.BLOCKED.value
-                and source["source_reason"] == "source_date_in_future_or_invalid"
             ),
         )
         candidate_count = int(aggregate.get("denominator_candidate_count", 0))
@@ -470,6 +494,7 @@ class NeutralBatchMarketContextRepository:
                 "_resource_id": source.get("resource_id"),
                 "_source_scope": source.get("source_scope"),
                 "_source_reason": source.get("source_reason"),
+                "_source_proof_present": bool(source.get("source_proof_present", False)),
                 "_source_trade_date": source.get("source_trade_date"),
                 "_source_available_at": source.get("source_available_at"),
                 "_source_ingested_at": source.get("source_ingested_at"),
@@ -557,7 +582,6 @@ class NeutralBatchMarketContextRepository:
                     source,
                     bound_invalid_source=(
                         source["source_state"] == CoverageSourceState.BLOCKED.value
-                        and source["source_reason"] == "source_date_in_future_or_invalid"
                     ),
                 )
                 items.append(item)

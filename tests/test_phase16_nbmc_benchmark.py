@@ -9,11 +9,19 @@ from tools.phase16_nbmc_benchmark import (
     CONTRACT_VERSION,
     DEFAULT_VARIANTS,
     build_database,
+    CountingStorage,
     load_manifest,
     manifest_sha256,
     nearest_rank,
     run_cold_sample,
+    run_request,
     validate_manifest,
+)
+from src.repositories.neutral_batch_market_context_repository import (
+    NeutralBatchMarketContextRepository,
+)
+from src.services.neutral_batch_market_context_service import (
+    NeutralBatchMarketContextService,
 )
 
 
@@ -83,3 +91,41 @@ def test_phase16_cold_sample_uses_a_new_process(tmp_path) -> None:
     assert sample["process_isolated"] is True
     assert sample["mode"] == "cold"
     assert sample["query_count"] > 0
+
+
+def test_phase16_warm_samples_reuse_connection_but_restart_snapshot(tmp_path) -> None:
+    database = tmp_path / "warm.sqlite"
+    build_database(database, "both_available")
+    storage = CountingStorage(database, reuse_connection=True)
+    service = NeutralBatchMarketContextService(
+        repository=NeutralBatchMarketContextRepository(storage=storage)
+    )
+
+    try:
+        first = run_request(service, storage, limit=1)
+        second = run_request(service, storage, limit=1)
+        assert first["process_pid"] == second["process_pid"] == os.getpid()
+        assert first["connection_id"] == second["connection_id"]
+        assert first["connection_reused"] is True
+        assert second["connection_reused"] is True
+        assert storage.connection_open_count == 1
+        assert storage.transaction_count >= 2
+        assert storage.query_count > 0
+    finally:
+        storage.close()
+
+
+def test_phase16_classification_ambiguity_keeps_mixed_denominator_available(tmp_path) -> None:
+    database = tmp_path / "mixed.sqlite"
+    build_database(database, "classification_ambiguity")
+    body = NeutralBatchMarketContextService(str(database)).as_of(
+        market_date="2026-08-28",
+        knowledge_cutoff_at="2026-08-29T00:00:00Z",
+        venue_scope="TWSE",
+        limit=1,
+    )
+    aggregate = body["per_venue"]["TWSE"]["aggregate"]
+    assert aggregate["denominator_candidate_count"] == 1200
+    assert aggregate["denominator_expected_count"] == 1199
+    assert aggregate["denominator_unresolved_count"] == 1
+    assert body["per_venue"]["TWSE"]["assembly_status"] == "available"

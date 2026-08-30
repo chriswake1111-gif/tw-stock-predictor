@@ -10,6 +10,12 @@
     "total": 2000
   },
   "additional_identity_revision_event_rows": 240,
+  "additional_row_mix": {
+    "accepted_correction_lineage": 80,
+    "revoke_replacement_lineage": 80,
+    "identity_epoch_reuse": 40,
+    "lifecycle_operational": 40
+  },
   "combined_source_observation_orphan_count": 40,
   "variants": [
     "both_available",
@@ -24,6 +30,74 @@
     "first_page_and_continuation_page",
     "limit_100"
   ],
+  "variant_semantics": {
+    "both_available": {
+      "twse_source": "usable",
+      "tpex_source": "usable",
+      "tpex_denominator": "expected",
+      "post_d_evidence": false
+    },
+    "twse_partial_tpex_available": {
+      "twse_source": "partial",
+      "tpex_source": "usable",
+      "tpex_denominator": "expected",
+      "post_d_evidence": false
+    },
+    "twse_available_tpex_blocked": {
+      "twse_source": "usable",
+      "tpex_source": "blocked",
+      "tpex_denominator": "expected",
+      "post_d_evidence": false
+    },
+    "one_venue_no_exact_d_other_available": {
+      "twse_source": "usable",
+      "tpex_source": "unknown_no_exact_D",
+      "tpex_denominator": "expected",
+      "post_d_evidence": false
+    },
+    "one_venue_usable_other_unresolved_or_empty": {
+      "twse_source": "usable",
+      "tpex_source": "unknown_no_source",
+      "tpex_denominator": "unresolved",
+      "post_d_evidence": false
+    },
+    "post_k_post_d_evidence": {
+      "twse_source": "usable",
+      "tpex_source": "usable",
+      "tpex_denominator": "expected",
+      "post_d_evidence": true
+    },
+    "same_d_date_only_ambiguity": {
+      "twse_source": "usable",
+      "tpex_source": "usable",
+      "tpex_denominator": "expected",
+      "post_d_evidence": false
+    },
+    "classification_ambiguity": {
+      "twse_source": "usable",
+      "tpex_source": "usable",
+      "tpex_denominator": "expected",
+      "post_d_evidence": false
+    },
+    "asymmetric_orphan_distribution": {
+      "twse_source": "usable",
+      "tpex_source": "usable",
+      "tpex_denominator": "expected",
+      "post_d_evidence": false
+    },
+    "first_page_and_continuation_page": {
+      "twse_source": "usable",
+      "tpex_source": "usable",
+      "tpex_denominator": "expected",
+      "post_d_evidence": false
+    },
+    "limit_100": {
+      "twse_source": "usable",
+      "tpex_source": "usable",
+      "tpex_denominator": "expected",
+      "post_d_evidence": false
+    }
+  },
   "samples": {
     "cold": 30,
     "warm": 30,
@@ -46,5 +120,5 @@
     "query_count_must_be_constant_in_universe_size": true,
     "max_python_page_rows": 101
   },
-  "fixture_sha256": "11af772908c95ae3f45123af46edef225705e8a048f65ad47e5fc4f0b7ad98ce"
+  "fixture_sha256": "14f276cdbe115b6d239f5a1568e0f2c67a6b69fd6a81cc931b019d69ed2b52f9"
 }
