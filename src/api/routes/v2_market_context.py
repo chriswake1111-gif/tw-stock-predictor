@@ -57,7 +57,7 @@ def _map_error(exc: Exception) -> HTTPException:
 def batch_as_of(
     market_date: str = Query(...),
     knowledge_cutoff_at: str = Query(...),
-    venue_scope: str = Query("TWSE_TPEX"),
+    venue_scope: str = Query(...),
     limit: int = Query(50, ge=1, le=100),
     cursor: str | None = Query(None),
 ):

@@ -17,7 +17,13 @@ from datetime import date, datetime
 from typing import Any, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
-from src.domain.eod_close import parse_iso_date
+from src.domain.eod_close import (
+    EOD_REASON_CODES,
+    EodFreshnessState,
+    eod_close_status_matrix_v1,
+    normalize_decimal_text,
+    parse_iso_date,
+)
 from src.domain.eod_coverage import (
     CoverageItemKind,
     CoverageSourceState,
@@ -64,6 +70,43 @@ _ITEM_ORDER = {
     CoverageItemKind.SOURCE_OBSERVATION_ORPHAN.value: 1,
 }
 _VALID_SOURCE_STATES = {state.value for state in CoverageSourceState}
+_PHASE14_REASON_SET = frozenset(EOD_REASON_CODES)
+_PHASE14_REASON_MAP = {
+    "source_empty": "source_empty",
+    "no_exact_D": "no_same_day_snapshot",
+    "source_unknown": "no_same_day_snapshot",
+    "source_blocked": "latest_revision_blocked",
+    "source_date_in_future_or_invalid": "source_date_in_future_or_invalid",
+    "provider_error": "provider_error",
+    "schema_changed": "schema_changed",
+    "latest_revision_blocked": "latest_revision_blocked",
+    "source_revoke_without_replacement": "source_revoke_without_replacement",
+    "source_partial": "partial_venue_payload",
+    "identity_unresolved": "identity_mapping_unverified",
+    "identity_mapping_unverified": "identity_mapping_unverified",
+    "identity_d_applicability_unresolved": "identity_epoch_ambiguous",
+    "event_d_applicability_unresolved": "identity_epoch_ambiguous",
+    "classification_unresolved": "classification_evidence_missing",
+    "classification_d_applicability_unresolved": "classification_evidence_missing",
+    "excluded_by_lifecycle": "unsupported_security_type",
+    "not_yet_listed_on_source_trade_date": "unsupported_security_type",
+    "excluded_by_operational_state": "instrument_suspended",
+    "excluded_by_product_scope": "unsupported_security_type",
+    "close_unusable": "close_missing",
+    "volume_unusable": "volume_unusable",
+    "official_zero_volume_not_public_eligible": "official_zero_volume_not_public_eligible",
+    "product_scope_unverified": "classification_evidence_missing",
+    "currency_unit_unproven": "currency_unit_unproven",
+    "observation_source_scope_mismatch": "source_usage_not_approved",
+}
+
+
+def _normalize_phase16_decimal(value: Any) -> tuple[str | None, Any, str]:
+    """Normalize SQLite text/numeric affinity without routing through float."""
+
+    if value is None:
+        return normalize_decimal_text(None)
+    return normalize_decimal_text(value if isinstance(value, str) else str(value))
 
 
 class NeutralBatchMarketContextCursorError(ValueError):
@@ -135,13 +178,22 @@ def venue_mapping(venue: str) -> VenueMapping:
     )
 
 
+def venue_order(venue: str) -> int:
+    """Return the canonical global order used by every venue cursor."""
+
+    normalized = str(venue).strip().upper()
+    if normalized not in _VENUE_ORDER:
+        raise ValueError("item venue is not supported")
+    return _VENUE_ORDER[normalized]
+
+
 @dataclass(frozen=True)
 class NeutralBatchMarketContextRequest:
     """Validated D×K request; no implicit latest-date behavior exists."""
 
     market_date: str
     knowledge_cutoff_at: str
-    venue_scope: str = "TWSE_TPEX"
+    venue_scope: str
     limit: int = 50
     cursor: str | None = None
 
@@ -203,8 +255,7 @@ def item_order_key(item: Mapping[str, Any]) -> tuple[Any, ...]:
     """Return the locked total order, including explicit NULL ranks."""
 
     venue = str(item.get("venue") or "").strip().upper()
-    if venue not in _VENUE_ORDER:
-        raise ValueError("item venue is not supported")
+    venue_rank = venue_order(venue)
     official_code = item.get("official_code")
     code_rank = 1 if official_code is None else 0
     code_value = "" if official_code is None else str(official_code)
@@ -215,7 +266,7 @@ def item_order_key(item: Mapping[str, Any]) -> tuple[Any, ...]:
     if item_kind not in _ITEM_ORDER:
         raise ValueError("item kind is not supported")
     return (
-        _VENUE_ORDER[venue],
+        venue_rank,
         venue,
         code_rank,
         code_value,
@@ -242,7 +293,7 @@ def _validate_last_key(value: Any, *, request: NeutralBatchMarketContextRequest)
     if set(value) != expected:
         raise _cursor_error("cursor_impossible_tuple")
     venue = value.get("venue")
-    if venue not in request.venues or value.get("venue_order") != _VENUE_ORDER.get(venue):
+    if venue not in request.venues or value.get("venue_order") != venue_order(venue):
         raise _cursor_error("cursor_context_mismatch")
     code = value.get("official_code")
     code_rank = value.get("official_code_null_rank")
@@ -472,22 +523,149 @@ def neutral_batch_market_context_status_v1(
 neutral_batch_context_assembly_v1 = neutral_batch_market_context_assembly_v1
 
 
+def _phase14_reason_codes(item: Mapping[str, Any]) -> list[str]:
+    """Translate Phase 15 diagnostics into the Phase 14 close vocabulary."""
+
+    reasons: list[str] = []
+
+    def add(reason: Any) -> None:
+        mapped = _PHASE14_REASON_MAP.get(str(reason).strip())
+        if mapped in _PHASE14_REASON_SET and mapped not in reasons:
+            reasons.append(mapped)
+
+    for reason in item.get("reason_codes", ()) or ():
+        add(reason)
+
+    source_state = str(item.get("_source_state") or CoverageSourceState.UNKNOWN.value)
+    if source_state == CoverageSourceState.BLOCKED.value:
+        add(item.get("_source_reason") or "source_blocked")
+    elif source_state == CoverageSourceState.PARTIAL.value:
+        add("source_partial")
+    elif source_state == CoverageSourceState.UNKNOWN.value:
+        add(item.get("_source_reason") or "no_exact_D")
+
+    close_text, close_decimal, close_state = _normalize_phase16_decimal(
+        item.get("_observation_close_value")
+    )
+    del close_text
+    if close_state != "valid" or close_decimal is None or close_decimal <= 0:
+        add("close_unusable")
+
+    volume_text, volume_decimal, volume_state = _normalize_phase16_decimal(
+        item.get("_observation_volume_value")
+    )
+    del volume_text
+    if volume_state != "valid" or volume_decimal is None:
+        add("volume_unusable")
+    elif volume_decimal == 0:
+        if "volume_unusable" in reasons:
+            reasons.remove("volume_unusable")
+        add("official_zero_volume_not_public_eligible")
+
+    currency = str(item.get("_observation_currency") or "").strip().upper()
+    unit = str(item.get("_observation_unit") or "").strip()
+    if currency != "TWD":
+        add("foreign_currency_not_supported" if currency else "currency_unit_unproven")
+    elif unit != "TWD_per_share":
+        add("currency_unit_unproven")
+
+    observed_product_scope = str(
+        item.get("_observation_product_scope") or ""
+    ).strip()
+    if observed_product_scope and observed_product_scope != "supported_stock":
+        add("excluded_by_product_scope")
+    if item.get("product_scope") == "not_applicable":
+        add("excluded_by_product_scope")
+    if str(item.get("classification_status") or "missing") != "accepted":
+        add("classification_unresolved")
+    if str(item.get("public_eligibility_status") or "") == "awaiting_review":
+        add("classification_unresolved")
+
+    observed_scope = item.get("_observation_source_scope")
+    expected_scope = item.get("_source_scope")
+    if observed_scope != expected_scope:
+        add("observation_source_scope_mismatch")
+    return reasons
+
+
+def _phase14_freshness_state(item: Mapping[str, Any]) -> str:
+    """Map raw observation quality to the Phase 14 freshness enum."""
+
+    source_state = str(item.get("_source_state") or CoverageSourceState.UNKNOWN.value)
+    if source_state == CoverageSourceState.BLOCKED.value or item.get("item_state") == "blocked":
+        return EodFreshnessState.BLOCKED.value
+
+    raw_quality = str(item.get("_observation_quality_status") or "").strip().lower()
+    if raw_quality == EodFreshnessState.BLOCKED.value:
+        return EodFreshnessState.BLOCKED.value
+    if raw_quality == EodFreshnessState.STALE.value:
+        return EodFreshnessState.STALE.value
+    if raw_quality == EodFreshnessState.UNKNOWN.value:
+        return EodFreshnessState.UNKNOWN.value
+
+    if (
+        item.get("observed_trade_date")
+        and source_state in {
+            CoverageSourceState.USABLE.value,
+            CoverageSourceState.PARTIAL.value,
+        }
+        and item.get("_source_trade_date") == item.get("observed_trade_date")
+    ):
+        return EodFreshnessState.CURRENT.value
+    return EodFreshnessState.UNKNOWN.value
+
+
 def _public_eod_close(item: Mapping[str, Any]) -> dict[str, Any] | None:
-    eligible = item.get("coverage_status") == CoverageStatus.OBSERVED_ELIGIBLE.value
-    if not eligible:
+    """Expose only the Phase 14 close contract for an exact observed row."""
+
+    if (
+        item.get("item_kind") != CoverageItemKind.DENOMINATOR_CANDIDATE.value
+        or not item.get("observed_trade_date")
+    ):
         return None
+
+    close_value, close_decimal, close_state = _normalize_phase16_decimal(
+        item.get("_observation_close_value")
+    )
+    volume_value, volume_decimal, volume_state = _normalize_phase16_decimal(
+        item.get("_observation_volume_value")
+    )
+    reasons = _phase14_reason_codes(item)
+    eligible = (
+        item.get("coverage_status") == CoverageStatus.OBSERVED_ELIGIBLE.value
+        and item.get("item_state") == "available"
+        and item.get("_source_state") == CoverageSourceState.USABLE.value
+        and item.get("public_eligibility_status") == "eligible"
+        and close_state == "valid"
+        and close_decimal is not None
+        and close_decimal > 0
+        and volume_state == "valid"
+        and volume_decimal is not None
+        and volume_decimal > 0
+        and item.get("_observation_product_scope") == "supported_stock"
+        and item.get("_observation_currency") == "TWD"
+        and item.get("_observation_unit") == "TWD_per_share"
+        and item.get("_observation_source_scope") == item.get("_source_scope")
+        and str(item.get("_observation_quality_status") or "").strip().lower() == "fresh"
+        and not reasons
+    )
+    matrix = eod_close_status_matrix_v1(
+        reasons,
+        freshness_state=_phase14_freshness_state(item),
+        current_complete=False,
+        evidence_complete=eligible,
+    )
     return {
         "contract_version": EOD_CLOSE_CONTEXT_CONTRACT_VERSION,
-        "status": "available",
-        "reason_codes": normalize_reason_codes(item.get("reason_codes", ())),
+        "status": matrix["status"],
+        "reason_codes": matrix["reason_codes"],
         "selected_trade_date": item.get("observed_trade_date"),
-        "close_value": item.get("_observation_close_value"),
-        "currency": item.get("_observation_currency"),
-        "unit": item.get("_observation_unit"),
-        "price_semantics": EOD_CLOSE_CONTEXT_PRICE_SEMANTICS_VERSION,
-        "freshness_state": item.get("_observation_quality_status"),
+        "close_value": close_value if eligible else None,
+        "currency": item.get("_observation_currency") if eligible else None,
+        "unit": item.get("_observation_unit") if eligible else None,
+        "price_semantics": EOD_CLOSE_CONTEXT_PRICE_SEMANTICS_VERSION if eligible else None,
+        "freshness_state": matrix["freshness_state"],
         "public_eligibility_status": item.get("public_eligibility_status"),
-        "source_record_reference": item.get("observed_source_record_reference"),
     }
 
 
@@ -625,4 +803,5 @@ __all__ = [
     "validate_market_date",
     "validate_market_date_and_cutoff",
     "venue_mapping",
+    "venue_order",
 ]

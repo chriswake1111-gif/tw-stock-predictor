@@ -17,6 +17,7 @@ from src.domain.neutral_batch_market_context import (
     NeutralBatchMarketContextRequest,
     VenueMapping,
     item_order_key,
+    venue_order,
 )
 from src.repositories.eod_close_repository import EodCloseRepository
 from src.repositories.eod_coverage_repository import (
@@ -460,12 +461,15 @@ class NeutralBatchMarketContextRepository:
                 "observed_source_record_reference": row.get("observation_source_record_reference"),
                 "_observation_close_value": row.get("observation_close_value"),
                 "_observation_volume_value": row.get("observation_volume_value"),
+                "_observation_product_scope": row.get("observation_product_scope"),
                 "_observation_currency": row.get("observation_currency"),
                 "_observation_unit": row.get("observation_unit"),
+                "_observation_source_scope": row.get("observation_source_scope"),
                 "_observation_quality_status": row.get("observation_quality_status"),
                 "_provider": source.get("provider"),
                 "_resource_id": source.get("resource_id"),
                 "_source_scope": source.get("source_scope"),
+                "_source_reason": source.get("source_reason"),
                 "_source_trade_date": source.get("source_trade_date"),
                 "_source_available_at": source.get("source_available_at"),
                 "_source_ingested_at": source.get("source_ingested_at"),
@@ -514,10 +518,13 @@ class NeutralBatchMarketContextRepository:
 
             remaining = request.limit + self._PAGE_LOOKAHEAD
             for mapping in request.venue_mappings:
-                venue_order = request.venues.index(mapping.venue)
+                mapping_venue_order = venue_order(mapping.venue)
                 if remaining <= 0:
                     break
-                if cursor_venue_order is not None and venue_order < cursor_venue_order:
+                if (
+                    cursor_venue_order is not None
+                    and mapping_venue_order < cursor_venue_order
+                ):
                     continue
                 coverage_request = CoverageRequest(
                     venue=mapping.venue,
@@ -526,7 +533,10 @@ class NeutralBatchMarketContextRepository:
                     limit=request.limit,
                 )
                 venue_cursor = None
-                if cursor_last_key is not None and venue_order == cursor_venue_order:
+                if (
+                    cursor_last_key is not None
+                    and mapping_venue_order == cursor_venue_order
+                ):
                     venue_cursor = cursor_last_key
                 rows = self._page(
                     conn,

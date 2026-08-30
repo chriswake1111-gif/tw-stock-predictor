@@ -26,6 +26,7 @@ from src.services.neutral_batch_market_context_service import (
     NeutralBatchMarketContextService,
 )
 from src.api.routes.v2_market_context import router
+from tools.phase16_nbmc_benchmark import build_database
 from tests.test_phase15_eod_coverage import (
     TARGET_DATE,
     _add_orphan,
@@ -58,6 +59,18 @@ FORBIDDEN_KEYS = {
     "signal",
     "valuation",
     "volume",
+}
+EOD_CLOSE_KEYS = {
+    "contract_version",
+    "status",
+    "reason_codes",
+    "selected_trade_date",
+    "close_value",
+    "currency",
+    "unit",
+    "price_semantics",
+    "freshness_state",
+    "public_eligibility_status",
 }
 
 
@@ -152,11 +165,13 @@ def test_request_mapping_cursor_and_assembly_matrix_are_locked() -> None:
         NeutralBatchMarketContextRequest(
             market_date="2026-08-29",
             knowledge_cutoff_at="2026-08-28T00:00:00Z",
+            venue_scope="TWSE_TPEX",
         )
     with pytest.raises(ValueError, match="timezone"):
         NeutralBatchMarketContextRequest(
             market_date=TARGET_DATE,
             knowledge_cutoff_at="2026-08-28T00:00:00",
+            venue_scope="TWSE_TPEX",
         )
 
     for projection_state, expected in (
@@ -215,6 +230,20 @@ def test_empty_combined_route_is_safe_and_get_only(tmp_path, monkeypatch) -> Non
         assert body["per_venue"][venue]["aggregate"]["aggregate_completeness_proven"] is False
     _assert_no_forbidden_keys(body)
 
+    client = TestClient(_app())
+    assert client.get(
+        "/api/v2/market-context/batch/as-of",
+        params={"knowledge_cutoff_at": CUTOFF, "venue_scope": "TWSE_TPEX"},
+    ).status_code == 422
+    assert client.get(
+        "/api/v2/market-context/batch/as-of",
+        params={"market_date": TARGET_DATE, "venue_scope": "TWSE_TPEX"},
+    ).status_code == 422
+    assert client.get(
+        "/api/v2/market-context/batch/as-of",
+        params={"market_date": TARGET_DATE, "knowledge_cutoff_at": CUTOFF},
+    ).status_code == 422
+
     for method in ("post", "put", "patch", "delete"):
         assert getattr(TestClient(_app()), method)(response.request.url).status_code == 405
 
@@ -244,8 +273,10 @@ def test_combined_projection_preserves_source_scope_counts_and_bounded_shared_cu
     assert first["aggregate"]["source_observation_orphan_count"] == 1
     assert len(first["items"]) == 1
     assert first["items"][0]["item_kind"] == "denominator_candidate"
+    assert set(first["items"][0]["eod_close"]) == EOD_CLOSE_KEYS
     assert first["items"][0]["eod_close"]["close_value"] == "1005"
     assert first["items"][0]["eod_close"]["currency"] == "TWD"
+    assert first["items"][0]["eod_close"]["freshness_state"] == "current"
     assert "volume" not in first["items"][0]["eod_close"]
     _assert_no_forbidden_keys(first, allow_close_value=True)
     assert first["next_cursor"]
@@ -278,6 +309,32 @@ def test_combined_projection_preserves_source_scope_counts_and_bounded_shared_cu
         for statement in counting.statements
         if statement.lstrip().upper().startswith(("WITH", "SELECT"))
     ]) <= 6
+
+
+def test_tpex_only_continuation_uses_global_venue_order_without_skip_or_duplicate(tmp_path) -> None:
+    db = tmp_path / "tpex-pagination.sqlite"
+    build_database(db, "both_available")
+    service = NeutralBatchMarketContextService(str(db))
+
+    first = service.as_of(
+        market_date="2026-08-28",
+        knowledge_cutoff_at="2026-08-29T00:00:00Z",
+        venue_scope="TPEX",
+        limit=1,
+    )
+    second = service.as_of(
+        market_date="2026-08-28",
+        knowledge_cutoff_at="2026-08-29T00:00:00Z",
+        venue_scope="TPEX",
+        limit=1,
+        cursor=first["next_cursor"],
+    )
+
+    assert first["next_cursor"]
+    assert len(first["items"]) == len(second["items"]) == 1
+    assert first["items"][0]["venue"] == second["items"][0]["venue"] == "TPEX"
+    assert first["items"][0]["official_code"] != second["items"][0]["official_code"]
+    assert int(second["items"][0]["official_code"]) == int(first["items"][0]["official_code"]) + 1
 
 
 def test_source_lineage_blocks_request_bound_child_without_resurrecting_parent(tmp_path) -> None:
@@ -354,7 +411,63 @@ def test_partial_source_and_observed_ineligible_keep_distinct_typed_states(tmp_p
     assert ineligible["items"][0]["coverage_status"] == "observed_ineligible"
     assert ineligible["items"][0]["item_state"] == "unknown"
     assert ineligible["per_venue"]["TWSE"]["assembly_status"] == "partial"
-    assert ineligible["items"][0]["eod_close"] is None
+    eod_close = ineligible["items"][0]["eod_close"]
+    assert set(eod_close) == EOD_CLOSE_KEYS
+    assert eod_close["status"] == "partial"
+    assert eod_close["freshness_state"] == "current"
+    assert eod_close["public_eligibility_status"] == "ineligible"
+    assert eod_close["close_value"] is None
+    assert eod_close["currency"] is None
+    assert eod_close["unit"] is None
+    assert eod_close["price_semantics"] is None
+
+
+@pytest.mark.parametrize(
+    ("close", "volume", "public_status", "expected_status", "expected_reason"),
+    [
+        ("1005", "123456", "ineligible", "unknown", None),
+        ("not-a-number", "123456", "eligible", "insufficient_data", "close_missing"),
+        ("1005", "0", "eligible", "insufficient_data", "official_zero_volume_not_public_eligible"),
+        ("1005", "not-a-number", "eligible", "insufficient_data", "volume_unusable"),
+    ],
+)
+def test_exact_observed_ineligible_close_is_typed_and_fail_closed(
+    tmp_path, close, volume, public_status, expected_status, expected_reason
+) -> None:
+    db, repo, anchor, raw, raw_hash, source, classification, observation = _seed_coverage(tmp_path)
+    _observation(
+        repo,
+        raw=raw,
+        raw_hash=raw_hash,
+        source=source,
+        classification=classification,
+        anchor=anchor,
+        instrument_revision_id=None,
+        at="2026-08-27T05:03:00Z",
+        close=close,
+        volume=volume,
+        public_eligibility_status=public_status,
+        revision_number=2,
+        supersedes_observation_id=observation["close_observation_id"],
+    )
+    body = NeutralBatchMarketContextService(str(db)).as_of(
+        market_date=TARGET_DATE,
+        knowledge_cutoff_at=CUTOFF,
+        venue_scope="TWSE",
+    )
+
+    eod_close = body["items"][0]["eod_close"]
+    assert body["items"][0]["coverage_status"] == "observed_ineligible"
+    assert set(eod_close) == EOD_CLOSE_KEYS
+    assert eod_close["status"] == expected_status
+    assert eod_close["freshness_state"] == "current"
+    assert eod_close["public_eligibility_status"] == public_status
+    assert eod_close["close_value"] is None
+    assert eod_close["currency"] is None
+    assert eod_close["unit"] is None
+    assert eod_close["price_semantics"] is None
+    if expected_reason:
+        assert expected_reason in eod_close["reason_codes"]
 
 
 def test_read_path_rejects_writes_and_does_not_open_network(tmp_path, monkeypatch) -> None:

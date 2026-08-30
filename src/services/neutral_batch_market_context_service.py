@@ -94,7 +94,7 @@ class NeutralBatchMarketContextService:
         *,
         market_date: str,
         knowledge_cutoff_at: str,
-        venue_scope: str = "TWSE_TPEX",
+        venue_scope: str,
         limit: int = 50,
         cursor: str | None = None,
     ) -> dict[str, Any]:

@@ -15,6 +15,7 @@ import os
 import platform
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -51,7 +52,7 @@ DEFAULT_VARIANTS = (
     "first_page_and_continuation_page",
     "limit_100",
 )
-BASELINE_MIGRATION_VERSION = "20260827_18_phase14_eod_close_context"
+BENCHMARK_MIGRATION_VERSION = "20260828_20_phase14_third_code_review_remediation"
 D = "2026-08-28"
 K = "2026-08-29T00:00:00Z"
 PAGE_LIMIT = 100
@@ -92,6 +93,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("benchmark_contract_version_mismatch")
     if manifest.get("manifest_schema_version") != "phase16_nbmc_benchmark_manifest_v1":
         raise ValueError("benchmark_manifest_schema_mismatch")
+    if manifest.get("migration_version") != BENCHMARK_MIGRATION_VERSION:
+        raise ValueError("benchmark_migration_version_mismatch")
     if manifest.get("market_date") != D or manifest.get("knowledge_cutoff_at") != K:
         raise ValueError("benchmark_d_k_mismatch")
     candidates = manifest.get("effective_denominator_candidates") or {}
@@ -726,7 +729,10 @@ def _insert_additional_rows(
 
 
 def build_database(path: Path, variant: str) -> None:
-    apply_valuation_migration(str(path))
+    migration = apply_valuation_migration(str(path))
+    applied_migrations = tuple(migration.get("applied_additive_migration_ids") or ())
+    if not applied_migrations or applied_migrations[-1] != BENCHMARK_MIGRATION_VERSION:
+        raise RuntimeError("benchmark_migration_version_mismatch")
     with sqlite3.connect(path) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         raw = _insert_raw_provenance(conn)
@@ -792,6 +798,45 @@ def run_request(service: NeutralBatchMarketContextService, storage: CountingStor
     }
 
 
+def run_cold_sample(database: Path, *, limit: int) -> dict[str, Any]:
+    """Measure one cold sample in a genuinely new Python process."""
+
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--worker",
+        "--database",
+        str(database.resolve()),
+        "--limit",
+        str(limit),
+    ]
+    started = time.perf_counter()
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=str(Path(__file__).resolve().parents[1]),
+    )
+    elapsed = time.perf_counter() - started
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise RuntimeError(f"benchmark cold worker failed: {detail}")
+    try:
+        sample = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("benchmark cold worker returned invalid JSON") from exc
+    if not isinstance(sample, dict):
+        raise RuntimeError("benchmark cold worker returned a non-object")
+    if sample.get("worker_pid") == os.getpid() or not sample.get("process_isolated"):
+        raise RuntimeError("benchmark_cold_process_not_isolated")
+    sample.update({
+        "elapsed_seconds": elapsed,
+        "mode": "cold",
+    })
+    return sample
+
+
 def environment_metadata() -> dict[str, Any]:
     return {
         "os": platform.platform(),
@@ -816,11 +861,9 @@ def run_benchmark(manifest: dict[str, Any], *, variants: tuple[str, ...], work_d
         samples: list[dict[str, Any]] = []
         for mode, count in (("cold", 30), ("warm", 30)):
             for sample_index in range(count):
+                limit = PAGE_LIMIT if variant == "limit_100" else 25
                 if mode == "cold":
-                    storage = CountingStorage(database)
-                    service = NeutralBatchMarketContextService(
-                        repository=NeutralBatchMarketContextRepository(storage=storage)
-                    )
+                    sample = run_cold_sample(database, limit=limit)
                 else:
                     if warm_service is None:
                         warm_storage = CountingStorage(database)
@@ -829,8 +872,7 @@ def run_benchmark(manifest: dict[str, Any], *, variants: tuple[str, ...], work_d
                         )
                     storage = warm_storage
                     service = warm_service
-                limit = PAGE_LIMIT if variant == "limit_100" else 25
-                sample = run_request(service, storage, limit=limit)
+                    sample = run_request(service, storage, limit=limit)
                 sample.update({"mode": mode, "sample_index": sample_index})
                 samples.append(sample)
                 (cold_samples if mode == "cold" else warm_samples).append(sample["elapsed_seconds"])
@@ -856,10 +898,13 @@ def run_benchmark(manifest: dict[str, Any], *, variants: tuple[str, ...], work_d
         "fixture_sha256": manifest_sha256(manifest),
         "market_date": D,
         "knowledge_cutoff_at": K,
+        "migration_version": manifest["migration_version"],
         "environment": environment_metadata(),
         "sample_method": {
-            "cold": "new service and query-only connection per sample",
-            "warm": "reused service object; each request retains one query-only connection",
+            "cold": "new subprocess and query-only connection per sample",
+            "warm": "reused service object and process; each request uses one query-only connection",
+            "cold_process_isolated": True,
+            "warm_process_reused": True,
             "sample_count_per_mode": 30,
             "total_per_variant": 60,
             "percentile": "nearest_rank",
@@ -897,6 +942,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--work-dir", default=None)
     parser.add_argument("--output", default=None)
     parser.add_argument("--variant", action="append", dest="variants")
+    parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--database", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--limit", type=int, default=25, help=argparse.SUPPRESS)
     parser.add_argument(
         "--enforce-gate",
         action="store_true",
@@ -907,6 +955,17 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.worker:
+        if not args.database or not 1 <= args.limit <= PAGE_LIMIT:
+            raise SystemExit("worker requires --database and a limit between 1 and 100")
+        storage = CountingStorage(Path(args.database))
+        service = NeutralBatchMarketContextService(
+            repository=NeutralBatchMarketContextRepository(storage=storage)
+        )
+        sample = run_request(service, storage, limit=args.limit)
+        sample.update({"worker_pid": os.getpid(), "process_isolated": True})
+        print(json.dumps(sample, ensure_ascii=False, sort_keys=True))
+        return 0
     manifest = load_manifest(args.manifest)
     selected = tuple(args.variants or DEFAULT_VARIANTS)
     unknown = sorted(set(selected) - set(DEFAULT_VARIANTS))
