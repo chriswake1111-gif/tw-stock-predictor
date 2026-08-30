@@ -8,6 +8,7 @@ database, calls a provider, or writes benchmark state into the application.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import gc
 import hashlib
 import json
@@ -1426,13 +1427,98 @@ def run_cold_sample(database: Path, *, limit: int) -> dict[str, Any]:
 
 
 def environment_metadata() -> dict[str, Any]:
-    return {
+    memory_total_bytes = _physical_memory_bytes()
+    metadata = {
         "os": platform.platform(),
+        "cpu_class": platform.machine() or "unknown",
+        "cpu_model": _cpu_model(),
         "cpu_count": os.cpu_count(),
+        "memory_class": _memory_class(memory_total_bytes),
+        "memory_total_bytes": memory_total_bytes,
         "python_version": platform.python_version(),
         "sqlite_version": sqlite3.sqlite_version,
         "worker_count": 1,
     }
+    _validate_environment_metadata(metadata)
+    return metadata
+
+
+def _cpu_model() -> str:
+    for value in (platform.processor(), platform.uname().processor):
+        normalized = " ".join(str(value or "").split())
+        if normalized:
+            return normalized
+    return "unknown"
+
+
+def _physical_memory_bytes() -> int | None:
+    if os.name == "nt":
+        class _MemoryStatusEx(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = _MemoryStatusEx()
+        status.dwLength = ctypes.sizeof(status)
+        try:
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return int(status.ullTotalPhys)
+        except (AttributeError, OSError):
+            return None
+        return None
+    try:
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        page_count = int(os.sysconf("SC_PHYS_PAGES"))
+    except (AttributeError, OSError, ValueError):
+        return None
+    return page_size * page_count if page_size > 0 and page_count > 0 else None
+
+
+def _memory_class(total_bytes: int | None) -> str:
+    if total_bytes is None or total_bytes <= 0:
+        return "unknown"
+    gib = total_bytes / float(1024 ** 3)
+    if gib < 8:
+        return "lt_8GiB"
+    if gib < 16:
+        return "8_16GiB"
+    if gib < 32:
+        return "16_32GiB"
+    if gib < 64:
+        return "32_64GiB"
+    return "gte_64GiB"
+
+
+def _validate_environment_metadata(metadata: dict[str, Any]) -> None:
+    required = {
+        "os",
+        "cpu_class",
+        "cpu_model",
+        "cpu_count",
+        "memory_class",
+        "memory_total_bytes",
+        "python_version",
+        "sqlite_version",
+        "worker_count",
+    }
+    if not required.issubset(metadata):
+        raise RuntimeError("benchmark_environment_metadata_incomplete")
+    if not str(metadata["cpu_class"]).strip() or not str(metadata["cpu_model"]).strip():
+        raise RuntimeError("benchmark_cpu_metadata_incomplete")
+    if (
+        not isinstance(metadata["memory_total_bytes"], int)
+        or metadata["memory_total_bytes"] <= 0
+        or metadata["memory_class"] == "unknown"
+    ):
+        raise RuntimeError("benchmark_memory_metadata_incomplete")
 
 
 def run_benchmark(manifest: dict[str, Any], *, variants: tuple[str, ...], work_dir: Path) -> dict[str, Any]:
@@ -1492,13 +1578,14 @@ def run_benchmark(manifest: dict[str, Any], *, variants: tuple[str, ...], work_d
             # connection closes.  The directory is benchmark-only and is
             # reported as a cleanup note rather than changing the result.
             pass
+    environment = environment_metadata()
     return {
         "contract_version": CONTRACT_VERSION,
         "fixture_sha256": manifest_sha256(manifest),
         "market_date": D,
         "knowledge_cutoff_at": K,
         "migration_version": manifest["migration_version"],
-        "environment": environment_metadata(),
+        "environment": environment,
         "sample_method": {
             "cold": "new subprocess and query-only connection per sample",
             "warm": "reused service, process, and query-only SQLite connection; each request starts a fresh read transaction/snapshot",

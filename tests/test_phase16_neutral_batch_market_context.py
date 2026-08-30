@@ -40,6 +40,7 @@ from tests.test_phase15_eod_coverage import (
     _observation,
     _raw,
     _seed_coverage,
+    _source,
     _tpex_observation,
     _tpex_source,
 )
@@ -511,6 +512,76 @@ def test_source_lineage_ignores_post_k_revoke_child_for_earlier_d(tmp_path) -> N
     assert item["coverage_status"] == "observed_eligible"
     assert item["eod_close"]["status"] == "available"
     assert item["eod_close"]["close_value"] == "1005"
+
+
+@pytest.mark.parametrize("status", ["revoked", "blocked"])
+def test_independent_older_d_blocker_does_not_contaminate_exact_d(
+    tmp_path, status
+) -> None:
+    db, repo, _, _, _, _, _, _ = _seed_coverage(tmp_path)
+    raw, raw_hash = _raw(
+        db,
+        "twse.eod.stock_day_all",
+        "twse-universe-official",
+        f"independent-older-d:{status}",
+        "2026-08-27T06:00:00Z",
+    )
+    _source(
+        repo,
+        raw,
+        raw_hash,
+        date="2026-08-26",
+        at="2026-08-27T06:00:00Z",
+        status=status,
+        row_count=0,
+    )
+
+    body = NeutralBatchMarketContextService(str(db)).as_of(
+        market_date=TARGET_DATE,
+        knowledge_cutoff_at=CUTOFF,
+        venue_scope="TWSE",
+    )
+    venue = body["per_venue"]["TWSE"]
+    assert venue["source"]["state"] == "usable"
+    assert venue["source"]["source_trade_date"] == TARGET_DATE
+    assert body["items"][0]["eod_close"]["status"] == "available"
+
+
+@pytest.mark.parametrize("status", ["revoked", "blocked"])
+def test_unrelated_blocker_does_not_turn_no_exact_d_into_blocked(
+    tmp_path, status
+) -> None:
+    db, repo, _, _, _, _, _, _ = _seed_coverage(
+        tmp_path,
+        source_kwargs={"date": "2026-08-26"},
+        include_observation=False,
+    )
+    raw, raw_hash = _raw(
+        db,
+        "twse.eod.stock_day_all",
+        "twse-universe-official",
+        f"independent-no-exact-d:{status}",
+        "2026-08-27T06:00:00Z",
+    )
+    _source(
+        repo,
+        raw,
+        raw_hash,
+        date="2026-08-25",
+        at="2026-08-27T06:00:00Z",
+        status=status,
+        row_count=0,
+    )
+
+    body = NeutralBatchMarketContextService(str(db)).as_of(
+        market_date=TARGET_DATE,
+        knowledge_cutoff_at=CUTOFF,
+        venue_scope="TWSE",
+    )
+    venue = body["per_venue"]["TWSE"]
+    assert venue["source"]["state"] == "unknown"
+    assert venue["source"]["reason_codes"] == ["no_exact_D"]
+    assert venue["source"]["source_trade_date"] is None
 
 
 def test_source_lineage_selects_k_visible_corrected_replacement(tmp_path) -> None:

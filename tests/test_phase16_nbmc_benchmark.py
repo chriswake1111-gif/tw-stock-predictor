@@ -10,6 +10,7 @@ from tools.phase16_nbmc_benchmark import (
     DEFAULT_VARIANTS,
     build_database,
     CountingStorage,
+    environment_metadata,
     load_manifest,
     manifest_sha256,
     nearest_rank,
@@ -79,6 +80,23 @@ def test_phase16_benchmark_manifest_rejects_migration_drift() -> None:
         assert str(exc) == "benchmark_migration_version_mismatch"
     else:
         raise AssertionError("benchmark migration drift was not rejected")
+
+
+def test_phase16_benchmark_environment_records_hardware_class_and_size() -> None:
+    metadata = environment_metadata()
+    assert metadata["cpu_class"] == metadata["cpu_class"].strip()
+    assert metadata["cpu_class"]
+    assert metadata["cpu_model"] == metadata["cpu_model"].strip()
+    assert metadata["cpu_model"]
+    assert metadata["memory_class"] in {
+        "lt_8GiB",
+        "8_16GiB",
+        "16_32GiB",
+        "32_64GiB",
+        "gte_64GiB",
+    }
+    assert isinstance(metadata["memory_total_bytes"], int)
+    assert metadata["memory_total_bytes"] > 0
 
 
 def test_phase16_cold_sample_uses_a_new_process(tmp_path) -> None:

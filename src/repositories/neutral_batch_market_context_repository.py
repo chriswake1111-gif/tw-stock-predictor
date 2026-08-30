@@ -87,7 +87,13 @@ class NeutralBatchMarketContextRepository:
         conn: sqlite3.Connection,
         coverage_request: CoverageRequest,
     ) -> list[dict[str, Any]]:
-        """Resolve every K-visible source revision before selecting exact D."""
+        """Resolve K-visible source rows before selecting exact D.
+
+        Keep the effective marker alongside superseded rows.  Source-level
+        blocker relevance is decided only after the complete visible lineage
+        is available, so an unrelated historical blocker cannot contaminate a
+        different requested trade date.
+        """
 
         rows = conn.execute(
             """
@@ -117,13 +123,13 @@ class NeutralBatchMarketContextRepository:
                 JOIN source_excluded excluded
                   ON excluded.source_snapshot_id = edge.child_snapshot_id
             )
-            SELECT visible.*
+            SELECT visible.*,
+                   CASE WHEN NOT EXISTS (
+                       SELECT 1
+                       FROM source_excluded excluded
+                       WHERE excluded.source_snapshot_id = visible.source_snapshot_id
+                   ) THEN 1 ELSE 0 END AS _lineage_effective
             FROM source_visible_rows visible
-            WHERE NOT EXISTS (
-                SELECT 1
-                FROM source_excluded excluded
-                WHERE excluded.source_snapshot_id = visible.source_snapshot_id
-            )
             """,
             (
                 coverage_request.resource_id,
@@ -160,6 +166,61 @@ class NeutralBatchMarketContextRepository:
             return bool(source_date and source_date > target_date)
         return False
 
+    @staticmethod
+    def _source_date_matches_target(
+        row: Mapping[str, Any], target_date: str
+    ) -> bool:
+        """Return true only for an explicitly stored source date equal to D."""
+
+        return str(row.get("source_trade_date") or "") == target_date
+
+    @classmethod
+    def _source_blocker_reaches_target_date(
+        cls,
+        row: Mapping[str, Any],
+        visible_rows: list[dict[str, Any]],
+        target_date: str,
+    ) -> bool:
+        """Prove that a blocker belongs to the requested D lineage.
+
+        A same-D row or an explicit request-bound invalid/future row is safe
+        evidence.  For a blocker whose own D is absent/different, walk only
+        its stored supersedes chain and accept it when an ancestor is tied to
+        D.  An unrelated historical row therefore remains diagnostic noise.
+        """
+
+        by_id = {
+            str(candidate.get("source_snapshot_id")): candidate
+            for candidate in visible_rows
+            if candidate.get("source_snapshot_id")
+        }
+        current: Mapping[str, Any] | None = row
+        seen: set[str] = set()
+        while current is not None:
+            if cls._source_date_matches_target(current, target_date):
+                return True
+            if cls._request_bound_invalid_or_future(current, target_date):
+                return True
+            parent_id = str(current.get("supersedes_source_snapshot_id") or "")
+            if not parent_id or parent_id in seen:
+                return False
+            seen.add(parent_id)
+            current = by_id.get(parent_id)
+        return False
+
+    @staticmethod
+    def _public_blocker_row(
+        row: Mapping[str, Any], target_date: str
+    ) -> dict[str, Any]:
+        """Keep public blocker D within the approved D-or-null semantics."""
+
+        public_row = dict(row)
+        if not NeutralBatchMarketContextRepository._source_date_matches_target(
+            row, target_date
+        ):
+            public_row["source_trade_date"] = None
+        return public_row
+
     def _source_lineage_cte(
         self,
         conn: sqlite3.Connection,
@@ -168,12 +229,32 @@ class NeutralBatchMarketContextRepository:
     ) -> dict[str, Any]:
         """Return safe source state after K visibility and correction lineage."""
 
-        effective_rows = self._lineage_visible_rows(conn, coverage_request)
+        lineage_rows = self._lineage_visible_rows(conn, coverage_request)
+        effective_rows = [
+            row for row in lineage_rows if int(row.get("_lineage_effective") or 0) == 1
+        ]
         blocking_rows = [
             row
             for row in effective_rows
             if str(row.get("status") or "") in _SOURCE_BLOCKING_STATUSES
+            and self._source_blocker_reaches_target_date(
+                row, lineage_rows, coverage_request.source_trade_date
+            )
         ]
+        bound_invalid_rows = [
+            row
+            for row in effective_rows
+            if self._request_bound_invalid_or_future(
+                row, coverage_request.source_trade_date
+            )
+        ]
+        if bound_invalid_rows:
+            return self._source_public_context(
+                mapping,
+                None,
+                CoverageSourceState.BLOCKED.value,
+                "source_date_in_future_or_invalid",
+            )
         if blocking_rows:
             # A K-visible blocker is a surviving lineage leaf.  It must be
             # classified before the ordinary exact-D filter; otherwise a
@@ -184,7 +265,14 @@ class NeutralBatchMarketContextRepository:
                 key=EodCoverageRepository._source_order_key,
             )
             state, reason = EodCoverageRepository._source_state(blocker)
-            return self._source_public_context(mapping, blocker, state, reason)
+            return self._source_public_context(
+                mapping,
+                self._public_blocker_row(
+                    blocker, coverage_request.source_trade_date
+                ),
+                state,
+                reason,
+            )
         exact_rows = [
             row
             for row in effective_rows
@@ -200,19 +288,6 @@ class NeutralBatchMarketContextRepository:
             state, reason = EodCoverageRepository._source_state(exact)
             return self._source_public_context(mapping, exact, state, reason)
 
-        bound_invalid = any(
-            self._request_bound_invalid_or_future(
-                row, coverage_request.source_trade_date
-            )
-            for row in effective_rows
-        )
-        if bound_invalid:
-            return self._source_public_context(
-                mapping,
-                None,
-                CoverageSourceState.BLOCKED.value,
-                "source_date_in_future_or_invalid",
-            )
         return self._source_public_context(
             mapping,
             None,
