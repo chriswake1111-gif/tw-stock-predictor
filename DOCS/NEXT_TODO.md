@@ -1,5 +1,34 @@
 # 專案進度與下階段待辦 (NEXT_TODO.md)
 
+## 2026-09-01 交班：Layer 1 完成，準備小型 Productization Phase
+
+### 當前基線
+
+- [x] `main` checkout 已同步 `origin/main`，HEAD 為 `c8eb887590bcd4a9108fddb8dbfd96bbff33bceb`，即 Phase 17 Daily Research 的 merge baseline（PR #16）。
+- [x] Phase 12 research review queue、Phase 13 Universe Foundation、Phase 14 Official EOD Close Context、Phase 15 Coverage Quality / Visibility、Phase 16 Neutral Batch Market Context 與 Phase 17 Daily Research 的已合併程式碼均位於目前 `main` 基線。
+- [x] Phase 17 merge 後 Main CI closure 已在既定 gate 完成；本次交班只核對 Git 基線，未重新執行全套專案測試。
+- [x] 產品邊界維持為台股研究、情境推演與決策支援；不包含券商連線、真實委託、自動交易、跟單或保證報酬。
+- [ ] Layer 1 完成不等於正式部署、資料完整性已無缺口或研究結論可直接交易；資料不足仍須維持 fail-closed。
+
+### 工作樹與交接邊界
+
+- 下一個對話框應從乾淨的 `main@c8eb887590bcd4a9108fddb8dbfd96bbff33bceb` 開始；目前乾淨 `main` checkout 位於 `D:\Tools\tw-stock-predictor-phase13`。
+- `D:\Tools\tw-stock-predictor` 目前仍是較舊的 Phase 12 分支，包含使用者未追蹤的 `.tmp_*`、`.worktrees` 與規格目錄；不得 reset、clean、刪除或將其誤當作 Productization 基線。
+- Productization 尚未開始；尚未授權任何新的產品行為、資料契約、部署或真實交易能力。
+
+### 下一個對話框的立即行動
+
+1. 先重新讀取 `AGENTS.md`、`DOCS/PRODUCT_BOUNDARY.md`、`DOCS/RESEARCH_DATA_CONTRACT.md` 與本檔，並核對 `main`、HEAD、工作樹及遠端狀態。
+2. 將「小型 Productization Phase」建立為獨立且可審查的 scope／issue contract，先完成 Assessment 與 Specification；未取得明確授權前不得開始 Implementation、merge 或 deployment。
+3. 保留既有 point-in-time、provenance、資料品質與 fail-closed 邊界；不得加入 broker、real order、auto-trading 或未標示的假資料／fallback。
+
+### 本次交班驗證
+
+- [x] `git fetch origin --prune` 成功，確認遠端 `origin/main`。
+- [x] 乾淨 `main` checkout 由 `a018861` fast-forward 至 `c8eb887`。
+- [x] 交班前 `main` 無已追蹤的 staged、unstaged 或未合併變更。
+- [ ] 本次未重新執行 Python 全套測試、Frontend build 或瀏覽器驗證；下次若修改程式，須依 scope 執行相應驗證。
+
 ## 2026-08-01 研究模式產品邊界與分析核心改進
 
 - [x] 正式建立 `DOCS/PRODUCT_BOUNDARY.md`：僅允許市場研究、歷史回測與虛擬模擬；禁止券商 SDK、真實委託、跟單及客戶資金管理。
