@@ -22,9 +22,10 @@ class ResearchWorkflowNotFoundError(LookupError):
 
 
 class ResearchWorkflowRepository:
-    def __init__(self, db_path: str = "data/cache.db"):
+    def __init__(self, db_path: str = "data/cache.db", *, auto_migrate: bool = True):
         self.db_path = db_path
-        apply_valuation_migration(db_path)
+        if auto_migrate:
+            apply_valuation_migration(db_path)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -171,6 +172,49 @@ class ResearchWorkflowRepository:
         return dict(row) if row else None
 
     @staticmethod
+    def active_memberships_page_with_connection(
+        conn: sqlite3.Connection,
+        *,
+        limit: int,
+        last_symbol: str | None = None,
+        last_watchlist_item_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read a bounded neutral page with one look-ahead row."""
+        if not 1 <= limit <= 50:
+            raise ValueError("research_queue_limit_invalid")
+        where = "membership_state='active'"
+        params: list[Any] = []
+        if last_symbol is not None or last_watchlist_item_id is not None:
+            if not last_symbol or not last_watchlist_item_id:
+                raise ValueError("daily_cursor_last_key_invalid")
+            where += " AND (symbol > ? OR (symbol = ? AND watchlist_item_id > ?))"
+            params.extend([last_symbol, last_symbol, last_watchlist_item_id])
+        rows = conn.execute(
+            f"""
+            SELECT * FROM research_watchlist_items
+            WHERE {where}
+            ORDER BY symbol ASC, watchlist_item_id ASC
+            LIMIT ?
+            """,
+            [*params, limit + 1],
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def active_population_keys_with_connection(
+        conn: sqlite3.Connection,
+    ) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            """
+            SELECT symbol, watchlist_item_id
+            FROM research_watchlist_items
+            WHERE membership_state='active'
+            ORDER BY symbol ASC, watchlist_item_id ASC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    @staticmethod
     def latest_review_events_with_connection(
         conn: sqlite3.Connection, item_ids: list[str]
     ) -> dict[str, dict[str, Any]]:
@@ -192,6 +236,98 @@ class ResearchWorkflowRepository:
             item_ids,
         ).fetchall()
         return {row["watchlist_item_id"]: dict(row) for row in rows}
+
+    @staticmethod
+    def latest_review_events_as_of_with_connection(
+        conn: sqlite3.Connection,
+        item_ids: list[str],
+        cutoff: str,
+    ) -> dict[str, dict[str, Any]]:
+        if not item_ids:
+            return {}
+        normalized = normalize_utc_timestamp(cutoff, "knowledge_cutoff_at")
+        placeholders = ",".join("?" for _ in item_ids)
+        rows = conn.execute(
+            f"""
+            WITH ranked AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY watchlist_item_id
+                    ORDER BY reviewed_at DESC, created_at DESC, review_event_id DESC
+                ) AS position
+                FROM research_review_events
+                WHERE watchlist_item_id IN ({placeholders})
+                  AND reviewed_at <= ? AND created_at <= ?
+            )
+            SELECT * FROM ranked WHERE position=1
+            """,
+            [*item_ids, normalized, normalized],
+        ).fetchall()
+        return {row["watchlist_item_id"]: dict(row) for row in rows}
+
+    @staticmethod
+    def event_by_idempotency_key_with_connection(
+        conn: sqlite3.Connection, idempotency_key: str
+    ) -> dict[str, Any] | None:
+        row = conn.execute(
+            "SELECT * FROM research_review_events WHERE idempotency_key=?",
+            (idempotency_key,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    @staticmethod
+    def append_review_event_with_connection(
+        conn: sqlite3.Connection,
+        acknowledgment: ReviewAcknowledgment,
+        *,
+        reviewed_at: str,
+    ) -> dict[str, Any]:
+        """Append to the existing immutable event table in a caller transaction."""
+        payload = acknowledgment.canonical_payload()
+        reviewed = normalize_utc_timestamp(reviewed_at, "reviewed_at")
+        event_id = "research_review_" + hashlib.sha256(
+            payload["idempotency_key"].encode("utf-8")
+        ).hexdigest()[:24]
+        existing = conn.execute(
+            "SELECT * FROM research_review_events WHERE idempotency_key=?",
+            (payload["idempotency_key"],),
+        ).fetchone()
+        if existing:
+            same = all(existing[field] == payload[field] for field in (
+                "watchlist_item_id", "acknowledged_snapshot_id",
+                "comparison_cutoff_at",
+            ))
+            if not same:
+                raise ValueError("review_idempotency_conflict")
+            return {**dict(existing), "created": False}
+        item = conn.execute(
+            "SELECT * FROM research_watchlist_items WHERE watchlist_item_id=?",
+            (payload["watchlist_item_id"],),
+        ).fetchone()
+        if item is None:
+            raise ResearchWorkflowNotFoundError(payload["watchlist_item_id"])
+        if item["membership_state"] != MembershipState.ACTIVE.value:
+            raise ValueError("research_watchlist_item_archived")
+        snapshot = conn.execute(
+            "SELECT symbol FROM analysis_snapshots WHERE snapshot_id=?",
+            (payload["acknowledged_snapshot_id"],),
+        ).fetchone()
+        if snapshot is None:
+            raise ValueError("acknowledged_snapshot_not_found")
+        if snapshot["symbol"] != item["symbol"]:
+            raise ValueError("acknowledged_snapshot_symbol_mismatch")
+        conn.execute(
+            "INSERT INTO research_review_events VALUES (?,?,?,?,?,?,?,?)",
+            (event_id, payload["watchlist_item_id"],
+             payload["acknowledged_snapshot_id"], payload["comparison_cutoff_at"],
+             reviewed, reviewed, payload["idempotency_key"],
+             WORKFLOW_CONTRACT_VERSION),
+        )
+        row = conn.execute(
+            "SELECT * FROM research_review_events WHERE review_event_id=?",
+            (event_id,),
+        ).fetchone()
+        assert row is not None
+        return {**dict(row), "created": True}
 
     def append_review_event(
         self, acknowledgment: ReviewAcknowledgment, *, reviewed_at: str

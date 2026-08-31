@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import calendar
 import hashlib
+import sqlite3
 from datetime import date
 from typing import Any
 
@@ -36,10 +37,17 @@ class SecurityScreeningService:
         db_path: str = "data/cache.db",
         *,
         technical_component: TechnicalTurnComponent | None = None,
+        auto_migrate: bool = True,
     ):
-        self.valuation_repository = SecurityValuationRepository(db_path)
-        self.screening_repository = ScreeningRepository(db_path)
-        self.forward_eps_repository = ForwardEPSRepository(db_path)
+        self.valuation_repository = SecurityValuationRepository(
+            db_path, auto_migrate=auto_migrate
+        )
+        self.screening_repository = ScreeningRepository(
+            db_path, auto_migrate=auto_migrate
+        )
+        self.forward_eps_repository = ForwardEPSRepository(
+            db_path, auto_migrate=auto_migrate
+        )
         self.rule_registry = RuleRegistry()
         self.engine = ValueScreeningEngine(self.rule_registry)
         self.technical_component = technical_component or UnavailableTechnicalTurnComponent()
@@ -115,9 +123,16 @@ class SecurityScreeningService:
         *,
         logical_profile_id: str | None,
         profile_revision_id: str | None,
+        connection: sqlite3.Connection | None = None,
     ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-        states = self.screening_repository.effective_profile_states_as_of(
-            knowledge_cutoff_at
+        states = (
+            self.screening_repository.effective_profile_states_as_of_with_connection(
+                connection, knowledge_cutoff_at
+            )
+            if connection is not None
+            else self.screening_repository.effective_profile_states_as_of(
+                knowledge_cutoff_at
+            )
         )
         if logical_profile_id or profile_revision_id:
             selected = [
@@ -184,6 +199,7 @@ class SecurityScreeningService:
         *,
         logical_profile_id: str | None = None,
         profile_revision_id: str | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> dict[str, Any]:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
         symbol = symbol.strip().upper()
@@ -192,6 +208,7 @@ class SecurityScreeningService:
             cutoff,
             logical_profile_id=logical_profile_id,
             profile_revision_id=profile_revision_id,
+            connection=connection,
         )
         if selection_error:
             return {
@@ -220,15 +237,29 @@ class SecurityScreeningService:
             cutoff_date, int(profile["history_years"])
         ).isoformat()
         window_end = cutoff_date.isoformat()
-        valuations = self.valuation_repository.observations_as_of(
-            symbol,
-            cutoff,
-            source_name=profile["valuation_source_name"],
-            source_dataset=profile["valuation_source_dataset"],
-            window_start=window_start,
-            window_end=window_end,
-        )
-        forward_eps = self.forward_eps_repository.forward_eps_as_of(symbol, cutoff)
+        if connection is None:
+            valuations = self.valuation_repository.observations_as_of(
+                symbol,
+                cutoff,
+                source_name=profile["valuation_source_name"],
+                source_dataset=profile["valuation_source_dataset"],
+                window_start=window_start,
+                window_end=window_end,
+            )
+            forward_eps = self.forward_eps_repository.forward_eps_as_of(symbol, cutoff)
+        else:
+            valuations = self.valuation_repository.observations_as_of_with_connection(
+                connection,
+                symbol,
+                cutoff,
+                source_name=profile["valuation_source_name"],
+                source_dataset=profile["valuation_source_dataset"],
+                window_start=window_start,
+                window_end=window_end,
+            )
+            forward_eps = self.forward_eps_repository.forward_eps_as_of_with_connection(
+                connection, symbol, cutoff
+            )
         technical_result = self.technical_component.evaluate(symbol, cutoff, profile)
         result = self.engine.evaluate(
             symbol=symbol,
@@ -326,3 +357,21 @@ class SecurityScreeningService:
             ],
         ]
         return result
+
+    def analyze_preloaded(
+        self,
+        connection: sqlite3.Connection,
+        symbol: str,
+        knowledge_cutoff_at: str,
+        *,
+        logical_profile_id: str | None = None,
+        profile_revision_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Evaluate screening evidence on a caller-owned read transaction."""
+        return self.analyze(
+            symbol,
+            knowledge_cutoff_at,
+            logical_profile_id=logical_profile_id,
+            profile_revision_id=profile_revision_id,
+            connection=connection,
+        )

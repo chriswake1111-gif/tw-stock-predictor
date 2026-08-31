@@ -31,9 +31,10 @@ def _row_dict(row: sqlite3.Row) -> dict[str, Any]:
 
 
 class ForwardEPSRepository:
-    def __init__(self, db_path: str = "data/cache.db"):
+    def __init__(self, db_path: str = "data/cache.db", *, auto_migrate: bool = True):
         self.db_path = db_path
-        apply_valuation_migration(db_path)
+        if auto_migrate:
+            apply_valuation_migration(db_path)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -335,48 +336,64 @@ class ForwardEPSRepository:
     ) -> list[dict[str, Any]]:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                WITH ranked AS (
-                    SELECT *, ROW_NUMBER() OVER (
-                        PARTITION BY logical_series_id
-                        ORDER BY revision_number DESC, available_at DESC, ingested_at DESC, id DESC
-                    ) AS revision_rank
-                    FROM forward_eps_observations
-                    WHERE symbol = ? AND available_at <= ? AND ingested_at <= ?
-                )
-                , approval_ranked AS (
-                    SELECT *, ROW_NUMBER() OVER (
-                        PARTITION BY resource_id
-                        ORDER BY available_at DESC, ingested_at DESC, approval_event_id DESC
-                    ) AS approval_rank
-                    FROM valuation_approvals
-                    WHERE resource_type = 'forward_eps'
-                      AND available_at <= ? AND ingested_at <= ?
-                )
-                SELECT ranked.*,
-                       approval_ranked.approval_id AS verified_approval_id,
-                       approval_ranked.decision AS effective_approval_status,
-                       approval_ranked.rule_id AS approval_rule_id,
-                       approval_ranked.evidence_level AS approved_evidence_level,
-                       approval_ranked.project_operationalization,
-                       approval_ranked.approved_by AS verified_approved_by,
-                       approval_ranked.rationale AS approval_rationale
-                FROM ranked LEFT JOIN approval_ranked
-                  ON approval_ranked.resource_id = ranked.id
-                 AND approval_ranked.approval_rank = 1
-                WHERE ranked.revision_rank = 1 AND ranked.status = 'active'
-                ORDER BY fiscal_year, source_name, logical_series_id
-                """,
-                (symbol.strip().upper(), cutoff, cutoff, cutoff, cutoff),
-            ).fetchall()
+            return self.forward_eps_state_as_of_with_connection(conn, symbol, cutoff)
+
+    def forward_eps_state_as_of_with_connection(
+        self, conn: sqlite3.Connection, symbol: str, knowledge_cutoff_at: str
+    ) -> list[dict[str, Any]]:
+        cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
+        rows = conn.execute(
+            """
+            WITH ranked AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY logical_series_id
+                    ORDER BY revision_number DESC, available_at DESC, ingested_at DESC, id DESC
+                ) AS revision_rank
+                FROM forward_eps_observations
+                WHERE symbol = ? AND available_at <= ? AND ingested_at <= ?
+            )
+            , approval_ranked AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY resource_id
+                    ORDER BY available_at DESC, ingested_at DESC, approval_event_id DESC
+                ) AS approval_rank
+                FROM valuation_approvals
+                WHERE resource_type = 'forward_eps'
+                  AND available_at <= ? AND ingested_at <= ?
+            )
+            SELECT ranked.*,
+                   approval_ranked.approval_id AS verified_approval_id,
+                   approval_ranked.decision AS effective_approval_status,
+                   approval_ranked.rule_id AS approval_rule_id,
+                   approval_ranked.evidence_level AS approved_evidence_level,
+                   approval_ranked.project_operationalization,
+                   approval_ranked.approved_by AS verified_approved_by,
+                   approval_ranked.rationale AS approval_rationale
+            FROM ranked LEFT JOIN approval_ranked
+              ON approval_ranked.resource_id = ranked.id
+             AND approval_ranked.approval_rank = 1
+            WHERE ranked.revision_rank = 1 AND ranked.status = 'active'
+            ORDER BY fiscal_year, source_name, logical_series_id
+            """,
+            (symbol.strip().upper(), cutoff, cutoff, cutoff, cutoff),
+        ).fetchall()
         return [_row_dict(row) for row in rows]
 
     def forward_eps_as_of(
         self, symbol: str, knowledge_cutoff_at: str
     ) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            return self.forward_eps_as_of_with_connection(
+                conn, symbol, knowledge_cutoff_at
+            )
+
+    def forward_eps_as_of_with_connection(
+        self, conn: sqlite3.Connection, symbol: str, knowledge_cutoff_at: str
+    ) -> list[dict[str, Any]]:
         return [
-            row for row in self.forward_eps_state_as_of(symbol, knowledge_cutoff_at)
+            row for row in self.forward_eps_state_as_of_with_connection(
+                conn, symbol, knowledge_cutoff_at
+            )
             if row["effective_approval_status"] == "approved"
             and row["approval_rule_id"] == "VAL-02"
             and row["approved_evidence_level"] != "U"
@@ -395,52 +412,68 @@ class ForwardEPSRepository:
     ) -> dict[str, list[dict[str, Any]]]:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                WITH ranked AS (
-                    SELECT *, ROW_NUMBER() OVER (
-                        PARTITION BY logical_series_id
-                        ORDER BY revision_number DESC, available_at DESC, ingested_at DESC, id DESC
-                    ) AS revision_rank
-                    FROM pe_scenarios
-                    WHERE available_at <= ? AND ingested_at <= ?
-                )
-                , approval_ranked AS (
-                    SELECT *, ROW_NUMBER() OVER (
-                        PARTITION BY resource_id
-                        ORDER BY available_at DESC, ingested_at DESC, approval_event_id DESC
-                    ) AS approval_rank
-                    FROM valuation_approvals
-                    WHERE resource_type = 'pe_scenario'
-                      AND available_at <= ? AND ingested_at <= ?
-                )
-                SELECT ranked.*,
-                       approval_ranked.approval_id AS verified_approval_id,
-                       approval_ranked.decision AS effective_approval_status,
-                       approval_ranked.rule_id AS approval_rule_id,
-                       approval_ranked.evidence_level AS approved_evidence_level,
-                       approval_ranked.project_operationalization,
-                       approval_ranked.approved_by AS verified_approved_by,
-                       approval_ranked.rationale AS approval_rationale
-                FROM ranked JOIN approval_ranked
-                  ON approval_ranked.resource_id = ranked.id
-                 AND approval_ranked.approval_rank = 1
-                WHERE ranked.revision_rank = 1
-                  AND approval_ranked.decision = 'approved'
-                  AND approval_ranked.rule_id = 'VAL-04'
-                  AND approval_ranked.evidence_level != 'U'
-                  AND (approval_ranked.evidence_level != 'C'
-                       OR approval_ranked.project_operationalization = 1)
-                  AND (ranked.effective_from IS NULL OR ranked.effective_from <= ?)
-                  AND (ranked.effective_to IS NULL OR ranked.effective_to > ?)
-                  AND ((scope = 'symbol' AND symbol = ?)
-                    OR (scope = 'industry' AND industry = ?)
-                    OR (scope = 'market' AND market = ?))
-                ORDER BY CASE scope WHEN 'symbol' THEN 1 WHEN 'industry' THEN 2 ELSE 3 END,
-                         label, logical_series_id
-                """,
-                (cutoff, cutoff, cutoff, cutoff, cutoff, cutoff, symbol.strip().upper(), industry, market),
-            ).fetchall()
+            return self.pe_scenarios_as_of_with_connection(
+                conn, symbol, cutoff, industry=industry, market=market
+            )
+
+    def pe_scenarios_as_of_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        symbol: str,
+        knowledge_cutoff_at: str,
+        industry: str | None = None,
+        market: str | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
+        rows = conn.execute(
+            """
+            WITH ranked AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY logical_series_id
+                    ORDER BY revision_number DESC, available_at DESC, ingested_at DESC, id DESC
+                ) AS revision_rank
+                FROM pe_scenarios
+                WHERE available_at <= ? AND ingested_at <= ?
+            )
+            , approval_ranked AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY resource_id
+                    ORDER BY available_at DESC, ingested_at DESC, approval_event_id DESC
+                ) AS approval_rank
+                FROM valuation_approvals
+                WHERE resource_type = 'pe_scenario'
+                  AND available_at <= ? AND ingested_at <= ?
+            )
+            SELECT ranked.*,
+                   approval_ranked.approval_id AS verified_approval_id,
+                   approval_ranked.decision AS effective_approval_status,
+                   approval_ranked.rule_id AS approval_rule_id,
+                   approval_ranked.evidence_level AS approved_evidence_level,
+                   approval_ranked.project_operationalization,
+                   approval_ranked.approved_by AS verified_approved_by,
+                   approval_ranked.rationale AS approval_rationale
+            FROM ranked JOIN approval_ranked
+              ON approval_ranked.resource_id = ranked.id
+             AND approval_ranked.approval_rank = 1
+            WHERE ranked.revision_rank = 1
+              AND approval_ranked.decision = 'approved'
+              AND approval_ranked.rule_id = 'VAL-04'
+              AND approval_ranked.evidence_level != 'U'
+              AND (approval_ranked.evidence_level != 'C'
+                   OR approval_ranked.project_operationalization = 1)
+              AND (ranked.effective_from IS NULL OR ranked.effective_from <= ?)
+              AND (ranked.effective_to IS NULL OR ranked.effective_to > ?)
+              AND ((scope = 'symbol' AND symbol = ?)
+                OR (scope = 'industry' AND industry = ?)
+                OR (scope = 'market' AND market = ?))
+            ORDER BY CASE scope WHEN 'symbol' THEN 1 WHEN 'industry' THEN 2 ELSE 3 END,
+                     label, logical_series_id
+            """,
+            (
+                cutoff, cutoff, cutoff, cutoff, cutoff, cutoff,
+                symbol.strip().upper(), industry, market,
+            ),
+        ).fetchall()
         grouped = {scope.value: [] for scope in PEScope}
         for row in rows:
             grouped[row["scope"]].append(_row_dict(row))

@@ -16,6 +16,7 @@ import type {
   UniverseListResponse,
   UniverseResponse,
   EodCloseContextResponse,
+  DailyResearchResponse,
 } from "./types";
 
 type QueryValue = string | number | boolean | null | undefined;
@@ -142,6 +143,31 @@ export const evidenceApi = {
     return fetchJson<ResearchQueueDetail>(withQuery(
       `/api/v2/research/queue/${encodeURIComponent(itemId)}`,
       { comparison_cutoff: comparisonCutoff },
+    ), signal);
+  },
+  dailyResearchContext(
+    marketDate: string,
+    knowledgeCutoffAt: string,
+    limit = 25,
+    cursor?: string | null,
+    signal?: AbortSignal,
+  ) {
+    return fetchJson<DailyResearchResponse>(withQuery("/api/v2/research/daily-context", {
+      market_date: marketDate,
+      knowledge_cutoff_at: knowledgeCutoffAt,
+      limit,
+      cursor,
+    }), signal);
+  },
+  dailyResearchContextDetail(
+    itemId: string,
+    marketDate: string,
+    knowledgeCutoffAt: string,
+    signal?: AbortSignal,
+  ) {
+    return fetchJson<DailyResearchResponse>(withQuery(
+      `/api/v2/research/daily-context/${encodeURIComponent(itemId)}`,
+      { market_date: marketDate, knowledge_cutoff_at: knowledgeCutoffAt },
     ), signal);
   },
   universeInstrument(canonicalSymbol: string, knowledgeCutoffAt: string, signal?: AbortSignal) {

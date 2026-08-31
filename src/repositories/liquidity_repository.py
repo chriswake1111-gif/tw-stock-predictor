@@ -18,9 +18,10 @@ def _fingerprint(payload: dict) -> str:
 
 
 class LiquidityRepository:
-    def __init__(self, db_path: str = "data/cache.db"):
+    def __init__(self, db_path: str = "data/cache.db", *, auto_migrate: bool = True):
         self.db_path = db_path
-        apply_valuation_migration(db_path)
+        if auto_migrate:
+            apply_valuation_migration(db_path)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -85,7 +86,14 @@ class LiquidityRepository:
 
     def latest_m1b_as_of(self, knowledge_cutoff_at: str) -> dict | None:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
-        return self._eligible_m1b_as_of(cutoff, cutoff)
+        with self._connect() as conn:
+            return self.latest_m1b_as_of_with_connection(conn, cutoff)
+
+    def latest_m1b_as_of_with_connection(
+        self, conn: sqlite3.Connection, knowledge_cutoff_at: str
+    ) -> dict | None:
+        cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
+        return self._eligible_m1b_as_of_with_connection(conn, cutoff, cutoff)
 
     def _eligible_m1b_as_of(
         self,
@@ -94,7 +102,23 @@ class LiquidityRepository:
     ) -> dict | None:
         """Return M1B only when its effective publication evidence remains valid."""
         with self._connect() as conn:
-            rows = conn.execute(
+            return self._eligible_m1b_as_of_with_connection(
+                conn, m1b_available_cutoff, knowledge_cutoff_at
+            )
+
+    def _eligible_m1b_as_of_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        m1b_available_cutoff: str,
+        knowledge_cutoff_at: str,
+    ) -> dict | None:
+        cutoff_available = normalize_utc_timestamp(
+            m1b_available_cutoff, "m1b_available_cutoff"
+        )
+        cutoff_knowledge = normalize_utc_timestamp(
+            knowledge_cutoff_at, "knowledge_cutoff_at"
+        )
+        rows = conn.execute(
                 """
                 WITH ranked_m1b AS (
                     SELECT m.*, ROW_NUMBER() OVER (
@@ -109,14 +133,14 @@ class LiquidityRepository:
                 ORDER BY m.available_at DESC, m.period DESC, m.revision DESC,
                          m.ingested_at DESC
                 """,
-                (m1b_available_cutoff, knowledge_cutoff_at),
+                (cutoff_available, cutoff_knowledge),
             ).fetchall()
-            for row in rows:
-                item = dict(row)
-                if self.publication_binding_state_as_of_with_connection(
-                    conn, item, knowledge_cutoff_at
-                )["eligible"]:
-                    return item
+        for row in rows:
+            item = dict(row)
+            if self.publication_binding_state_as_of_with_connection(
+                conn, item, cutoff_knowledge
+            )["eligible"]:
+                return item
         return None
 
     @staticmethod
@@ -179,19 +203,25 @@ class LiquidityRepository:
     def turnover_as_of(self, knowledge_cutoff_at: str) -> list[dict]:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                WITH ranked AS (
-                    SELECT *, ROW_NUMBER() OVER (
-                        PARTITION BY trade_date
-                        ORDER BY revision DESC, available_at DESC, ingested_at DESC, id DESC
-                    ) AS rank_no
-                    FROM market_turnover_daily
-                    WHERE available_at <= ? AND ingested_at <= ?
-                )
-                SELECT * FROM ranked WHERE rank_no = 1 ORDER BY trade_date
-                """, (cutoff, cutoff),
-            ).fetchall()
+            return self.turnover_as_of_with_connection(conn, cutoff)
+
+    def turnover_as_of_with_connection(
+        self, conn: sqlite3.Connection, knowledge_cutoff_at: str
+    ) -> list[dict]:
+        cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
+        rows = conn.execute(
+            """
+            WITH ranked AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY trade_date
+                    ORDER BY revision DESC, available_at DESC, ingested_at DESC, id DESC
+                ) AS rank_no
+                FROM market_turnover_daily
+                WHERE available_at <= ? AND ingested_at <= ?
+            )
+            SELECT * FROM ranked WHERE rank_no = 1 ORDER BY trade_date
+            """, (cutoff, cutoff),
+        ).fetchall()
         return [dict(row) for row in rows]
 
     def latest_turnover_revision(self, trade_date: str) -> dict | None:
@@ -223,4 +253,15 @@ class LiquidityRepository:
     def m1b_for_turnover(self, turnover: dict, knowledge_cutoff_at: str) -> dict | None:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
         public_at = min(turnover["available_at"], cutoff)
-        return self._eligible_m1b_as_of(public_at, cutoff)
+        with self._connect() as conn:
+            return self.m1b_for_turnover_with_connection(conn, turnover, cutoff)
+
+    def m1b_for_turnover_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        turnover: dict,
+        knowledge_cutoff_at: str,
+    ) -> dict | None:
+        cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
+        public_at = min(turnover["available_at"], cutoff)
+        return self._eligible_m1b_as_of_with_connection(conn, public_at, cutoff)

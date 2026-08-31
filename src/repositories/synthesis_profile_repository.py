@@ -16,9 +16,10 @@ from src.repositories.migration_runner import apply_valuation_migration
 
 
 class SynthesisProfileRepository:
-    def __init__(self, db_path: str = "data/cache.db"):
+    def __init__(self, db_path: str = "data/cache.db", *, auto_migrate: bool = True):
         self.db_path = db_path
-        apply_valuation_migration(db_path)
+        if auto_migrate:
+            apply_valuation_migration(db_path)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -273,43 +274,49 @@ class SynthesisProfileRepository:
     def effective_states_as_of(self, knowledge_cutoff_at: str) -> list[dict[str, Any]]:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                WITH ranked AS (
-                    SELECT *, ROW_NUMBER() OVER (
-                        PARTITION BY logical_profile_id
-                        ORDER BY revision_number DESC, available_at DESC,
-                                 ingested_at DESC, id DESC
-                    ) AS revision_rank
-                    FROM synthesis_profile_revisions
-                    WHERE available_at <= ? AND ingested_at <= ?
-                ), approval_ranked AS (
-                    SELECT *, ROW_NUMBER() OVER (
-                        PARTITION BY profile_revision_id
-                        ORDER BY approved_at DESC, ingested_at DESC,
-                                 approval_event_id DESC
-                    ) AS approval_rank
-                    FROM synthesis_profile_approvals
-                    WHERE approved_at <= ? AND ingested_at <= ?
-                )
-                SELECT ranked.*,
-                       approval_ranked.approval_id AS verified_approval_id,
-                       approval_ranked.decision AS effective_approval_status,
-                       approval_ranked.rule_id AS approval_rule_id,
-                       approval_ranked.rule_version AS approval_rule_version,
-                       approval_ranked.evidence_level AS approved_evidence_level,
-                       approval_ranked.implementation_mode AS approved_implementation_mode,
-                       approval_ranked.project_operationalization,
-                       approval_ranked.approved_by AS verified_approved_by,
-                       approval_ranked.rationale AS approval_rationale
-                FROM ranked LEFT JOIN approval_ranked
-                  ON approval_ranked.profile_revision_id = ranked.id
-                 AND approval_ranked.approval_rank = 1
-                WHERE ranked.revision_rank = 1
-                ORDER BY ranked.logical_profile_id
-                """,
-                (cutoff, cutoff, cutoff, cutoff),
-            ).fetchall()
+            return self.effective_states_as_of_with_connection(conn, cutoff)
+
+    def effective_states_as_of_with_connection(
+        self, conn: sqlite3.Connection, knowledge_cutoff_at: str
+    ) -> list[dict[str, Any]]:
+        cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
+        rows = conn.execute(
+            """
+            WITH ranked AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY logical_profile_id
+                    ORDER BY revision_number DESC, available_at DESC,
+                             ingested_at DESC, id DESC
+                ) AS revision_rank
+                FROM synthesis_profile_revisions
+                WHERE available_at <= ? AND ingested_at <= ?
+            ), approval_ranked AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY profile_revision_id
+                    ORDER BY approved_at DESC, ingested_at DESC,
+                             approval_event_id DESC
+                ) AS approval_rank
+                FROM synthesis_profile_approvals
+                WHERE approved_at <= ? AND ingested_at <= ?
+            )
+            SELECT ranked.*,
+                   approval_ranked.approval_id AS verified_approval_id,
+                   approval_ranked.decision AS effective_approval_status,
+                   approval_ranked.rule_id AS approval_rule_id,
+                   approval_ranked.rule_version AS approval_rule_version,
+                   approval_ranked.evidence_level AS approved_evidence_level,
+                   approval_ranked.implementation_mode AS approved_implementation_mode,
+                   approval_ranked.project_operationalization,
+                   approval_ranked.approved_by AS verified_approved_by,
+                   approval_ranked.rationale AS approval_rationale
+            FROM ranked LEFT JOIN approval_ranked
+              ON approval_ranked.profile_revision_id = ranked.id
+             AND approval_ranked.approval_rank = 1
+            WHERE ranked.revision_rank = 1
+            ORDER BY ranked.logical_profile_id
+            """,
+            (cutoff, cutoff, cutoff, cutoff),
+        ).fetchall()
         return [self._public_profile(dict(row)) for row in rows]
 
     def get_revision_as_of(
@@ -317,11 +324,20 @@ class SynthesisProfileRepository:
     ) -> dict[str, Any] | None:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT * FROM synthesis_profile_revisions
-                WHERE id = ? AND available_at <= ? AND ingested_at <= ?
-                """,
-                (profile_revision_id, cutoff, cutoff),
-            ).fetchone()
+            return self.get_revision_as_of_with_connection(
+                conn, profile_revision_id, cutoff
+            )
+
+    def get_revision_as_of_with_connection(
+        self, conn: sqlite3.Connection, profile_revision_id: str,
+        knowledge_cutoff_at: str,
+    ) -> dict[str, Any] | None:
+        cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
+        row = conn.execute(
+            """
+            SELECT * FROM synthesis_profile_revisions
+            WHERE id = ? AND available_at <= ? AND ingested_at <= ?
+            """,
+            (profile_revision_id, cutoff, cutoff),
+        ).fetchone()
         return self._public_profile(dict(row)) if row else None

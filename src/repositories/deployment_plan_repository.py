@@ -19,10 +19,13 @@ def _fingerprint(payload: dict[str, Any]) -> str:
 
 
 class DeploymentPlanRepository:
-    def __init__(self, db_path: str = "data/cache.db"):
+    def __init__(self, db_path: str = "data/cache.db", *, auto_migrate: bool = True):
         self.db_path = db_path
-        apply_valuation_migration(db_path)
-        self.technical_anchor_repository = TechnicalAnchorRepository(db_path)
+        if auto_migrate:
+            apply_valuation_migration(db_path)
+        self.technical_anchor_repository = TechnicalAnchorRepository(
+            db_path, auto_migrate=auto_migrate
+        )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -231,33 +234,42 @@ class DeploymentPlanRepository:
     def states_as_of(self, symbol: str, knowledge_cutoff_at: str) -> list[dict]:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
         with self._connect() as conn:
-            rows = conn.execute(
+            return self.states_as_of_with_connection(conn, symbol, cutoff)
+
+    def states_as_of_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        symbol: str,
+        knowledge_cutoff_at: str,
+    ) -> list[dict]:
+        cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
+        rows = conn.execute(
+            """
+            WITH ranked AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY logical_campaign_id
+                    ORDER BY revision_number DESC, available_at DESC, ingested_at DESC, id DESC
+                ) AS rank_no
+                FROM deployment_plan_revisions
+                WHERE symbol = ? AND available_at <= ? AND ingested_at <= ?
+            )
+            SELECT * FROM ranked WHERE rank_no = 1 ORDER BY logical_campaign_id
+            """,
+            (symbol.strip().upper(), cutoff, cutoff),
+        ).fetchall()
+        results = []
+        for row in rows:
+            item = self._decode_plan(row)
+            decision = conn.execute(
                 """
-                WITH ranked AS (
-                    SELECT *, ROW_NUMBER() OVER (
-                        PARTITION BY logical_campaign_id
-                        ORDER BY revision_number DESC, available_at DESC, ingested_at DESC, id DESC
-                    ) AS rank_no
-                    FROM deployment_plan_revisions
-                    WHERE symbol = ? AND available_at <= ? AND ingested_at <= ?
-                )
-                SELECT * FROM ranked WHERE rank_no = 1 ORDER BY logical_campaign_id
+                SELECT * FROM deployment_plan_approvals
+                WHERE plan_revision_id = ? AND rule_id = 'ENT-02'
+                  AND approved_at <= ? AND ingested_at <= ?
+                ORDER BY approved_at DESC, ingested_at DESC, approval_event_id DESC
+                LIMIT 1
                 """,
-                (symbol.strip().upper(), cutoff, cutoff),
-            ).fetchall()
-            results = []
-            for row in rows:
-                item = self._decode_plan(row)
-                decision = conn.execute(
-                    """
-                    SELECT * FROM deployment_plan_approvals
-                    WHERE plan_revision_id = ? AND rule_id = 'ENT-02'
-                      AND approved_at <= ? AND ingested_at <= ?
-                    ORDER BY approved_at DESC, ingested_at DESC, approval_event_id DESC
-                    LIMIT 1
-                    """,
-                    (item["id"], cutoff, cutoff),
-                ).fetchone()
-                item["approval"] = dict(decision) if decision else None
-                results.append(item)
+                (item["id"], cutoff, cutoff),
+            ).fetchone()
+            item["approval"] = dict(decision) if decision else None
+            results.append(item)
         return results

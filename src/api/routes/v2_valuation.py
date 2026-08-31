@@ -251,11 +251,13 @@ class EvaluationRunRequest(StrictRequest):
     evaluation_profile_acknowledgement: str
 
 
-def _service() -> ForwardEPSService:
-    return ForwardEPSService(os.getenv("DATABASE_PATH", "data/cache.db"))
+def _service(*, auto_migrate: bool = True) -> ForwardEPSService:
+    return ForwardEPSService(
+        os.getenv("DATABASE_PATH", "data/cache.db"), auto_migrate=auto_migrate
+    )
 
 
-def _liquidity_service() -> MarketLiquidityService:
+def _liquidity_service(*, auto_migrate: bool = True) -> MarketLiquidityService:
     config_path = os.getenv("CONFIG_PATH", "config/config.yaml")
     try:
         with open(config_path, encoding="utf-8") as config_file:
@@ -263,24 +265,33 @@ def _liquidity_service() -> MarketLiquidityService:
     except OSError:
         config = {}
     return MarketLiquidityService(
-        os.getenv("DATABASE_PATH", "data/cache.db"), config=config
+        os.getenv("DATABASE_PATH", "data/cache.db"), config=config,
+        auto_migrate=auto_migrate,
     )
 
 
-def _technical_service() -> TechnicalScenarioService:
-    return TechnicalScenarioService(os.getenv("DATABASE_PATH", "data/cache.db"))
+def _technical_service(*, auto_migrate: bool = True) -> TechnicalScenarioService:
+    return TechnicalScenarioService(
+        os.getenv("DATABASE_PATH", "data/cache.db"), auto_migrate=auto_migrate
+    )
 
 
-def _deployment_service() -> DeploymentPlanService:
-    return DeploymentPlanService(os.getenv("DATABASE_PATH", "data/cache.db"))
+def _deployment_service(*, auto_migrate: bool = True) -> DeploymentPlanService:
+    return DeploymentPlanService(
+        os.getenv("DATABASE_PATH", "data/cache.db"), auto_migrate=auto_migrate
+    )
 
 
-def _screening_service() -> SecurityScreeningService:
-    return SecurityScreeningService(os.getenv("DATABASE_PATH", "data/cache.db"))
+def _screening_service(*, auto_migrate: bool = True) -> SecurityScreeningService:
+    return SecurityScreeningService(
+        os.getenv("DATABASE_PATH", "data/cache.db"), auto_migrate=auto_migrate
+    )
 
 
-def _evidence_analysis_service() -> EvidenceAnalysisService:
-    return EvidenceAnalysisService(os.getenv("DATABASE_PATH", "data/cache.db"))
+def _evidence_analysis_service(*, auto_migrate: bool = True) -> EvidenceAnalysisService:
+    return EvidenceAnalysisService(
+        os.getenv("DATABASE_PATH", "data/cache.db"), auto_migrate=auto_migrate
+    )
 
 
 def _performance_validation_service() -> PerformanceValidationService:
@@ -987,6 +998,29 @@ def get_v2_analysis(
     logical_synthesis_profile_id: str | None = Query(default=None),
     synthesis_profile_revision_id: str | None = Query(default=None),
 ):
+    return _build_v2_analysis(
+        symbol=symbol,
+        knowledge_cutoff_at=knowledge_cutoff_at,
+        as_of_date=as_of_date,
+        industry=industry,
+        market=market,
+        logical_synthesis_profile_id=logical_synthesis_profile_id,
+        synthesis_profile_revision_id=synthesis_profile_revision_id,
+        auto_migrate=True,
+    )
+
+
+def _build_v2_analysis(
+    symbol: str,
+    knowledge_cutoff_at: str | None = None,
+    as_of_date: str | None = None,
+    industry: str | None = None,
+    market: str | None = None,
+    logical_synthesis_profile_id: str | None = None,
+    synthesis_profile_revision_id: str | None = None,
+    auto_migrate: bool = True,
+    connection: sqlite3.Connection | None = None,
+):
     try:
         cutoff, cutoff_policy = resolve_knowledge_cutoff(
             knowledge_cutoff_at, as_of_date
@@ -994,14 +1028,30 @@ def get_v2_analysis(
         if logical_synthesis_profile_id and synthesis_profile_revision_id:
             raise ValueError("synthesis_profile_selectors_are_mutually_exclusive")
         normalized_symbol = normalize_symbol(symbol)
-        valuation = _service().analyze(
-            normalized_symbol, cutoff, industry=industry, market=market
+        valuation_service = _service(auto_migrate=auto_migrate)
+        valuation = (
+            valuation_service.analyze_preloaded(
+                connection,
+                normalized_symbol,
+                cutoff,
+                industry=industry,
+                market=market,
+            )
+            if connection is not None
+            else valuation_service.analyze(
+                normalized_symbol, cutoff, industry=industry, market=market
+            )
         )
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     try:
-        liquidity = _liquidity_service().analyze(cutoff)
+        liquidity_service = _liquidity_service(auto_migrate=auto_migrate)
+        liquidity = (
+            liquidity_service.analyze_preloaded(connection, cutoff)
+            if connection is not None
+            else liquidity_service.analyze(cutoff)
+        )
     except (ValueError, RuntimeError, sqlite3.Error) as exc:
         liquidity = {
             "status": "insufficient_data",
@@ -1010,7 +1060,12 @@ def get_v2_analysis(
         }
 
     try:
-        technical_support = _technical_service().analyze(normalized_symbol, cutoff)
+        technical_service = _technical_service(auto_migrate=auto_migrate)
+        technical_support = (
+            technical_service.analyze_preloaded(connection, normalized_symbol, cutoff)
+            if connection is not None
+            else technical_service.analyze(normalized_symbol, cutoff)
+        )
     except (ValueError, RuntimeError, sqlite3.Error) as exc:
         technical_support = {
             "status": "insufficient_data",
@@ -1020,7 +1075,14 @@ def get_v2_analysis(
         }
 
     try:
-        deployment_plan = _deployment_service().analyze(normalized_symbol, cutoff)
+        deployment_service = _deployment_service(auto_migrate=auto_migrate)
+        deployment_plan = (
+            deployment_service.analyze_preloaded(
+                connection, normalized_symbol, cutoff
+            )
+            if connection is not None
+            else deployment_service.analyze(normalized_symbol, cutoff)
+        )
     except (ValueError, RuntimeError, sqlite3.Error) as exc:
         deployment_plan = {
             "status": "insufficient_data",
@@ -1030,7 +1092,14 @@ def get_v2_analysis(
         }
 
     try:
-        screening = _screening_service().analyze(normalized_symbol, cutoff)
+        screening_service = _screening_service(auto_migrate=auto_migrate)
+        screening = (
+            screening_service.analyze_preloaded(
+                connection, normalized_symbol, cutoff
+            )
+            if connection is not None
+            else screening_service.analyze(normalized_symbol, cutoff)
+        )
     except (ValueError, RuntimeError, sqlite3.Error) as exc:
         screening = {
             "status": "insufficient_data",
@@ -1042,13 +1111,26 @@ def get_v2_analysis(
         }
 
     try:
-        target_confluence = _evidence_analysis_service().synthesize(
-            symbol=normalized_symbol,
-            knowledge_cutoff_at=cutoff,
-            valuation=valuation,
-            technical_support=technical_support,
-            logical_profile_id=logical_synthesis_profile_id,
-            profile_revision_id=synthesis_profile_revision_id,
+        evidence_service = _evidence_analysis_service(auto_migrate=auto_migrate)
+        target_confluence = (
+            evidence_service.synthesize_preloaded(
+                connection,
+                symbol=normalized_symbol,
+                knowledge_cutoff_at=cutoff,
+                valuation=valuation,
+                technical_support=technical_support,
+                logical_profile_id=logical_synthesis_profile_id,
+                profile_revision_id=synthesis_profile_revision_id,
+            )
+            if connection is not None
+            else evidence_service.synthesize(
+                symbol=normalized_symbol,
+                knowledge_cutoff_at=cutoff,
+                valuation=valuation,
+                technical_support=technical_support,
+                logical_profile_id=logical_synthesis_profile_id,
+                profile_revision_id=synthesis_profile_revision_id,
+            )
         )
     except (ValueError, RuntimeError, sqlite3.Error) as exc:
         target_confluence = {

@@ -26,10 +26,21 @@ class SnapshotNotFoundError(LookupError):
 
 
 class SnapshotComparisonService:
-    def __init__(self, db_path: str = "data/cache.db"):
+    def __init__(
+        self,
+        db_path: str = "data/cache.db",
+        *,
+        auto_migrate: bool = True,
+        snapshots: AnalysisSnapshotRepository | None = None,
+        freshness: DataFreshnessService | None = None,
+    ):
         self.db_path = db_path
-        self.snapshots = AnalysisSnapshotRepository(db_path)
-        self.freshness = DataFreshnessService(db_path)
+        self.snapshots = snapshots or AnalysisSnapshotRepository(
+            db_path, auto_migrate=auto_migrate
+        )
+        self.freshness = freshness or DataFreshnessService(
+            db_path, auto_migrate=auto_migrate, snapshots=self.snapshots
+        )
         self.comparator = SnapshotComparator()
 
     def _connect(self) -> sqlite3.Connection:
@@ -213,6 +224,32 @@ class SnapshotComparisonService:
         if missing:
             raise SnapshotNotFoundError(",".join(missing))
         assert base is not None and comparison is not None
+        return self.compare_preloaded_with_connection(
+            conn,
+            base=base,
+            comparison=comparison,
+            comparison_cutoff=cutoff,
+        )
+
+    def compare_preloaded_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        base: dict[str, Any],
+        comparison: dict[str, Any],
+        comparison_cutoff: str,
+        base_current_context: dict[str, Any] | None = None,
+        comparison_current_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Compare already-decoded snapshots inside a caller-owned read transaction.
+
+        Daily Research loads all visible snapshots in one bounded set query.  This
+        entry point keeps the established Phase 11 comparison semantics while
+        avoiding a second snapshot SELECT for every queue item.
+        """
+        cutoff = canonical_timestamp(comparison_cutoff)
+        base_snapshot_id = str(base["snapshot_id"])
+        comparison_snapshot_id = str(comparison["snapshot_id"])
         reason = compatibility_reason(base, comparison, cutoff)
         response: dict[str, Any] = {
             "status": "incomparable_contract" if reason else "available",
@@ -236,10 +273,10 @@ class SnapshotComparisonService:
         }
         if reason is None:
             response["stored_deltas"] = self.comparator.compare(base, comparison)
-            base_context = self.freshness.snapshot_dependency_freshness_with_connection(
+            base_context = base_current_context or self.freshness.snapshot_dependency_freshness_with_connection(
                 conn, base, cutoff, checked_at=cutoff
             )
-            comparison_context = self.freshness.snapshot_dependency_freshness_with_connection(
+            comparison_context = comparison_current_context or self.freshness.snapshot_dependency_freshness_with_connection(
                 conn, comparison, cutoff, checked_at=cutoff
             )
             base_context.pop("snapshot_output_sha256", None)

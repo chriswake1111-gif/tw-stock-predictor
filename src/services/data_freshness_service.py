@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
+import copy
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -87,11 +89,23 @@ PRODUCTION_DEPENDENCY_RESOURCES = {
 
 
 class DataFreshnessService:
-    def __init__(self, db_path: str = "data/cache.db"):
+    def __init__(
+        self,
+        db_path: str = "data/cache.db",
+        *,
+        auto_migrate: bool = True,
+        foundation: DataFoundationRepository | None = None,
+        snapshots: AnalysisSnapshotRepository | None = None,
+    ):
         self.db_path = db_path
-        apply_valuation_migration(db_path)
-        self.foundation = DataFoundationRepository(db_path)
-        self.snapshots = AnalysisSnapshotRepository(db_path)
+        if auto_migrate:
+            apply_valuation_migration(db_path)
+        self.foundation = foundation or DataFoundationRepository(
+            db_path, auto_migrate=auto_migrate
+        )
+        self.snapshots = snapshots or AnalysisSnapshotRepository(
+            db_path, auto_migrate=auto_migrate
+        )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -463,4 +477,43 @@ class DataFreshnessService:
         ).canonical_payload()
         result["snapshot_output_sha256"] = snapshot["output_sha256"]
         result["historical_snapshot_validity"] = "unchanged"
+        return result
+
+    def snapshot_dependency_freshness_batch_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        snapshots: list[dict[str, Any]],
+        comparison_cutoff: str,
+        *,
+        checked_at: str | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Resolve freshness for a bounded snapshot set on one read boundary.
+
+        Snapshots produced by the research queue normally share the same
+        immutable dependency bundle.  The cache is keyed by that bundle, so a
+        page does not repeat the Phase 11 dependency walk for every queue row.
+        Distinct bundles are still evaluated with the established
+        ``_dependency_state`` semantics; no new freshness taxonomy is created.
+        """
+        cutoff = normalize_utc_timestamp(comparison_cutoff, "comparison_cutoff")
+        by_dependency_bundle: dict[str, dict[str, Any]] = {}
+        result: dict[str, dict[str, Any]] = {}
+        for snapshot in snapshots:
+            snapshot_id = str(snapshot["snapshot_id"])
+            bundle_key = json.dumps(
+                snapshot.get("source_resource_versions", []),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            context = by_dependency_bundle.get(bundle_key)
+            if context is None:
+                context = self.snapshot_dependency_freshness_with_connection(
+                    conn, snapshot, cutoff, checked_at=checked_at
+                )
+                by_dependency_bundle[bundle_key] = context
+            value = copy.deepcopy(context)
+            value["snapshot_id"] = snapshot_id
+            value["snapshot_output_sha256"] = snapshot.get("output_sha256")
+            result[snapshot_id] = value
         return result

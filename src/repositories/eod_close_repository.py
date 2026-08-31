@@ -634,6 +634,104 @@ class EodCloseRepository:
             "selected_trade_date": selected_date,
         }
 
+    def daily_as_of_bundles_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        canonical_symbols: list[str],
+        market_date: str,
+        knowledge_cutoff_at: str,
+        identity_contexts: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Build exact-D EOD raw bundles for a bounded symbol page.
+
+        Source, observation and classification rows are selected in sets per
+        venue.  The EOD service remains the single owner of the established
+        product/quality semantics; this helper only removes per-symbol reads.
+        """
+        cutoff = validate_knowledge_cutoff_at(knowledge_cutoff_at)
+        symbols = list(dict.fromkeys(str(value).strip().upper() for value in canonical_symbols))
+        by_venue: dict[str, list[tuple[str, str]]] = {"TWSE": [], "TPEX": []}
+        for symbol in symbols:
+            venue, code = parse_canonical_symbol(symbol)
+            by_venue[venue.value].append((symbol, code))
+        contexts: dict[str, dict[str, Any]] = {}
+        identity_contexts = identity_contexts or {}
+        for venue, pairs in by_venue.items():
+            if not pairs:
+                continue
+            resource_id = self.resource_id_for_venue(venue)
+            source = self.latest_source_snapshot(
+                conn,
+                resource_id=resource_id,
+                as_of=True,
+                cutoff=cutoff,
+                source_trade_date=market_date,
+            )
+            resource = self._row(conn.execute(
+                "SELECT * FROM data_resources WHERE resource_id = ?", (resource_id,)
+            ).fetchone())
+            policy = self.price_policy(conn, resource_id)
+            snapshot_id = source.get("source_snapshot_id") if source else None
+            codes = [code for _, code in pairs]
+            placeholders = ",".join("?" for _ in codes)
+            observations: dict[str, dict[str, Any]] = {}
+            if snapshot_id:
+                rows = conn.execute(
+                    f"""
+                    WITH ranked AS (
+                        SELECT o.*, ROW_NUMBER() OVER (
+                            PARTITION BY o.official_code
+                            ORDER BY o.revision_number DESC, o.close_observation_id DESC,
+                                     o.normalized_payload_sha256 DESC
+                        ) AS position
+                        FROM eod_close_observations o
+                        WHERE o.source_snapshot_id = ?
+                          AND o.official_code IN ({placeholders})
+                          AND {self._visible_where('o', as_of=True)}
+                    )
+                    SELECT * FROM ranked WHERE position=1
+                    """,
+                    [snapshot_id, *codes, cutoff, cutoff],
+                ).fetchall()
+                observations = {str(row["official_code"]): dict(row) for row in rows}
+            classifications = conn.execute(
+                f"""
+                WITH ranked AS (
+                    SELECT c.*, ROW_NUMBER() OVER (
+                        PARTITION BY c.official_code
+                        ORDER BY c.revision_number DESC, c.available_at DESC,
+                                 c.ingested_at DESC, c.classification_evidence_id DESC
+                    ) AS position
+                    FROM eod_product_classification_evidence c
+                    WHERE c.resource_id = ? AND c.official_code IN ({placeholders})
+                      AND {self._visible_where('c', as_of=True)}
+                )
+                SELECT * FROM ranked WHERE position=1
+                """,
+                [CLASSIFICATION_RESOURCE_ID, *codes, cutoff, cutoff],
+            ).fetchall()
+            classification_by_code = {
+                str(row["official_code"]): dict(row) for row in classifications
+            }
+            for symbol, code in pairs:
+                contexts[symbol] = {
+                    "venue": venue,
+                    "official_code": code,
+                    "resource_id": resource_id,
+                    "resource": resource,
+                    "policy": policy,
+                    "snapshot": source,
+                    "observation": observations.get(code),
+                    "classification": classification_by_code.get(code),
+                    "identity": identity_contexts.get(symbol),
+                    "evaluated_at": cutoff,
+                    "knowledge_cutoff_at": cutoff,
+                    "selection_scope": EOD_ASOF_SELECTION_SCOPE,
+                    "selected_trade_date": market_date,
+                }
+        return contexts
+
     # ----- Operator-only append paths -----
 
     def add_source_snapshot(

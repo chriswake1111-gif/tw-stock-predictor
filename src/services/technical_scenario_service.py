@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 
 from src.domain.technical_anchor import ManualAnchorSetRevision, TechnicalAnchorApproval
 from src.domain.valuation import ApprovalStatus
@@ -12,8 +13,8 @@ from src.services.rule_registry import RuleRegistry
 
 
 class TechnicalScenarioService:
-    def __init__(self, db_path: str = "data/cache.db"):
-        self.repository = TechnicalAnchorRepository(db_path)
+    def __init__(self, db_path: str = "data/cache.db", *, auto_migrate: bool = True):
+        self.repository = TechnicalAnchorRepository(db_path, auto_migrate=auto_migrate)
         self.registry = RuleRegistry()
 
     def ingest(self, revision: ManualAnchorSetRevision, idempotency_key: str) -> dict:
@@ -42,8 +43,20 @@ class TechnicalScenarioService:
         )
         return self.repository.add_approval(approval, idempotency_key)
 
-    def analyze(self, symbol: str, knowledge_cutoff_at: str) -> dict:
-        states = self.repository.states_as_of(symbol, knowledge_cutoff_at)
+    def analyze(
+        self,
+        symbol: str,
+        knowledge_cutoff_at: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict:
+        states = (
+            self.repository.states_as_of_with_connection(
+                connection, symbol, knowledge_cutoff_at
+            )
+            if connection is not None
+            else self.repository.states_as_of(symbol, knowledge_cutoff_at)
+        )
         if not states:
             return {
                 "status": "needs_human_input",
@@ -121,3 +134,11 @@ class TechnicalScenarioService:
             "rules_used": [scenario["rule_trace"] for scenario in scenarios],
             "limitations": ["scenario_not_prediction", "not_guaranteed_target", "not_trade_instruction"],
         }
+
+    def analyze_preloaded(
+        self, connection: sqlite3.Connection, symbol: str, knowledge_cutoff_at: str
+    ) -> dict:
+        """Evaluate approved anchors on a caller-owned read transaction."""
+        return self.analyze(
+            symbol, knowledge_cutoff_at, connection=connection
+        )
