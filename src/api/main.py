@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 from src.analysis_service import analyze_symbol, normalize_symbol
 from src.api.routes.v2_valuation import router as v2_valuation_router
 from src.api.routes.research_workflow import router as research_workflow_router
+from src.api.routes.daily_research import router as daily_research_router
 from src.api.routes.v2_universe import router as v2_universe_router
 from src.api.routes.v2_eod_close import router as v2_eod_close_router
 from src.api.routes.v2_eod_coverage import router as v2_eod_coverage_router
@@ -67,6 +68,7 @@ app.add_middleware(ResearchBoundaryMiddleware)
 
 app.include_router(v2_valuation_router)
 app.include_router(research_workflow_router)
+app.include_router(daily_research_router)
 app.include_router(v2_universe_router)
 app.include_router(v2_eod_close_router)
 app.include_router(v2_eod_coverage_router)

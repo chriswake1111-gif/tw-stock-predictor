@@ -1,4 +1,9 @@
-import type { ResearchMembershipMutationResponse, ResearchWatchlistItem } from "./types";
+import type {
+  DailyBaselineSelectionResponse,
+  DailySnapshotRefreshResponse,
+  ResearchMembershipMutationResponse,
+  ResearchWatchlistItem,
+} from "./types";
 
 let researchCsrfToken: string | null = null;
 
@@ -69,6 +74,29 @@ export const researchWorkflowApi = {
     return researchMutation(
       `/api/v2/research/queue/${encodeURIComponent(itemId)}/acknowledgments`,
       { acknowledged_snapshot_id: snapshotId, comparison_cutoff: cutoff },
+      key,
+    );
+  },
+  selectDailyBaseline(itemId: string, snapshotId: string, cutoff: string, key: string) {
+    return researchMutation<DailyBaselineSelectionResponse>(
+      `/api/v2/research/daily-context/${encodeURIComponent(itemId)}/baseline-selections`,
+      { baseline_snapshot_id: snapshotId, knowledge_cutoff_at: cutoff },
+      key,
+    );
+  },
+  refreshDailySnapshot(
+    itemId: string,
+    payload: {
+      market_date: string;
+      loaded_knowledge_cutoff_at: string;
+      expected_snapshot_id: string | null;
+      advance_knowledge_cutoff: true;
+    },
+    key: string,
+  ) {
+    return researchMutation<DailySnapshotRefreshResponse>(
+      `/api/v2/research/queue/${encodeURIComponent(itemId)}/snapshot-refresh`,
+      payload,
       key,
     );
   },

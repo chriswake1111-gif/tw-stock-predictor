@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 from typing import Any
 
 from src.domain.analysis_snapshot import (
@@ -20,9 +21,20 @@ from src.services.rule_registry import RuleRegistry
 
 
 class EvidenceAnalysisService:
-    def __init__(self, db_path: str = "data/cache.db"):
-        self.profile_repository = SynthesisProfileRepository(db_path)
-        self.snapshot_repository = AnalysisSnapshotRepository(db_path)
+    def __init__(
+        self,
+        db_path: str = "data/cache.db",
+        *,
+        auto_migrate: bool = True,
+        profile_repository: SynthesisProfileRepository | None = None,
+        snapshot_repository: AnalysisSnapshotRepository | None = None,
+    ):
+        self.profile_repository = profile_repository or SynthesisProfileRepository(
+            db_path, auto_migrate=auto_migrate
+        )
+        self.snapshot_repository = snapshot_repository or AnalysisSnapshotRepository(
+            db_path, auto_migrate=auto_migrate
+        )
         self.registry = RuleRegistry()
         self.engine = TargetConfluenceEngine()
 
@@ -83,14 +95,27 @@ class EvidenceAnalysisService:
         *,
         logical_profile_id: str | None = None,
         profile_revision_id: str | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
         if logical_profile_id and profile_revision_id:
             raise ValueError("synthesis_profile_selectors_are_mutually_exclusive")
-        states = self.profile_repository.effective_states_as_of(cutoff)
+        states = (
+            self.profile_repository.effective_states_as_of_with_connection(
+                connection, cutoff
+            )
+            if connection is not None
+            else self.profile_repository.effective_states_as_of(cutoff)
+        )
         if profile_revision_id:
-            requested = self.profile_repository.get_revision_as_of(
-                profile_revision_id, cutoff
+            requested = (
+                self.profile_repository.get_revision_as_of_with_connection(
+                    connection, profile_revision_id, cutoff
+                )
+                if connection is not None
+                else self.profile_repository.get_revision_as_of(
+                    profile_revision_id, cutoff
+                )
             )
             if requested is None:
                 return None, {
@@ -235,6 +260,7 @@ class EvidenceAnalysisService:
         technical_support: dict[str, Any],
         logical_profile_id: str | None = None,
         profile_revision_id: str | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> dict[str, Any]:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
         symbol = symbol.strip().upper()
@@ -243,6 +269,7 @@ class EvidenceAnalysisService:
             cutoff,
             logical_profile_id=logical_profile_id,
             profile_revision_id=profile_revision_id,
+            connection=connection,
         )
         if error:
             return {
@@ -287,6 +314,28 @@ class EvidenceAnalysisService:
             "automatic_order": False,
         })
         return result
+
+    def synthesize_preloaded(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        symbol: str,
+        knowledge_cutoff_at: str,
+        valuation: dict[str, Any],
+        technical_support: dict[str, Any],
+        logical_profile_id: str | None = None,
+        profile_revision_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Synthesize target confluence on a caller-owned read transaction."""
+        return self.synthesize(
+            symbol=symbol,
+            knowledge_cutoff_at=knowledge_cutoff_at,
+            valuation=valuation,
+            technical_support=technical_support,
+            logical_profile_id=logical_profile_id,
+            profile_revision_id=profile_revision_id,
+            connection=connection,
+        )
 
     @staticmethod
     def _snapshot_provenance(analysis: dict[str, Any]) -> list[dict[str, Any]]:
@@ -361,6 +410,8 @@ class EvidenceAnalysisService:
         capture_mode: CaptureMode,
         idempotency_key: str,
         supersedes_snapshot_id: str | None = None,
+        connection=None,
+        created_at: str | None = None,
     ) -> dict[str, Any]:
         resources = self._snapshot_provenance(analysis)
         approvals = sorted({
@@ -385,7 +436,11 @@ class EvidenceAnalysisService:
             source_resource_versions=resources,
             manual_approval_ids=approvals,
             output=analysis,
-            created_at=utc_now_timestamp(),
+            created_at=created_at or utc_now_timestamp(),
             supersedes_snapshot_id=supersedes_snapshot_id,
         )
+        if connection is not None:
+            return self.snapshot_repository.add_with_connection(
+                connection, snapshot, idempotency_key
+            )
         return self.snapshot_repository.add(snapshot, idempotency_key)

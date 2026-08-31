@@ -1389,6 +1389,75 @@ class UniverseRepository:
         with self.read_transaction() as owned:
             return select(owned)
 
+    def contexts_for_symbols_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        canonical_symbols: list[str],
+        knowledge_cutoff_at: str,
+    ) -> dict[str, dict[str, Any]]:
+        """Resolve a bounded Daily page with set-based identity/state reads."""
+        symbols = list(dict.fromkeys(str(value).strip().upper() for value in canonical_symbols))
+        if not symbols:
+            return {}
+        cutoff = validate_knowledge_cutoff_at(knowledge_cutoff_at)
+        placeholders = self._sql_placeholders(symbols)
+        candidate_rows = [dict(row) for row in conn.execute(
+            f"""
+            SELECT r.instrument_id, r.canonical_symbol
+            FROM universe_instrument_revisions r
+            WHERE r.canonical_symbol IN ({placeholders})
+              AND r.status = 'accepted' AND {self._cutoff_where('r')}
+            ORDER BY r.canonical_symbol, r.revision_number DESC,
+                     COALESCE(r.available_at, '') DESC, r.ingested_at DESC,
+                     r.instrument_revision_id DESC
+            """,
+            symbols + [cutoff, cutoff, cutoff, cutoff],
+        ).fetchall()]
+        ids = list(dict.fromkeys(str(row["instrument_id"]) for row in candidate_rows))
+        references = self._select_historical_references_batch(
+            conn, instrument_ids=ids, cutoff=cutoff
+        )
+        operational = self._select_operational_states_batch(
+            conn, instrument_ids=ids, references=references, cutoff=cutoff
+        )
+        result: dict[str, dict[str, Any]] = {}
+        for symbol in symbols:
+            candidates = [
+                row for row in references.values()
+                if row and row.get("canonical_symbol") == symbol
+            ]
+            if len(candidates) != 1:
+                result[symbol] = {
+                    "status": "unknown",
+                    "identity_status": "unresolved",
+                    "canonical_symbol": symbol,
+                    "venue": "TWSE" if symbol.endswith(".TW") else "TPEX",
+                    "identity": None,
+                    "listing_status": "unknown",
+                    "trading_state": "unknown",
+                    "reasons": ["identity_unresolved"],
+                }
+                continue
+            reference = candidates[0]
+            instrument_id = str(reference["instrument_id"])
+            composed = self._compose_result(
+                reference,
+                operational.get(instrument_id),
+                cutoff=cutoff,
+            )
+            identity = composed.get("identity_reference") or {}
+            result[symbol] = {
+                **composed,
+                "canonical_symbol": symbol,
+                "venue": reference.get("venue"),
+                "identity_status": "resolved",
+                "identity": identity,
+                "listing_status": identity.get("listing_status", "unknown"),
+                "trading_state": identity.get("trading_state", "unknown"),
+            }
+        return result
+
     def find_by_canonical_symbol(self, canonical_symbol: str, *, knowledge_cutoff_at: str, current: bool = False) -> dict[str, Any]:
         return self.get_by_canonical(canonical_symbol, knowledge_cutoff_at=knowledge_cutoff_at, current=current)
 

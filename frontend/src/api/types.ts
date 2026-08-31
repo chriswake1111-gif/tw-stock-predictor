@@ -533,3 +533,133 @@ export interface ResearchQueueResponse {
 export interface ResearchQueueDetail extends ResearchQueueItem {
   comparison: SnapshotComparisonResponse | null;
 }
+
+export type DailyResearchStatus =
+  | "available" | "partial" | "insufficient_data" | "unknown" | "blocked";
+
+export interface DailyResearchSnapshotReference {
+  snapshot_id: string;
+  symbol: string;
+  venue: string;
+  created_at: string | null;
+  knowledge_cutoff_at: string | null;
+  capture_mode: string | null;
+  model_version: string | null;
+  integrity_status: "valid" | "invalid";
+  provenance_status: "available" | "unavailable";
+  eligible_for_requested_d_k: boolean;
+}
+
+export interface DailyResearchItem {
+  watchlist_reference: ResearchWatchlistItem;
+  canonical_symbol: string;
+  venue: string;
+  identity: Record<string, unknown>;
+  status: DailyResearchStatus;
+  review_state: ResearchReviewState;
+  workflow_review_state: string;
+  workflow_evaluated_at: string;
+  review_needed: boolean;
+  review_blocked: boolean;
+  review_limited: boolean;
+  reason_codes: string[];
+  latest_snapshot_reference: DailyResearchSnapshotReference | null;
+  workflow_latest_snapshot_reference: DailyResearchSnapshotReference | null;
+  acknowledged_baseline_reference: DailyResearchSnapshotReference | null;
+  k_visible_acknowledgment_reference: Record<string, unknown> | null;
+  workflow_acknowledgment_reference: Record<string, unknown> | null;
+  comparison_status: ResearchComparisonStatus;
+  comparison_has_deltas: boolean | null;
+  stored_delta_summary: { count: number; change_types: Record<string, number>; sections: Record<string, number> };
+  current_context_delta_summary: { count: number; change_types: Record<string, number>; sections: Record<string, number> };
+  phase16_context: Record<string, unknown>;
+  freshness_status: string;
+  quality: Record<string, unknown>;
+  provenance: Record<string, unknown>;
+  permitted_actions: {
+    open_review: boolean;
+    acknowledge: boolean;
+    refresh_snapshot: boolean;
+    archive: boolean;
+    restore: boolean;
+  };
+  baseline_selection_policy_version: string;
+  baseline_selection_reason_registry_version: string;
+  baseline_selection_eligible: boolean;
+  baseline_selection_blocked: boolean;
+  baseline_selection_reason_codes: string[];
+  comparison?: SnapshotComparisonResponse | null;
+}
+
+export interface DailyResearchResponse {
+  contract_version: "daily_research_review_context_v1";
+  policy_version: string;
+  workflow_time_policy_version: string;
+  snapshot_selection_policy_version: string;
+  reason_registry_version: string;
+  d_k_policy_version: string;
+  order_version: string;
+  cursor_version: string;
+  snapshot_integration_version: string;
+  status_scope: "page_items";
+  request: {
+    market_date: string;
+    knowledge_cutoff_at: string;
+    request_received_at: string;
+    workflow_evaluated_at: string;
+    population: "active_research_queue";
+    population_evaluated_at: string;
+    internal_venue_scope: "TWSE_TPEX";
+    d_k_policy_version: string;
+    workflow_time_policy_version: string;
+    snapshot_selection_policy_version: string;
+    order_version: string;
+  };
+  status: DailyResearchStatus;
+  preflight: {
+    status: DailyResearchStatus;
+    status_scope: "full_daily_preflight";
+    market_context_status: DailyResearchStatus;
+    active_queue_total_count: number;
+    active_population_checksum: string;
+    page_item_count: number;
+    page_has_more: boolean;
+    page_review_needed_count: number;
+    page_review_blocked_count: number;
+    page_review_limited_count: number;
+    page_status_counts: Record<DailyResearchStatus, number>;
+    venue_statuses: Record<string, string>;
+    reasons: string[];
+    aggregate_completeness_proven: false;
+  };
+  aggregate: Record<string, unknown>;
+  items: DailyResearchItem[];
+  limit: number;
+  next_cursor: string | null;
+  item?: DailyResearchItem;
+}
+
+export interface DailyBaselineSelectionResponse {
+  status: "available";
+  baseline_selection_policy_version: string;
+  baseline_selection_reason_registry_version: string;
+  baseline_selection_event: {
+    review_event_id: string;
+    watchlist_item_id: string;
+    baseline_snapshot_id: string;
+    knowledge_cutoff_at: string;
+    selected_at: string;
+    created: boolean;
+    workflow_contract_version: string;
+  };
+  workflow_evaluated_at: string;
+}
+
+export interface DailySnapshotRefreshResponse {
+  status: "available";
+  created: boolean;
+  refresh_received_at: string;
+  new_knowledge_cutoff_at: string;
+  snapshot: DailyResearchSnapshotReference;
+  refresh_gate: Record<string, unknown>;
+}

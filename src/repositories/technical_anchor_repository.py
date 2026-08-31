@@ -18,9 +18,10 @@ def _fingerprint(payload: dict[str, Any]) -> str:
 
 
 class TechnicalAnchorRepository:
-    def __init__(self, db_path: str = "data/cache.db"):
+    def __init__(self, db_path: str = "data/cache.db", *, auto_migrate: bool = True):
         self.db_path = db_path
-        apply_valuation_migration(db_path)
+        if auto_migrate:
+            apply_valuation_migration(db_path)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -251,6 +252,45 @@ class TechnicalAnchorRepository:
     def states_as_of(self, symbol: str, knowledge_cutoff_at: str) -> list[dict]:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
         return self._states_as_of(symbol, cutoff, cutoff)
+
+    def states_as_of_with_connection(
+        self, conn: sqlite3.Connection, symbol: str, knowledge_cutoff_at: str
+    ) -> list[dict]:
+        cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
+        params = [symbol.strip().upper(), cutoff, cutoff]
+        rows = conn.execute(
+            """
+            WITH ranked AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY logical_anchor_set_id
+                    ORDER BY revision_number DESC, available_at DESC, ingested_at DESC, id DESC
+                ) AS rank_no
+                FROM technical_anchor_revisions
+                WHERE symbol = ? AND available_at <= ? AND ingested_at <= ?
+            )
+            SELECT * FROM ranked WHERE rank_no = 1 ORDER BY logical_anchor_set_id
+            """,
+            params,
+        ).fetchall()
+        results = []
+        for row in rows:
+            item = dict(row)
+            item["anchors"] = json.loads(item.pop("anchors_json"))
+            decision = conn.execute(
+                """
+                SELECT * FROM technical_anchor_approvals
+                WHERE anchor_revision_id = ? AND rule_id = ?
+                  AND approved_at <= ? AND ingested_at <= ?
+                ORDER BY approved_at DESC, ingested_at DESC, approval_event_id DESC
+                LIMIT 1
+                """,
+                (
+                    item["id"], item["evidence_basis_rule_id"], cutoff, cutoff,
+                ),
+            ).fetchone()
+            item["approval"] = dict(decision) if decision else None
+            results.append(item)
+        return results
 
     def effective_anchor_state_as_of(
         self,

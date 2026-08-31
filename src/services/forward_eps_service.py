@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 
 from src.domain.valuation import (
     ApprovalResourceType,
@@ -17,8 +18,8 @@ from src.services.rule_registry import RuleRegistry
 
 
 class ForwardEPSService:
-    def __init__(self, db_path: str = "data/cache.db"):
-        self.repository = ForwardEPSRepository(db_path)
+    def __init__(self, db_path: str = "data/cache.db", *, auto_migrate: bool = True):
+        self.repository = ForwardEPSRepository(db_path, auto_migrate=auto_migrate)
         self.rule_registry = RuleRegistry()
         self.engine = ForwardPEValuationEngine(
             self.repository, rule_registry=self.rule_registry
@@ -86,4 +87,21 @@ class ForwardEPSService:
             knowledge_cutoff_at,
             industry=industry,
             market=market,
+        )
+
+    def analyze_preloaded(
+        self,
+        connection: sqlite3.Connection,
+        symbol: str,
+        knowledge_cutoff_at: str,
+        industry: str | None = None,
+        market: str | None = None,
+    ) -> dict:
+        """Evaluate valuation evidence on a caller-owned read transaction."""
+        return self.engine.evaluate(
+            symbol,
+            knowledge_cutoff_at,
+            industry=industry,
+            market=market,
+            connection=connection,
         )

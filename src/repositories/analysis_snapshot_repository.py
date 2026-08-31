@@ -16,9 +16,10 @@ class SnapshotIntegrityError(RuntimeError):
 
 
 class AnalysisSnapshotRepository:
-    def __init__(self, db_path: str = "data/cache.db"):
+    def __init__(self, db_path: str = "data/cache.db", *, auto_migrate: bool = True):
         self.db_path = db_path
-        apply_valuation_migration(db_path)
+        if auto_migrate:
+            apply_valuation_migration(db_path)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -38,6 +39,16 @@ class AnalysisSnapshotRepository:
         return item
 
     def add(self, snapshot: AnalysisSnapshot, idempotency_key: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            return self.add_with_connection(conn, snapshot, idempotency_key)
+
+    def add_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        snapshot: AnalysisSnapshot,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Append using a caller-owned transaction (Daily refresh boundary)."""
         if not idempotency_key.strip():
             raise ValueError("idempotency_key is required")
         payload = snapshot.canonical_payload()
@@ -52,78 +63,77 @@ class AnalysisSnapshotRepository:
         stored_output["snapshot_id"] = snapshot_id
         payload["output"] = stored_output
         output_sha256 = sha256_json(payload["output"])
-        with self._connect() as conn:
-            binding = conn.execute(
-                "SELECT * FROM analysis_snapshot_idempotency_keys WHERE idempotency_key = ?",
-                (idempotency_key,),
-            ).fetchone()
-            if binding:
-                if binding["payload_fingerprint"] != fingerprint:
-                    raise ValueError("idempotency key was already used with a different payload")
-                row = conn.execute(
-                    "SELECT * FROM analysis_snapshots WHERE snapshot_id = ?",
-                    (binding["snapshot_id"],),
-                ).fetchone()
-                if row is None:
-                    raise RuntimeError("snapshot idempotency ledger references a missing snapshot")
-                return {**self._decode(row), "created": False}
-            duplicate = conn.execute(
-                "SELECT * FROM analysis_snapshots WHERE payload_fingerprint = ?",
-                (fingerprint,),
-            ).fetchone()
-            if duplicate:
-                conn.execute(
-                    "INSERT INTO analysis_snapshot_idempotency_keys VALUES (?,?,?,?)",
-                    (idempotency_key, fingerprint, duplicate["snapshot_id"], utc_now_timestamp()),
-                )
-                return {**self._decode(duplicate), "created": False}
-            if payload["supersedes_snapshot_id"]:
-                parent = conn.execute(
-                    "SELECT symbol FROM analysis_snapshots WHERE snapshot_id = ?",
-                    (payload["supersedes_snapshot_id"],),
-                ).fetchone()
-                if parent is None:
-                    raise ValueError("supersedes_snapshot_id does not exist")
-                if parent["symbol"] != payload["symbol"]:
-                    raise ValueError("superseded snapshot must have the same symbol")
-            conn.execute(
-                """
-                INSERT INTO analysis_snapshots (
-                    snapshot_id,payload_fingerprint,symbol,knowledge_cutoff_at,
-                    capture_mode,model_version,synthesis_profile_revision_id,
-                    synthesis_profile_approval_id,used_rule_versions_json,
-                    source_resource_versions_json,manual_approval_ids_json,
-                    output_json,output_sha256,created_at,supersedes_snapshot_id
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    snapshot_id,
-                    fingerprint,
-                    payload["symbol"],
-                    payload["knowledge_cutoff_at"],
-                    payload["capture_mode"],
-                    payload["model_version"],
-                    payload["synthesis_profile_revision_id"],
-                    payload["synthesis_profile_approval_id"],
-                    canonical_json(payload["used_rule_versions"]),
-                    canonical_json(payload["source_resource_versions"]),
-                    canonical_json(payload["manual_approval_ids"]),
-                    canonical_json(payload["output"]),
-                    output_sha256,
-                    payload["created_at"],
-                    payload["supersedes_snapshot_id"],
-                ),
-            )
-            conn.execute(
-                "INSERT INTO analysis_snapshot_idempotency_keys VALUES (?,?,?,?)",
-                (idempotency_key, fingerprint, snapshot_id, utc_now_timestamp()),
-            )
+        binding = conn.execute(
+            "SELECT * FROM analysis_snapshot_idempotency_keys WHERE idempotency_key = ?",
+            (idempotency_key,),
+        ).fetchone()
+        if binding:
+            if binding["payload_fingerprint"] != fingerprint:
+                raise ValueError("idempotency key was already used with a different payload")
             row = conn.execute(
                 "SELECT * FROM analysis_snapshots WHERE snapshot_id = ?",
-                (snapshot_id,),
+                (binding["snapshot_id"],),
             ).fetchone()
-            assert row is not None
-            return {**self._decode(row), "created": True}
+            if row is None:
+                raise RuntimeError("snapshot idempotency ledger references a missing snapshot")
+            return {**self._decode(row), "created": False}
+        duplicate = conn.execute(
+            "SELECT * FROM analysis_snapshots WHERE payload_fingerprint = ?",
+            (fingerprint,),
+        ).fetchone()
+        if duplicate:
+            conn.execute(
+                "INSERT INTO analysis_snapshot_idempotency_keys VALUES (?,?,?,?)",
+                (idempotency_key, fingerprint, duplicate["snapshot_id"], utc_now_timestamp()),
+            )
+            return {**self._decode(duplicate), "created": False}
+        if payload["supersedes_snapshot_id"]:
+            parent = conn.execute(
+                "SELECT symbol FROM analysis_snapshots WHERE snapshot_id = ?",
+                (payload["supersedes_snapshot_id"],),
+            ).fetchone()
+            if parent is None:
+                raise ValueError("supersedes_snapshot_id does not exist")
+            if parent["symbol"] != payload["symbol"]:
+                raise ValueError("superseded snapshot must have the same symbol")
+        conn.execute(
+            """
+            INSERT INTO analysis_snapshots (
+                snapshot_id,payload_fingerprint,symbol,knowledge_cutoff_at,
+                capture_mode,model_version,synthesis_profile_revision_id,
+                synthesis_profile_approval_id,used_rule_versions_json,
+                source_resource_versions_json,manual_approval_ids_json,
+                output_json,output_sha256,created_at,supersedes_snapshot_id
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                snapshot_id,
+                fingerprint,
+                payload["symbol"],
+                payload["knowledge_cutoff_at"],
+                payload["capture_mode"],
+                payload["model_version"],
+                payload["synthesis_profile_revision_id"],
+                payload["synthesis_profile_approval_id"],
+                canonical_json(payload["used_rule_versions"]),
+                canonical_json(payload["source_resource_versions"]),
+                canonical_json(payload["manual_approval_ids"]),
+                canonical_json(payload["output"]),
+                output_sha256,
+                payload["created_at"],
+                payload["supersedes_snapshot_id"],
+            ),
+        )
+        conn.execute(
+            "INSERT INTO analysis_snapshot_idempotency_keys VALUES (?,?,?,?)",
+            (idempotency_key, fingerprint, snapshot_id, utc_now_timestamp()),
+        )
+        row = conn.execute(
+            "SELECT * FROM analysis_snapshots WHERE snapshot_id = ?",
+            (snapshot_id,),
+        ).fetchone()
+        assert row is not None
+        return {**self._decode(row), "created": True}
 
     def get_with_connection(
         self, conn: sqlite3.Connection, snapshot_id: str
@@ -143,6 +153,60 @@ class AnalysisSnapshotRepository:
     def get(self, snapshot_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             return self.get_with_connection(conn, snapshot_id)
+
+    def get_many_with_connection(
+        self, conn: sqlite3.Connection, snapshot_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        ids = list(dict.fromkeys(str(value).strip() for value in snapshot_ids if str(value).strip()))
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        rows = conn.execute(
+            f"SELECT * FROM analysis_snapshots WHERE snapshot_id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        result: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            try:
+                decoded = self._decode(row)
+                valid = sha256_json(decoded["output"]) == decoded["output_sha256"]
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                decoded = None
+                valid = False
+            if not valid:
+                raise SnapshotIntegrityError(
+                    "stored analysis snapshot output failed integrity verification"
+                )
+            result[str(row["snapshot_id"])] = decoded
+        return result
+
+    def get_many_for_daily_with_connection(
+        self, conn: sqlite3.Connection, snapshot_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Bulk-decode Daily baselines while preserving per-row integrity state."""
+        ids = list(dict.fromkeys(str(value).strip() for value in snapshot_ids if str(value).strip()))
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        rows = conn.execute(
+            f"SELECT * FROM analysis_snapshots WHERE snapshot_id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        result: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            snapshot_id = str(row["snapshot_id"])
+            try:
+                decoded = self._decode(row)
+                valid = sha256_json(decoded["output"]) == decoded["output_sha256"]
+            except (TypeError, ValueError, json.JSONDecodeError):
+                decoded = None
+                valid = False
+            result[snapshot_id] = {
+                "snapshot": decoded if valid else None,
+                "integrity_error": not valid,
+                "snapshot_id": snapshot_id,
+            }
+        return result
 
     def latest_for_symbols_as_of_with_connection(
         self, conn: sqlite3.Connection, symbols: list[str], cutoff: str
@@ -168,8 +232,56 @@ class AnalysisSnapshotRepository:
         ).fetchall()
         results: dict[str, dict[str, Any]] = {}
         for row in rows:
-            decoded = self._decode(row)
-            if sha256_json(decoded["output"]) != decoded["output_sha256"]:
+            try:
+                decoded = self._decode(row)
+                valid = sha256_json(decoded["output"]) == decoded["output_sha256"]
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                decoded = None
+                valid = False
+            if not valid:
+                results[row["symbol"]] = {
+                    "snapshot": None, "integrity_error": True,
+                    "snapshot_id": row["snapshot_id"],
+                }
+            else:
+                results[row["symbol"]] = {
+                    "snapshot": decoded, "integrity_error": False,
+                    "snapshot_id": row["snapshot_id"],
+                }
+        return results
+
+    def daily_latest_for_symbols_as_of_with_connection(
+        self, conn: sqlite3.Connection, symbols: list[str], cutoff: str
+    ) -> dict[str, dict[str, Any]]:
+        """Daily's stricter D×K selection: created and knowledge cutoff are visible."""
+        if not symbols:
+            return {}
+        normalized_cutoff = normalize_utc_timestamp(cutoff, "knowledge_cutoff_at")
+        unique_symbols = sorted(set(symbols))
+        placeholders = ",".join("?" for _ in unique_symbols)
+        rows = conn.execute(
+            f"""
+            WITH ranked AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY symbol ORDER BY created_at DESC, snapshot_id DESC
+                ) AS position
+                FROM analysis_snapshots
+                WHERE symbol IN ({placeholders})
+                  AND created_at <= ? AND knowledge_cutoff_at <= ?
+            )
+            SELECT * FROM ranked WHERE position=1
+            """,
+            [*unique_symbols, normalized_cutoff, normalized_cutoff],
+        ).fetchall()
+        results: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            try:
+                decoded = self._decode(row)
+                valid = sha256_json(decoded["output"]) == decoded["output_sha256"]
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                decoded = None
+                valid = False
+            if not valid:
                 results[row["symbol"]] = {
                     "snapshot": None, "integrity_error": True,
                     "snapshot_id": row["snapshot_id"],

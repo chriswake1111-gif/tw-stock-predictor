@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 
 from src.domain.deployment import DeploymentPlanApproval, DeploymentPlanRevision
 from src.domain.valuation import ApprovalStatus
@@ -12,8 +13,8 @@ from src.strategy.three_tranche_planner import build_three_tranche_plan
 
 
 class DeploymentPlanService:
-    def __init__(self, db_path: str = "data/cache.db"):
-        self.repository = DeploymentPlanRepository(db_path)
+    def __init__(self, db_path: str = "data/cache.db", *, auto_migrate: bool = True):
+        self.repository = DeploymentPlanRepository(db_path, auto_migrate=auto_migrate)
         self.registry = RuleRegistry()
 
     def ingest(self, revision: DeploymentPlanRevision, idempotency_key: str) -> dict:
@@ -67,7 +68,30 @@ class DeploymentPlanService:
         return result
 
     def analyze(self, symbol: str, knowledge_cutoff_at: str) -> dict:
-        states = self.repository.states_as_of(symbol, knowledge_cutoff_at)
+        return self._analyze_with_states(
+            symbol,
+            knowledge_cutoff_at,
+            self.repository.states_as_of(symbol, knowledge_cutoff_at),
+        )
+
+    def analyze_preloaded(
+        self,
+        connection: sqlite3.Connection,
+        symbol: str,
+        knowledge_cutoff_at: str,
+    ) -> dict:
+        """Evaluate plans on a caller-owned transaction."""
+        states = self.repository.states_as_of_with_connection(
+            connection, symbol, knowledge_cutoff_at
+        )
+        return self._analyze_with_states(symbol, knowledge_cutoff_at, states)
+
+    def _analyze_with_states(
+        self,
+        symbol: str,
+        knowledge_cutoff_at: str,
+        states: list[dict],
+    ) -> dict:
         if not states:
             return {
                 "status": "needs_human_input",

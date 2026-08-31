@@ -1,0 +1,36 @@
+{
+  "contract_version": "phase17_daily_research_benchmark_v1",
+  "manifest_schema_version": "phase17_daily_research_benchmark_manifest_v1",
+  "migration_version": "20260828_20_phase14_third_code_review_remediation",
+  "market_date": "2026-08-31",
+  "knowledge_cutoff_at": "2026-08-31T00:00:00Z",
+  "queue_sizes": [25, 50, 100, 200],
+  "page_limit": 25,
+  "samples": {
+    "cold": 30,
+    "warm": 30,
+    "total": 60,
+    "percentile": "nearest_rank",
+    "nearest_rank_index": "ceil(percentile * sample_count)"
+  },
+  "thresholds_seconds": {
+    "warm_p95": 2.0,
+    "warm_p99": 3.0,
+    "cold_p95": 3.0,
+    "cold_p99": 4.5
+  },
+  "query_budget": {
+    "max_app_read_statements_per_page": 32,
+    "query_count_independent_of_queue_size": true,
+    "no_per_item_select": true
+  },
+  "fixture": {
+    "active_queue_mixed_venues": true,
+    "archived_control_item": true,
+    "snapshot_statuses": ["available", "partial", "insufficient_data"],
+    "no_snapshot_items": true,
+    "acknowledged_baseline_items": true,
+    "network": false,
+    "production_database": false
+  }
+}

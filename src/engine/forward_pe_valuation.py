@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import Any
 
 from src.domain.valuation import normalize_utc_timestamp
@@ -57,13 +58,27 @@ class ForwardPEValuationEngine:
         knowledge_cutoff_at: str,
         industry: str | None = None,
         market: str | None = None,
+        *,
+        connection: sqlite3.Connection | None = None,
     ) -> dict[str, Any]:
         knowledge_cutoff_at = normalize_utc_timestamp(
             knowledge_cutoff_at, "knowledge_cutoff_at"
         )
-        observation_states = self.repository.forward_eps_state_as_of(
-            symbol, knowledge_cutoff_at
-        )
+        if connection is None:
+            observation_states = self.repository.forward_eps_state_as_of(
+                symbol, knowledge_cutoff_at
+            )
+            pe_by_scope = self.repository.pe_scenarios_as_of(
+                symbol, knowledge_cutoff_at, industry=industry, market=market
+            )
+        else:
+            observation_states = self.repository.forward_eps_state_as_of_with_connection(
+                connection, symbol, knowledge_cutoff_at
+            )
+            pe_by_scope = self.repository.pe_scenarios_as_of_with_connection(
+                connection, symbol, knowledge_cutoff_at,
+                industry=industry, market=market,
+            )
         observations = [
             row for row in observation_states
             if row["effective_approval_status"] == "approved"
@@ -74,9 +89,6 @@ class ForwardPEValuationEngine:
                 or row["project_operationalization"] == 1
             )
         ]
-        pe_by_scope = self.repository.pe_scenarios_as_of(
-            symbol, knowledge_cutoff_at, industry=industry, market=market
-        )
         symbol_scenarios = pe_by_scope["symbol"]
         forecast_approval_ids = [
             row["verified_approval_id"] for row in observations

@@ -592,80 +592,143 @@ class NeutralBatchMarketContextRepository:
         cursor_last_key: tuple[Any, ...] | None = None,
     ) -> NeutralBatchMarketContextProjection:
         """Read source, aggregates, and bounded page from one logical snapshot."""
-
         with self.storage.read_transaction() as conn:
-            self._register_functions(conn)
-            sources: dict[str, dict[str, Any]] = {}
-            aggregates: dict[str, dict[str, Any]] = {}
-            raw_page: list[tuple[str, dict[str, Any]]] = []
-            cursor_venue_order = self._cursor_venue_order(cursor_last_key)
+            return self.read_with_connection(
+                conn, request, cursor_last_key=cursor_last_key
+            )
 
-            for mapping in request.venue_mappings:
-                coverage_request = CoverageRequest(
-                    venue=mapping.venue,
-                    source_trade_date=request.market_date,
-                    knowledge_cutoff_at=request.knowledge_cutoff_at,
-                    limit=request.limit,
-                )
-                source = self._source_lineage_cte(conn, mapping, coverage_request)
-                aggregate = self._aggregate(
-                    conn,
-                    coverage_request,
-                    source=source,
-                )
-                sources[mapping.venue] = source
-                aggregates[mapping.venue] = aggregate
+    def read_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        request: NeutralBatchMarketContextRequest,
+        *,
+        cursor_last_key: tuple[Any, ...] | None = None,
+    ) -> NeutralBatchMarketContextProjection:
+        """Read the Phase 16 projection without acquiring another connection."""
+        self._register_functions(conn)
+        sources: dict[str, dict[str, Any]] = {}
+        aggregates: dict[str, dict[str, Any]] = {}
+        raw_page: list[tuple[str, dict[str, Any]]] = []
+        cursor_venue_order = self._cursor_venue_order(cursor_last_key)
 
-            remaining = request.limit + self._PAGE_LOOKAHEAD
-            for mapping in request.venue_mappings:
-                mapping_venue_order = venue_order(mapping.venue)
-                if remaining <= 0:
-                    break
-                if (
-                    cursor_venue_order is not None
-                    and mapping_venue_order < cursor_venue_order
-                ):
-                    continue
-                coverage_request = CoverageRequest(
-                    venue=mapping.venue,
-                    source_trade_date=request.market_date,
-                    knowledge_cutoff_at=request.knowledge_cutoff_at,
-                    limit=request.limit,
-                )
-                venue_cursor = None
-                if (
-                    cursor_last_key is not None
-                    and mapping_venue_order == cursor_venue_order
-                ):
-                    venue_cursor = cursor_last_key
-                rows = self._page(
-                    conn,
-                    coverage_request,
-                    limit=remaining,
-                    cursor_last_key=venue_cursor,
-                )
-                raw_page.extend((mapping.venue, row) for row in rows)
-                remaining = request.limit + self._PAGE_LOOKAHEAD - len(raw_page)
-                if len(raw_page) >= request.limit + self._PAGE_LOOKAHEAD:
-                    break
+        for mapping in request.venue_mappings:
+            coverage_request = CoverageRequest(
+                venue=mapping.venue,
+                source_trade_date=request.market_date,
+                knowledge_cutoff_at=request.knowledge_cutoff_at,
+                limit=request.limit,
+            )
+            source = self._source_lineage_cte(conn, mapping, coverage_request)
+            aggregate = self._aggregate(conn, coverage_request, source=source)
+            sources[mapping.venue] = source
+            aggregates[mapping.venue] = aggregate
 
-            items: list[dict[str, Any]] = []
-            for venue, row in raw_page:
-                source = sources[venue]
-                item = self._phase16_item(
+        remaining = request.limit + self._PAGE_LOOKAHEAD
+        for mapping in request.venue_mappings:
+            mapping_venue_order = venue_order(mapping.venue)
+            if remaining <= 0:
+                break
+            if cursor_venue_order is not None and mapping_venue_order < cursor_venue_order:
+                continue
+            coverage_request = CoverageRequest(
+                venue=mapping.venue,
+                source_trade_date=request.market_date,
+                knowledge_cutoff_at=request.knowledge_cutoff_at,
+                limit=request.limit,
+            )
+            venue_cursor = (
+                cursor_last_key
+                if cursor_last_key is not None and mapping_venue_order == cursor_venue_order
+                else None
+            )
+            rows = self._page(
+                conn, coverage_request, limit=remaining, cursor_last_key=venue_cursor
+            )
+            raw_page.extend((mapping.venue, row) for row in rows)
+            remaining = request.limit + self._PAGE_LOOKAHEAD - len(raw_page)
+            if len(raw_page) >= request.limit + self._PAGE_LOOKAHEAD:
+                break
+
+        items: list[dict[str, Any]] = []
+        for venue, row in raw_page:
+            source = sources[venue]
+            items.append(
+                self._phase16_item(
                     row,
                     source,
                     bound_invalid_source=(
                         source["source_state"] == CoverageSourceState.BLOCKED.value
                     ),
                 )
-                items.append(item)
-            items.sort(key=item_order_key)
-            return NeutralBatchMarketContextProjection(
-                sources=sources,
-                aggregates=aggregates,
-                items=tuple(items[: request.limit + self._PAGE_LOOKAHEAD]),
             )
+        items.sort(key=item_order_key)
+        return NeutralBatchMarketContextProjection(
+            sources=sources,
+            aggregates=aggregates,
+            items=tuple(items[: request.limit + self._PAGE_LOOKAHEAD]),
+        )
+
+    def read_for_symbols_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        request: NeutralBatchMarketContextRequest,
+        *,
+        canonical_symbols: list[str],
+    ) -> NeutralBatchMarketContextProjection:
+        """Return full venue preflight plus only the bounded queue symbols."""
+        self._register_functions(conn)
+        wanted = list(dict.fromkeys(str(value).strip().upper() for value in canonical_symbols))
+        sources: dict[str, dict[str, Any]] = {}
+        aggregates: dict[str, dict[str, Any]] = {}
+        items: list[dict[str, Any]] = []
+        for mapping in request.venue_mappings:
+            coverage_request = CoverageRequest(
+                venue=mapping.venue,
+                source_trade_date=request.market_date,
+                knowledge_cutoff_at=request.knowledge_cutoff_at,
+                limit=request.limit,
+            )
+            source = self._source_lineage_cte(conn, mapping, coverage_request)
+            aggregate = self._aggregate(conn, coverage_request, source=source)
+            sources[mapping.venue] = source
+            aggregates[mapping.venue] = aggregate
+            venue_symbols = [
+                value for value in wanted
+                if value.endswith(".TW") == (mapping.venue == "TWSE")
+            ]
+            if not venue_symbols:
+                continue
+            base_sql = self._combined_items_cte(coverage_request)
+            placeholders = ",".join("?" for _ in venue_symbols)
+            params = self._projection_params(coverage_request)
+            params.extend(venue_symbols)
+            params.append(len(venue_symbols) + self._PAGE_LOOKAHEAD)
+            rows = conn.execute(
+                f"""
+                SELECT projected.*
+                FROM ({base_sql}) projected
+                WHERE projected.canonical_symbol IN ({placeholders})
+                ORDER BY {self._page_order_sql()}
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+            for row in rows:
+                items.append(
+                    self._phase16_item(
+                        dict(row),
+                        source,
+                        bound_invalid_source=(
+                            source["source_state"] == CoverageSourceState.BLOCKED.value
+                        ),
+                    )
+                )
+        items.sort(key=item_order_key)
+        return NeutralBatchMarketContextProjection(
+            sources=sources,
+            aggregates=aggregates,
+            items=tuple(items),
+        )
 
 
 __all__ = [

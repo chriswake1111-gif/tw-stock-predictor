@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import sqlite3
 
 from src.engine.liquidity import LiquidityEngine
 from src.repositories.liquidity_repository import LiquidityRepository
@@ -10,8 +11,14 @@ from src.services.rule_registry import RuleRegistry
 
 
 class MarketLiquidityService:
-    def __init__(self, db_path: str = "data/cache.db", config: dict | None = None):
-        self.repository = LiquidityRepository(db_path)
+    def __init__(
+        self,
+        db_path: str = "data/cache.db",
+        config: dict | None = None,
+        *,
+        auto_migrate: bool = True,
+    ):
+        self.repository = LiquidityRepository(db_path, auto_migrate=auto_migrate)
         settings = (config or {}).get("liquidity_v2", {})
         self.engine = LiquidityEngine(
             float(settings.get("elevated_percentile", 80.0)),
@@ -33,16 +40,32 @@ class MarketLiquidityService:
         }
 
     def analyze(self, knowledge_cutoff_at: str) -> dict:
+        with self.repository._connect() as conn:
+            return self._analyze_with_connection(conn, knowledge_cutoff_at)
+
+    def analyze_preloaded(
+        self, connection: sqlite3.Connection, knowledge_cutoff_at: str
+    ) -> dict:
+        """Evaluate liquidity evidence on a caller-owned read transaction."""
+        return self._analyze_with_connection(connection, knowledge_cutoff_at)
+
+    def _analyze_with_connection(
+        self, connection: sqlite3.Connection, knowledge_cutoff_at: str
+    ) -> dict:
         as_of_date = datetime.fromisoformat(
             knowledge_cutoff_at.replace("Z", "+00:00")
         ).date().isoformat()
-        turnover_rows = self.repository.turnover_as_of(knowledge_cutoff_at)
+        turnover_rows = self.repository.turnover_as_of_with_connection(
+            connection, knowledge_cutoff_at
+        )
         observations = []
         source_resource_versions = []
         for turnover in turnover_rows:
             if turnover["status"] != "available" or turnover["total_turnover_twd"] is None:
                 continue
-            m1b = self.repository.m1b_for_turnover(turnover, knowledge_cutoff_at)
+            m1b = self.repository.m1b_for_turnover_with_connection(
+                connection, turnover, knowledge_cutoff_at
+            )
             if m1b is None:
                 continue
             ratio = self.engine.ratio_pct(
@@ -116,7 +139,9 @@ class MarketLiquidityService:
                 trade_date=latest_turnover["trade_date"],
             )
         else:
-            m1b = self.repository.latest_m1b_as_of(knowledge_cutoff_at)
+            m1b = self.repository.latest_m1b_as_of_with_connection(
+                connection, knowledge_cutoff_at
+            )
             reason = "market_turnover_missing" if m1b else "market_turnover_and_m1b_missing"
             result = self.engine.insufficient(as_of_date, reason)
         if not latest_is_analyzable and latest_observation:

@@ -20,9 +20,10 @@ def _fingerprint(payload: dict[str, Any]) -> str:
 
 
 class SecurityValuationRepository:
-    def __init__(self, db_path: str = "data/cache.db"):
+    def __init__(self, db_path: str = "data/cache.db", *, auto_migrate: bool = True):
         self.db_path = db_path
-        apply_valuation_migration(db_path)
+        if auto_migrate:
+            apply_valuation_migration(db_path)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -196,39 +197,67 @@ class SecurityValuationRepository:
     ) -> list[dict[str, Any]]:
         cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                WITH ranked AS (
-                    SELECT *, ROW_NUMBER() OVER (
-                        PARTITION BY logical_observation_id
-                        ORDER BY revision_number DESC, available_at DESC,
-                                 ingested_at DESC, id DESC
-                    ) AS revision_rank
-                    FROM security_valuation_observations
-                    WHERE symbol = ?
-                      AND source_name = ? AND source_dataset = ?
-                      AND metric_date >= ? AND metric_date <= ?
-                      AND available_at <= ? AND ingested_at <= ?
-                )
-                SELECT * FROM ranked
-                WHERE revision_rank = 1
-                ORDER BY metric_date, logical_observation_id
-                """,
-                (
-                    symbol.strip().upper(),
-                    source_name,
-                    source_dataset,
-                    window_start,
-                    window_end,
-                    cutoff,
-                    cutoff,
-                ),
-            ).fetchall()
+            return self.observation_states_as_of_with_connection(
+                conn,
+                symbol,
+                cutoff,
+                source_name=source_name,
+                source_dataset=source_dataset,
+                window_start=window_start,
+                window_end=window_end,
+            )
+
+    def observation_states_as_of_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        symbol: str,
+        knowledge_cutoff_at: str,
+        *,
+        source_name: str,
+        source_dataset: str,
+        window_start: str,
+        window_end: str,
+    ) -> list[dict[str, Any]]:
+        cutoff = normalize_utc_timestamp(knowledge_cutoff_at, "knowledge_cutoff_at")
+        rows = conn.execute(
+            """
+            WITH ranked AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY logical_observation_id
+                    ORDER BY revision_number DESC, available_at DESC,
+                             ingested_at DESC, id DESC
+                ) AS revision_rank
+                FROM security_valuation_observations
+                WHERE symbol = ?
+                  AND source_name = ? AND source_dataset = ?
+                  AND metric_date >= ? AND metric_date <= ?
+                  AND available_at <= ? AND ingested_at <= ?
+            )
+            SELECT * FROM ranked
+            WHERE revision_rank = 1
+            ORDER BY metric_date, logical_observation_id
+            """,
+            (
+                symbol.strip().upper(), source_name, source_dataset,
+                window_start, window_end, cutoff, cutoff,
+            ),
+        ).fetchall()
         return [dict(row) for row in rows]
 
     def observations_as_of(self, *args, **kwargs) -> list[dict[str, Any]]:
         return [
             row
             for row in self.observation_states_as_of(*args, **kwargs)
+            if row["status"] == "available"
+        ]
+
+    def observations_as_of_with_connection(
+        self, conn: sqlite3.Connection, *args, **kwargs
+    ) -> list[dict[str, Any]]:
+        return [
+            row
+            for row in self.observation_states_as_of_with_connection(
+                conn, *args, **kwargs
+            )
             if row["status"] == "available"
         ]
