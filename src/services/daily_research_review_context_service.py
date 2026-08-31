@@ -65,6 +65,7 @@ from src.domain.research_workflow import (
     public_review_event,
 )
 from src.domain.snapshot_comparison import canonical_timestamp
+from src.engine.snapshot_comparator import supports_snapshot_contract
 from src.repositories.analysis_snapshot_repository import (
     AnalysisSnapshotRepository,
     SnapshotIntegrityError,
@@ -121,6 +122,10 @@ class DailyResearchRefreshNotEligible(ValueError):
 
 class DailyResearchRefreshRace(ValueError):
     code = "snapshot_refresh_expected_snapshot_race"
+
+    def __init__(self, gate: dict[str, Any]):
+        self.gate = gate
+        super().__init__(self.code)
 
 
 def _received_timestamp(value: datetime | str) -> str:
@@ -594,18 +599,10 @@ class DailyResearchReviewContextService:
     def _snapshot_contract_supported(
         snapshot: Mapping[str, Any] | None, *, item_symbol: str
     ) -> bool:
-        if not isinstance(snapshot, Mapping):
-            return False
-        output = snapshot.get("output")
         return bool(
-            snapshot.get("snapshot_id")
+            isinstance(snapshot, Mapping)
             and str(snapshot.get("symbol") or "") == item_symbol
-            and snapshot.get("knowledge_cutoff_at")
-            and snapshot.get("created_at")
-            and snapshot.get("capture_mode")
-            and snapshot.get("model_version")
-            and isinstance(output, Mapping)
-            and output.get("symbol") in {None, item_symbol}
+            and supports_snapshot_contract(dict(snapshot))
         )
 
     def _phase16_projection(
@@ -668,8 +665,8 @@ class DailyResearchReviewContextService:
             if isinstance(snapshot, Mapping):
                 snapshot_values.append(dict(snapshot))
         freshness_by_id = self.freshness.snapshot_dependency_freshness_batch_with_connection(
-            conn, snapshot_values, workflow_evaluated_at,
-            checked_at=workflow_evaluated_at,
+            conn, snapshot_values, knowledge_cutoff_at,
+            checked_at=knowledge_cutoff_at,
         )
         results: list[dict[str, Any]] = []
         for membership in memberships:
@@ -1222,6 +1219,7 @@ class DailyResearchReviewContextService:
         knowledge_cutoff_at: str,
         request_received_at: datetime | str,
         idempotency_key: str,
+        correlation_id: str,
     ) -> dict[str, Any]:
         raw_key = str(idempotency_key or "").strip()
         if not raw_key:
@@ -1259,7 +1257,7 @@ class DailyResearchReviewContextService:
                 event = {**existing, "created": False}
                 conn.commit()
                 return self._baseline_response(
-                    event, cutoff=cutoff, received=received, correlation_id=None
+                    event, cutoff=cutoff, received=received, correlation_id=correlation_id
                 )
             # The raw key belongs to the legacy Phase 12 namespace.  A Daily
             # request must fail closed rather than silently claim that event.
@@ -1307,7 +1305,7 @@ class DailyResearchReviewContextService:
             )
             conn.commit()
             return self._baseline_response(
-                event, cutoff=cutoff, received=received, correlation_id=None
+                event, cutoff=cutoff, received=received, correlation_id=correlation_id
             )
         except Exception:
             if conn.in_transaction:
@@ -1319,7 +1317,7 @@ class DailyResearchReviewContextService:
     @staticmethod
     def _baseline_response(
         event: Mapping[str, Any], *, cutoff: str, received: str,
-        correlation_id: str | None,
+        correlation_id: str,
     ) -> dict[str, Any]:
         payload = {
             "status": "available",
@@ -1337,9 +1335,8 @@ class DailyResearchReviewContextService:
                 ),
             },
             "workflow_evaluated_at": received,
+            "correlation_id": correlation_id,
         }
-        if correlation_id:
-            payload["correlation_id"] = correlation_id
         return payload
 
     def refresh_snapshot(

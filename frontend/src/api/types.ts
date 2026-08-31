@@ -653,6 +653,7 @@ export interface DailyBaselineSelectionResponse {
     workflow_contract_version: string;
   };
   workflow_evaluated_at: string;
+  correlation_id: string;
 }
 
 export interface DailySnapshotRefreshResponse {

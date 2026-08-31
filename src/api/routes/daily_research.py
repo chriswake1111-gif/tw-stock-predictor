@@ -97,10 +97,12 @@ def _audit(
     )
 
 
-def _map_error(exc: Exception) -> HTTPException:
+def _map_error(exc: Exception, *, command_type: str | None = None) -> HTTPException:
     if isinstance(exc, DailyResearchItemNotFound):
         return HTTPException(status_code=404, detail="research_watchlist_item_not_found")
     if isinstance(exc, DailyResearchItemInactive):
+        if command_type == "daily_baseline_selection":
+            return HTTPException(status_code=409, detail="baseline_selection_item_not_active")
         return HTTPException(status_code=404, detail="research_watchlist_item_not_found")
     if isinstance(exc, DailyResearchContractUnavailable):
         return HTTPException(status_code=503, detail=exc.code)
@@ -136,7 +138,7 @@ def _audit_failure(
     command_type: str,
     item_id: str | None,
 ) -> HTTPException:
-    mapped = _map_error(exc)
+    mapped = _map_error(exc, command_type=command_type)
     _audit(
         request,
         command_type=command_type,
@@ -209,6 +211,7 @@ def select_daily_baseline(
             knowledge_cutoff_at=payload.knowledge_cutoff_at,
             request_received_at=_received_at(request),
             idempotency_key=idempotency_key,
+            correlation_id=_correlation_id(request),
         )
         response.status_code = 201 if result["baseline_selection_event"]["created"] else 200
         _audit(

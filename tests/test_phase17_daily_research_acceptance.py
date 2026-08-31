@@ -7,8 +7,16 @@ import pytest
 from src.api.routes.v2_valuation import _build_v2_analysis
 from src.domain.analysis_snapshot import AnalysisSnapshot, CaptureMode
 from src.domain.research_workflow import ReviewAcknowledgment
+from src.domain.valuation import (
+    ApprovalResourceType,
+    ApprovalStatus,
+    ForwardEPSObservation,
+    ForwardEPSSourceType,
+    ValuationApproval,
+)
 from src.repositories.analysis_snapshot_repository import AnalysisSnapshotRepository
 from src.repositories.daily_research_read_repository import DailyResearchReadRepository
+from src.repositories.forward_eps_repository import ForwardEPSRepository
 from src.repositories.migration_runner import apply_valuation_migration
 from src.repositories.research_workflow_repository import ResearchWorkflowRepository
 from src.services.daily_research_review_context_service import (
@@ -17,18 +25,42 @@ from src.services.daily_research_review_context_service import (
 from src.services.evidence_backup_service import EvidenceBackupService
 
 
-def _snapshot(repo: AnalysisSnapshotRepository, *, symbol: str, key: str) -> dict:
+def _authoritative_output(symbol: str, cutoff: str) -> dict:
+    return {
+        "status": "available",
+        "symbol": symbol,
+        "knowledge_cutoff_at": cutoff,
+        "model": {"version": "2.0.0"},
+        "valuation": {"status": "available", "target_matrix": []},
+        "liquidity": {"status": "available"},
+        "technical_support": {"status": "available", "scenarios": []},
+        "target_confluence": {"status": "available", "overlap_ranges": []},
+        "deployment_plan": {"status": "available", "plans": []},
+        "screening": {"status": "available"},
+        "data_quality": {"status": "available"},
+    }
+
+
+def _snapshot(
+    repo: AnalysisSnapshotRepository,
+    *,
+    symbol: str,
+    key: str,
+    knowledge_cutoff_at: str = "2026-08-30T00:00:00Z",
+    created_at: str = "2026-08-30T12:00:00Z",
+    source_resource_versions: list[dict] | None = None,
+) -> dict:
     return repo.add(
         AnalysisSnapshot(
             symbol=symbol,
-            knowledge_cutoff_at="2026-08-30T00:00:00Z",
+            knowledge_cutoff_at=knowledge_cutoff_at,
             capture_mode=CaptureMode.HISTORICAL_RECONSTRUCTION,
             model_version="2.0.0",
             used_rule_versions={},
-            source_resource_versions=[],
+            source_resource_versions=source_resource_versions or [],
             manual_approval_ids=[],
-            output={"status": "available", "symbol": symbol},
-            created_at="2026-08-30T12:00:00Z",
+            output=_authoritative_output(symbol, knowledge_cutoff_at),
+            created_at=created_at,
         ),
         key,
     )
@@ -122,6 +154,113 @@ def test_daily_read_passes_sqlite_no_write_authorizer(tmp_path):
         request_received_at="2026-08-31T09:00:00Z",
     )
     assert len(response["items"]) == 1
+
+
+def test_daily_k_projection_ignores_post_k_dependency_approval_change(tmp_path):
+    db_path = str(tmp_path / "post-k-freshness.db")
+    apply_valuation_migration(db_path)
+    workflow = ResearchWorkflowRepository(db_path, auto_migrate=False)
+    workflow.add_membership("2330.TW")
+    eps_repo = ForwardEPSRepository(db_path, auto_migrate=False)
+    k_cutoff = "2026-08-01T00:00:00Z"
+    request_time = "2026-08-10T00:00:00Z"
+    first = eps_repo.add_forward_eps(
+        ForwardEPSObservation(
+            logical_series_id="2330-2027-broker-a",
+            revision_number=1,
+            symbol="2330.TW",
+            fiscal_year=2027,
+            eps_base=51,
+            source_name="Broker A",
+            source_type=ForwardEPSSourceType.BROKER_REPORT,
+            published_at="2026-07-31",
+            available_at="2026-07-31T08:00:00Z",
+        ),
+        "post-k-k-eps",
+        ingested_at="2026-07-31T08:00:00Z",
+    )
+    first_approval = eps_repo.add_approval(
+        ValuationApproval(
+            approval_id="approval-k-eps",
+            resource_type=ApprovalResourceType.FORWARD_EPS,
+            resource_id=first["id"],
+            decision=ApprovalStatus.APPROVED,
+            rule_id="VAL-02",
+            evidence_level="A",
+            project_operationalization=False,
+            approved_by="test-admin",
+            rationale="source reviewed",
+            available_at="2026-07-31T08:01:00Z",
+        ),
+        "post-k-k-approval",
+        ingested_at="2026-07-31T08:01:00Z",
+    )
+    snapshot = _snapshot(
+        AnalysisSnapshotRepository(db_path),
+        symbol="2330.TW",
+        key="post-k-snapshot",
+        knowledge_cutoff_at=k_cutoff,
+        created_at="2026-07-31T12:00:00Z",
+        source_resource_versions=[{
+            "section": "valuation",
+            "resource_type": "forward_eps_revision",
+            "resource_id": first["id"],
+            "logical_resource_id": first["logical_series_id"],
+            "revision_number": first["revision_number"],
+            "available_at": first["available_at"],
+            "ingested_at": first["ingested_at"],
+            "approval_ids": [first_approval["approval_id"]],
+        }],
+    )
+    service = DailyResearchReviewContextService(db_path)
+    before = service.list(
+        market_date="2026-08-01",
+        knowledge_cutoff_at=k_cutoff,
+        request_received_at=request_time,
+    )
+
+    second = eps_repo.add_forward_eps(
+        ForwardEPSObservation(
+            logical_series_id="2330-2027-broker-a",
+            revision_number=2,
+            revision_of=first["id"],
+            symbol="2330.TW",
+            fiscal_year=2027,
+            eps_base=52,
+            source_name="Broker A",
+            source_type=ForwardEPSSourceType.BROKER_REPORT,
+            published_at="2026-08-05",
+            available_at="2026-08-05T08:00:00Z",
+        ),
+        "post-k-revision",
+        ingested_at="2026-08-05T08:00:00Z",
+    )
+    eps_repo.add_approval(
+        ValuationApproval(
+            approval_id="approval-post-k-revision",
+            resource_type=ApprovalResourceType.FORWARD_EPS,
+            resource_id=second["id"],
+            decision=ApprovalStatus.APPROVED,
+            rule_id="VAL-02",
+            evidence_level="A",
+            project_operationalization=False,
+            approved_by="test-admin",
+            rationale="post-cutoff source reviewed",
+            available_at="2026-08-05T08:01:00Z",
+        ),
+        "post-k-revision-approval",
+        ingested_at="2026-08-05T08:01:00Z",
+    )
+
+    after = service.list(
+        market_date="2026-08-01",
+        knowledge_cutoff_at=k_cutoff,
+        request_received_at=request_time,
+    )
+    assert snapshot["snapshot_id"] == before["items"][0]["latest_snapshot_reference"]["snapshot_id"]
+    assert before == after
+    assert before["items"][0]["freshness_status"] == "current"
+    assert "snapshot_stale" not in before["items"][0]["reason_codes"]
 
 
 def test_v2_refresh_analysis_supports_caller_owned_connection(tmp_path):

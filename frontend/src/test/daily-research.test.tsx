@@ -155,6 +155,7 @@ describe("Daily Research Context", () => {
       if (method === "POST" && url.includes("/baseline-selections")) {
         return new Response(JSON.stringify({
           status: "available",
+          correlation_id: "server-correlation-id",
           baseline_selection_event: { review_event_id: "review-1", created: true },
         }), { status: 201, headers: { "Content-Type": "application/json" } });
       }
