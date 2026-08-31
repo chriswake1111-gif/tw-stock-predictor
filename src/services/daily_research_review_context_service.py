@@ -605,6 +605,90 @@ class DailyResearchReviewContextService:
             and supports_snapshot_contract(dict(snapshot))
         )
 
+    @staticmethod
+    def _refresh_context_eligible(item: Mapping[str, Any]) -> bool:
+        """Evaluate the pre-analysis refresh gate shared by GET and POST.
+
+        Snapshot availability is a workflow state, not a refresh-quality
+        prerequisite.  In particular, an active item with no snapshot remains
+        ``insufficient_data``/``review_limited`` in the read DTO but may still
+        attempt an explicit refresh when every evidence prerequisite is
+        eligible.  The five required analysis sections are evaluated only
+        after this context gate by ``refresh_snapshot``.
+        """
+        status = str(item.get("status") or "")
+        review_state = str(item.get("review_state") or "")
+        reasons = {
+            str(reason)
+            for reason in (item.get("reason_codes") or [])
+            if str(reason)
+        }
+        snapshot_missing = (
+            review_state == ReviewState.NO_SNAPSHOT.value
+            or "no_snapshot" in reasons
+        )
+        if snapshot_missing:
+            if status != "insufficient_data":
+                return False
+        elif status != "available":
+            return False
+
+        # These are workflow-state overlays that do not, by themselves, make
+        # a new explicitly advanced snapshot unsafe.  All evidence/quality
+        # reasons remain fail-closed below.
+        if reasons.difference({
+            "no_snapshot",
+            "baseline_not_set",
+            "baseline_not_visible_at_cutoff",
+        }):
+            return False
+        if item.get("review_blocked") is not False:
+            return False
+
+        identity = item.get("identity")
+        if not isinstance(identity, Mapping):
+            return False
+        if identity.get("identity_status") != "resolved":
+            return False
+        if identity.get("canonical_symbol") != item.get("canonical_symbol"):
+            return False
+        if identity.get("venue") not in {"TWSE", "TPEX"}:
+            return False
+
+        quality = item.get("quality")
+        if not isinstance(quality, Mapping):
+            return False
+        if quality.get("integrity_status") != "valid":
+            return False
+        if quality.get("phase14_status") != "available":
+            return False
+        if quality.get("phase15_status") not in {"available", "observed_eligible"}:
+            return False
+        if quality.get("phase16_status") != "available":
+            return False
+
+        phase16_context = item.get("phase16_context")
+        phase16_item = (
+            phase16_context.get("item")
+            if isinstance(phase16_context, Mapping)
+            else None
+        )
+        if not isinstance(phase16_item, Mapping):
+            return False
+        if (
+            phase16_item.get("item_state") or phase16_item.get("status")
+        ) != "available":
+            return False
+
+        provenance = item.get("provenance")
+        if not isinstance(provenance, Mapping):
+            return False
+        return bool(
+            provenance.get("status") == "available"
+            and provenance.get("context_digest_valid") is True
+            and isinstance(provenance.get("current_reference"), Mapping)
+        )
+
     def _phase16_projection(
         self,
         conn: sqlite3.Connection,
@@ -865,17 +949,6 @@ class DailyResearchReviewContextService:
                     snapshot=None,
                     knowledge_cutoff_at=knowledge_cutoff_at,
                 )
-            actions = {
-                "open_review": True,
-                "acknowledge": bool(baseline_eligibility["baseline_selection_eligible"]),
-                "refresh_snapshot": bool(
-                    item_status == "available"
-                    and flags["review_blocked"] is False
-                    and flags["review_limited"] is False
-                ),
-                "archive": membership.get("membership_state") == MembershipState.ACTIVE.value,
-                "restore": membership.get("membership_state") == MembershipState.ARCHIVED.value,
-            }
             item = {
                 "watchlist_reference": {
                     "watchlist_item_id": membership.get("watchlist_item_id"),
@@ -943,13 +1016,20 @@ class DailyResearchReviewContextService:
                     "context_change_reasons": context_reasons,
                     "integration_contract_version": DAILY_RESEARCH_SNAPSHOT_INTEGRATION_VERSION,
                 },
-                "permitted_actions": actions,
+                "permitted_actions": {},
                 "baseline_selection_policy_version": DAILY_BASELINE_SELECTION_POLICY_VERSION,
                 "baseline_selection_reason_registry_version": DAILY_BASELINE_SELECTION_REASON_REGISTRY_VERSION,
                 "baseline_selection_eligible": baseline_eligibility["baseline_selection_eligible"],
                 "baseline_selection_blocked": baseline_eligibility["baseline_selection_blocked"],
                 "baseline_selection_reason_codes": baseline_eligibility["baseline_selection_reason_codes"],
                 "_comparison": comparison_delta,
+            }
+            item["permitted_actions"] = {
+                "open_review": True,
+                "acknowledge": bool(baseline_eligibility["baseline_selection_eligible"]),
+                "refresh_snapshot": self._refresh_context_eligible(item),
+                "archive": membership.get("membership_state") == MembershipState.ACTIVE.value,
+                "restore": membership.get("membership_state") == MembershipState.ARCHIVED.value,
             }
             results.append(item)
         return results
@@ -1406,13 +1486,7 @@ class DailyResearchReviewContextService:
             if current_item is None:
                 raise DailyResearchItemNotFound(item_id)
             gate = {
-                "eligible": bool(
-                    current_item["status"] == "available"
-                    and not current_item["review_blocked"]
-                    and current_item["quality"]["phase14_status"] == "available"
-                    and current_item["quality"]["phase15_status"] == "available"
-                    and current_item["quality"]["phase16_status"] == "available"
-                ),
+                "eligible": self._refresh_context_eligible(current_item),
                 "analysis_sections": None,
                 "item_status": current_item["status"],
                 "reason_codes": current_item["reason_codes"],

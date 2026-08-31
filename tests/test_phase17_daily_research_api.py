@@ -19,13 +19,14 @@ from src.repositories.research_workflow_repository import ResearchWorkflowReposi
 from src.services.daily_research_review_context_service import (
     DailyResearchReviewContextService,
 )
+from tests.test_phase15_eod_coverage import TARGET_DATE, _seed_coverage
 
 
 ORIGIN = "http://127.0.0.1:8000"
 
 
-def _client(monkeypatch, tmp_path):
-    db_path = str(tmp_path / "phase17.db")
+def _client(monkeypatch, tmp_path, *, db_path=None):
+    db_path = str(db_path or (tmp_path / "phase17.db"))
     apply_valuation_migration(db_path)
     monkeypatch.setenv("DATABASE_PATH", db_path)
     monkeypatch.setenv("RESEARCH_APPLICATION_ORIGIN", ORIGIN)
@@ -318,15 +319,30 @@ def test_daily_refresh_expected_snapshot_race_returns_typed_conflict(monkeypatch
     service._response = lambda _conn, **_kwargs: {
         "items": [{
             "watchlist_reference": {"watchlist_item_id": item_id},
+            "canonical_symbol": "2330.TW",
             "status": "available",
             "review_blocked": False,
+            "identity": {
+                "canonical_symbol": "2330.TW",
+                "venue": "TWSE",
+                "identity_status": "resolved",
+            },
             "quality": {
                 "phase14_status": "available",
                 "phase15_status": "available",
                 "phase16_status": "available",
+                "integrity_status": "valid",
             },
             "reason_codes": [],
+            "phase16_context": {
+                "item": {
+                    "canonical_symbol": "2330.TW",
+                    "item_state": "available",
+                },
+            },
             "provenance": {
+                "status": "available",
+                "context_digest_valid": True,
                 "current_reference": {
                     "contract_version": "daily_research_context_reference_v1",
                     "context_digest": "test-digest",
@@ -355,6 +371,32 @@ def test_daily_refresh_expected_snapshot_race_returns_typed_conflict(monkeypatch
             "actual_snapshot_id": None,
         },
     }
+
+
+def test_daily_get_permits_initial_refresh_for_real_no_snapshot_context(monkeypatch, tmp_path):
+    db_path, *_ = _seed_coverage(tmp_path)
+    client, _ = _client(monkeypatch, tmp_path, db_path=db_path)
+    with client:
+        headers = _write_headers(client)
+        created = client.post(
+            "/api/v2/research/queue", json={"symbol": "2330"}, headers=headers
+        )
+        assert created.status_code == 201
+        response = client.get(
+            "/api/v2/research/daily-context",
+            params={
+                "market_date": TARGET_DATE,
+                "knowledge_cutoff_at": "2026-08-28T00:00:00Z",
+            },
+        )
+        assert response.status_code == 200
+        item = response.json()["items"][0]
+        assert item["latest_snapshot_reference"] is None
+        assert item["status"] == "insufficient_data"
+        assert item["review_needed"] is True
+        assert item["review_blocked"] is False
+        assert item["review_limited"] is True
+        assert item["permitted_actions"]["refresh_snapshot"] is True
 
 
 @pytest.mark.parametrize(

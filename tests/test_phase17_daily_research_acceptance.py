@@ -21,8 +21,10 @@ from src.repositories.migration_runner import apply_valuation_migration
 from src.repositories.research_workflow_repository import ResearchWorkflowRepository
 from src.services.daily_research_review_context_service import (
     DailyResearchReviewContextService,
+    DailyResearchRefreshNotEligible,
 )
 from src.services.evidence_backup_service import EvidenceBackupService
+from tests.test_phase15_eod_coverage import TARGET_DATE, _seed_coverage
 
 
 def _authoritative_output(symbol: str, cutoff: str) -> dict:
@@ -288,15 +290,30 @@ def _eligible_context(item_id: str) -> dict:
     return {
         "items": [{
             "watchlist_reference": {"watchlist_item_id": item_id},
+            "canonical_symbol": "2330.TW",
             "status": "available",
             "review_blocked": False,
+            "identity": {
+                "canonical_symbol": "2330.TW",
+                "venue": "TWSE",
+                "identity_status": "resolved",
+            },
             "quality": {
                 "phase14_status": "available",
                 "phase15_status": "available",
                 "phase16_status": "available",
+                "integrity_status": "valid",
             },
             "reason_codes": [],
+            "phase16_context": {
+                "item": {
+                    "canonical_symbol": "2330.TW",
+                    "item_state": "available",
+                },
+            },
             "provenance": {
+                "status": "available",
+                "context_digest_valid": True,
                 "current_reference": {
                     "contract_version": "daily_research_context_reference_v1",
                     "context_digest": "test-digest",
@@ -391,3 +408,87 @@ def test_daily_refresh_commits_snapshot_and_ledger_atomically(tmp_path):
             "SELECT COUNT(*) FROM analysis_snapshot_idempotency_keys"
         ).fetchone()[0]
     assert (snapshot_count, ledger_count) == (1, 1)
+
+
+def test_daily_refresh_creates_initial_snapshot_from_real_no_snapshot_context(tmp_path):
+    db_path, *_ = _seed_coverage(tmp_path)
+    workflow = ResearchWorkflowRepository(str(db_path), auto_migrate=False)
+    item = workflow.add_membership("2330.TW")
+    service = DailyResearchReviewContextService(
+        str(db_path),
+        analysis_builder=lambda symbol, cutoff, _context, _connection: _refresh_analysis(
+            symbol, cutoff
+        ),
+    )
+
+    before = service.list(
+        market_date=TARGET_DATE,
+        knowledge_cutoff_at="2026-08-28T00:00:00Z",
+        request_received_at="2026-08-28T09:00:00Z",
+    )
+    current_item = before["items"][0]
+    assert current_item["latest_snapshot_reference"] is None
+    assert current_item["status"] == "insufficient_data"
+    assert current_item["review_needed"] is True
+    assert current_item["review_blocked"] is False
+    assert current_item["review_limited"] is True
+    assert current_item["permitted_actions"]["refresh_snapshot"] is True
+
+    result = service.refresh_snapshot(
+        item["watchlist_item_id"],
+        market_date=TARGET_DATE,
+        loaded_knowledge_cutoff_at="2026-08-28T00:00:00Z",
+        expected_snapshot_id=None,
+        advance_knowledge_cutoff=True,
+        request_received_at="2026-08-28T09:00:00Z",
+        idempotency_key="daily-refresh-initial-create",
+    )
+    assert result["created"] is True
+    assert result["refresh_gate"]["eligible"] is True
+    assert result["refresh_gate"]["analysis_sections"] == {
+        "eligible": True,
+        "error": None,
+        "section": None,
+    }
+    assert result["snapshot"]["snapshot_id"]
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM analysis_snapshots").fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM analysis_snapshot_idempotency_keys"
+        ).fetchone()[0] == 1
+
+
+def test_daily_refresh_initial_create_reaches_five_section_fail_closed_gate(tmp_path):
+    db_path, *_ = _seed_coverage(tmp_path)
+    item = ResearchWorkflowRepository(str(db_path), auto_migrate=False).add_membership(
+        "2330.TW"
+    )
+
+    def incomplete_builder(symbol, cutoff, _context, _connection):
+        analysis = _refresh_analysis(symbol, cutoff)
+        analysis.pop("screening")
+        return analysis
+
+    service = DailyResearchReviewContextService(
+        str(db_path), analysis_builder=incomplete_builder
+    )
+    with pytest.raises(DailyResearchRefreshNotEligible) as raised:
+        service.refresh_snapshot(
+            item["watchlist_item_id"],
+            market_date=TARGET_DATE,
+            loaded_knowledge_cutoff_at="2026-08-28T00:00:00Z",
+            expected_snapshot_id=None,
+            advance_knowledge_cutoff=True,
+            request_received_at="2026-08-28T09:00:00Z",
+            idempotency_key="daily-refresh-initial-missing-section",
+        )
+    assert raised.value.gate["analysis_sections"] == {
+        "eligible": False,
+        "error": "required_analysis_section_missing",
+        "section": "screening",
+    }
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM analysis_snapshots").fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM analysis_snapshot_idempotency_keys"
+        ).fetchone()[0] == 0
