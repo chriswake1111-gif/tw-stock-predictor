@@ -277,6 +277,9 @@ def test_phase18_package_validator_accepts_clean_resource_payload(tmp_path):
     (launcher_bundle / "tw-stock-predictor.exe").write_bytes(b"launcher")
     (launcher_bundle / "_internal").mkdir()
     (launcher_bundle / "_internal" / "python312.dll").write_bytes(b"runtime")
+    dependency_data = launcher_bundle / "_internal" / "dependency" / "data"
+    dependency_data.mkdir(parents=True)
+    (dependency_data / "module.dat").write_bytes(b"bundled dependency data")
     (server_bundle / "tw-stock-predictor-server.exe").write_bytes(b"server")
     (server_bundle / "_internal").mkdir()
     (server_bundle / "_internal" / "python312.dll").write_bytes(b"runtime")

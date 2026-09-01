@@ -37,8 +37,11 @@ def _assert_no_runtime_state(root: Path) -> None:
     for item in root.rglob("*"):
         if item.name.lower() in forbidden_names:
             _fail(f"package contains mutable or secret runtime file: {item}")
-        if item.is_dir() and item.name.lower() in forbidden_dirs:
-            _fail(f"package contains mutable runtime directory: {item}")
+    for mutable_root in (root, root / "resource-payload"):
+        for directory_name in forbidden_dirs:
+            candidate = mutable_root / directory_name
+            if candidate.is_dir():
+                _fail(f"package contains mutable runtime directory: {candidate}")
 
 
 def _assert_frontend_secret_gate(resource_root: Path) -> int:
