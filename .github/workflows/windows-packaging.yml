@@ -45,16 +45,16 @@ jobs:
           python -m pip install -r requirements-dev.txt
           python -m pip install -r packaging/windows/requirements-build.txt
 
-      - name: Run Phase 18 runtime tests on Windows
-        shell: pwsh
-        run: python -B -m pytest tests/test_phase18_runtime.py -q -p no:cacheprovider
-
       - name: Build frontend from source
         working-directory: frontend
         shell: pwsh
         run: |
           npm ci
           npm run build
+
+      - name: Run Phase 18 runtime tests on Windows
+        shell: pwsh
+        run: python -B -m pytest tests/test_phase18_runtime.py -q -p no:cacheprovider
 
       - name: Build Windows onedir package and installer
         shell: pwsh
