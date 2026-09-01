@@ -311,6 +311,36 @@ def test_phase18_recovery_cli_reports_deterministic_failure(tmp_path, capsys):
     assert payload == {"status": "failed", "code": "restore_backup_missing"}
 
 
+def test_phase18_recovery_cli_activation_output_is_bounded_and_evidence_bearing(
+    tmp_path,
+    capsys,
+):
+    settings, _ = _packaged_settings(tmp_path)
+    source = tmp_path / "source.db"
+    backup = settings.paths.backup_dir / "source.db"
+    ResearchWorkflowRepository(str(source)).add_membership("2330.TW")
+    ResearchWorkflowRepository(str(settings.paths.database_path)).add_membership("2317.TW")
+    EvidenceBackupService.backup(str(source), str(backup))
+
+    exit_code = recovery_cli_main(
+        ["activate", str(backup)],
+        paths=settings.paths,
+        packaged=True,
+    )
+    output = capsys.readouterr().out
+    payload = json.loads(output)
+
+    assert exit_code == 0
+    assert len(output.encode("utf-8")) < 4096
+    assert payload["status"] == "activated"
+    assert payload["database_state"] == "known_v2_current"
+    assert payload["candidate_database_state"] == "known_v2_current"
+    assert payload["reopened_and_revalidated"] is True
+    assert payload["source_backup_preserved"] is True
+    assert "validation" not in payload
+    assert "table_names" not in payload
+
+
 def test_phase18_diagnostics_redact_nonce_and_bound_log_segments(tmp_path):
     logger = DiagnosticLogger(
         tmp_path,

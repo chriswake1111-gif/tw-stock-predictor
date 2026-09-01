@@ -21,6 +21,26 @@ def _print(payload: dict[str, object], *, error: bool = False) -> None:
     )
 
 
+def _activation_summary(result: dict[str, object]) -> dict[str, object]:
+    """Keep installed CLI output bounded while retaining review evidence."""
+
+    database = result.get("database")
+    candidate = result.get("candidate_database")
+    database_state = database.get("state") if isinstance(database, dict) else None
+    candidate_state = candidate.get("state") if isinstance(candidate, dict) else None
+    return {
+        "status": result.get("status"),
+        "operation_id": result.get("operation_id"),
+        "canonical_path": result.get("canonical_path"),
+        "source_backup_path": result.get("source_backup_path"),
+        "source_backup_preserved": result.get("source_backup_preserved"),
+        "prior_canonical_path": result.get("prior_canonical_path"),
+        "database_state": database_state,
+        "candidate_database_state": candidate_state,
+        "reopened_and_revalidated": result.get("reopened_and_revalidated"),
+    }
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -67,6 +87,7 @@ def main(
                 runtime_dir=runtime_dir,
                 resource_root=resolved.resource_root,
             )
+            result = _activation_summary(result)
         else:
             result = EvidenceBackupService.validate(args.db_path)
     except (RestoreError, RuntimePathError, OSError, RuntimeError, ValueError) as exc:
