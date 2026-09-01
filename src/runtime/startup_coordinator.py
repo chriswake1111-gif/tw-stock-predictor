@@ -217,6 +217,8 @@ class StartupCoordinator:
             classification = self._call_classifier(canonical)
             if classification.state is DatabaseState.CORRUPT_UNKNOWN:
                 raise StartupFailure("database_corrupt_unknown")
+            if classification.state is DatabaseState.KNOWN_V2_CURRENT:
+                return StartupResult("ready", classification)
             if classification.state is DatabaseState.FRESH:
                 self._log("database_fresh", database=str(canonical))
                 self._call_migrator(canonical)

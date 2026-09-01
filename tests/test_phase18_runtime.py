@@ -136,6 +136,17 @@ def test_phase18_startup_migrates_fresh_and_seeds_user_config(tmp_path):
     assert (resource_root / "config" / "config.yaml").is_file()
 
 
+def test_phase18_startup_accepts_existing_current_database(tmp_path):
+    settings, _ = _packaged_settings(tmp_path)
+    first = StartupCoordinator(settings).prepare()
+    second = StartupCoordinator(settings).prepare()
+
+    assert first.ready
+    assert second.ready
+    assert second.database is not None
+    assert second.database.state is DatabaseState.KNOWN_V2_CURRENT
+
+
 def test_phase18_upgrade_creates_pre_upgrade_evidence(tmp_path):
     settings, resource_root = _packaged_settings(tmp_path)
     settings.paths.ensure_user_dirs()
