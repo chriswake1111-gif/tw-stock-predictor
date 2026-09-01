@@ -255,7 +255,8 @@ try {
     $stop = New-ProductProcess -FilePath $launcher -Arguments "--stop"
     $stopResult = Wait-ProductExit -Process $stop
     $stopPayload = $stopResult.stdout | ConvertFrom-Json
-    Assert-True ($stopResult.exit_code -eq 0) "stop command failed: $($stopResult.stderr)"
+    Assert-True ($stopResult.exit_code -eq 0) `
+        "stop command failed: status=$($stopPayload.status),reason=$($stopPayload.reason)"
     Assert-True ($stopPayload.status -eq "stopped") "stop command did not report stopped"
     Assert-True $first.WaitForExit(15000) "graceful stop did not release the launcher"
     Assert-ProcessGone -ProcessId $serverPid
