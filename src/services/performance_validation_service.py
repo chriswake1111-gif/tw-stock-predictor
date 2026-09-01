@@ -29,9 +29,9 @@ PROFILE_ACKNOWLEDGEMENT = "phase8_mvp_v1"
 
 
 class PerformanceValidationService:
-    def __init__(self, db_path: str):
-        self.repository = PerformanceValidationRepository(db_path)
-        self.snapshot_repository = AnalysisSnapshotRepository(db_path)
+    def __init__(self, db_path: str, *, auto_migrate: bool = True):
+        self.repository = PerformanceValidationRepository(db_path, auto_migrate=auto_migrate)
+        self.snapshot_repository = AnalysisSnapshotRepository(db_path, auto_migrate=auto_migrate)
         self.evaluator = HistoricalScenarioEvaluator()
         self.outcome_adapter = FixedPhase2OutcomeAdapter()
 

@@ -63,6 +63,7 @@ from src.services.snapshot_comparison_service import (
     SnapshotComparisonService,
     SnapshotNotFoundError,
 )
+from src.runtime.settings import packaged_auto_migrate
 from src.repositories.analysis_snapshot_repository import SnapshotIntegrityError
 
 
@@ -251,13 +252,18 @@ class EvaluationRunRequest(StrictRequest):
     evaluation_profile_acknowledgement: str
 
 
-def _service(*, auto_migrate: bool = True) -> ForwardEPSService:
+def _request_auto_migrate(value: bool | None) -> bool:
+    return packaged_auto_migrate() if value is None else value
+
+
+def _service(*, auto_migrate: bool | None = None) -> ForwardEPSService:
     return ForwardEPSService(
-        os.getenv("DATABASE_PATH", "data/cache.db"), auto_migrate=auto_migrate
+        os.getenv("DATABASE_PATH", "data/cache.db"),
+        auto_migrate=_request_auto_migrate(auto_migrate),
     )
 
 
-def _liquidity_service(*, auto_migrate: bool = True) -> MarketLiquidityService:
+def _liquidity_service(*, auto_migrate: bool | None = None) -> MarketLiquidityService:
     config_path = os.getenv("CONFIG_PATH", "config/config.yaml")
     try:
         with open(config_path, encoding="utf-8") as config_file:
@@ -266,44 +272,57 @@ def _liquidity_service(*, auto_migrate: bool = True) -> MarketLiquidityService:
         config = {}
     return MarketLiquidityService(
         os.getenv("DATABASE_PATH", "data/cache.db"), config=config,
-        auto_migrate=auto_migrate,
+        auto_migrate=_request_auto_migrate(auto_migrate),
     )
 
 
-def _technical_service(*, auto_migrate: bool = True) -> TechnicalScenarioService:
+def _technical_service(*, auto_migrate: bool | None = None) -> TechnicalScenarioService:
     return TechnicalScenarioService(
-        os.getenv("DATABASE_PATH", "data/cache.db"), auto_migrate=auto_migrate
+        os.getenv("DATABASE_PATH", "data/cache.db"),
+        auto_migrate=_request_auto_migrate(auto_migrate),
     )
 
 
-def _deployment_service(*, auto_migrate: bool = True) -> DeploymentPlanService:
+def _deployment_service(*, auto_migrate: bool | None = None) -> DeploymentPlanService:
     return DeploymentPlanService(
-        os.getenv("DATABASE_PATH", "data/cache.db"), auto_migrate=auto_migrate
+        os.getenv("DATABASE_PATH", "data/cache.db"),
+        auto_migrate=_request_auto_migrate(auto_migrate),
     )
 
 
-def _screening_service(*, auto_migrate: bool = True) -> SecurityScreeningService:
+def _screening_service(*, auto_migrate: bool | None = None) -> SecurityScreeningService:
     return SecurityScreeningService(
-        os.getenv("DATABASE_PATH", "data/cache.db"), auto_migrate=auto_migrate
+        os.getenv("DATABASE_PATH", "data/cache.db"),
+        auto_migrate=_request_auto_migrate(auto_migrate),
     )
 
 
-def _evidence_analysis_service(*, auto_migrate: bool = True) -> EvidenceAnalysisService:
+def _evidence_analysis_service(*, auto_migrate: bool | None = None) -> EvidenceAnalysisService:
     return EvidenceAnalysisService(
-        os.getenv("DATABASE_PATH", "data/cache.db"), auto_migrate=auto_migrate
+        os.getenv("DATABASE_PATH", "data/cache.db"),
+        auto_migrate=_request_auto_migrate(auto_migrate),
     )
 
 
-def _performance_validation_service() -> PerformanceValidationService:
-    return PerformanceValidationService(os.getenv("DATABASE_PATH", "data/cache.db"))
+def _performance_validation_service(*, auto_migrate: bool | None = None) -> PerformanceValidationService:
+    return PerformanceValidationService(
+        os.getenv("DATABASE_PATH", "data/cache.db"),
+        auto_migrate=_request_auto_migrate(auto_migrate),
+    )
 
 
-def _data_freshness_service() -> DataFreshnessService:
-    return DataFreshnessService(os.getenv("DATABASE_PATH", "data/cache.db"))
+def _data_freshness_service(*, auto_migrate: bool | None = None) -> DataFreshnessService:
+    return DataFreshnessService(
+        os.getenv("DATABASE_PATH", "data/cache.db"),
+        auto_migrate=_request_auto_migrate(auto_migrate),
+    )
 
 
-def _snapshot_comparison_service() -> SnapshotComparisonService:
-    return SnapshotComparisonService(os.getenv("DATABASE_PATH", "data/cache.db"))
+def _snapshot_comparison_service(*, auto_migrate: bool | None = None) -> SnapshotComparisonService:
+    return SnapshotComparisonService(
+        os.getenv("DATABASE_PATH", "data/cache.db"),
+        auto_migrate=_request_auto_migrate(auto_migrate),
+    )
 
 
 def _require_write_access(api_key: str | None) -> str:
@@ -1006,7 +1025,7 @@ def get_v2_analysis(
         market=market,
         logical_synthesis_profile_id=logical_synthesis_profile_id,
         synthesis_profile_revision_id=synthesis_profile_revision_id,
-        auto_migrate=True,
+        auto_migrate=packaged_auto_migrate(),
     )
 
 

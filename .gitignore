@@ -12,6 +12,12 @@
 /frontend/playwright-report/
 /frontend/.vite/
 
+# Rebuildable Windows Productization outputs; never commit installers or
+# extracted package payloads.
+/dist/windows-productization/
+/packaging/windows/build/
+/packaging/windows/output/
+
 # 可由固定 snapshot 與 CLI 重建的大型研究產物
 reports/backtest/**/report.json
 reports/backtest/**/trades.csv

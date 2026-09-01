@@ -17,6 +17,7 @@ from src.repositories.research_workflow_repository import (
     ResearchWorkflowRepository,
 )
 from src.services.research_review_service import ResearchReviewService
+from src.runtime.settings import packaged_auto_migrate
 
 
 router = APIRouter(prefix="/api/v2/research", tags=["research-review-queue"])
@@ -40,11 +41,17 @@ class EmptyResearchRequest(StrictResearchRequest):
 
 
 def _service() -> ResearchReviewService:
-    return ResearchReviewService(os.getenv("DATABASE_PATH", "data/cache.db"))
+    return ResearchReviewService(
+        os.getenv("DATABASE_PATH", "data/cache.db"),
+        auto_migrate=packaged_auto_migrate(),
+    )
 
 
 def _repository() -> ResearchWorkflowRepository:
-    return ResearchWorkflowRepository(os.getenv("DATABASE_PATH", "data/cache.db"))
+    return ResearchWorkflowRepository(
+        os.getenv("DATABASE_PATH", "data/cache.db"),
+        auto_migrate=packaged_auto_migrate(),
+    )
 
 
 def _cutoff(value: str | None) -> str:

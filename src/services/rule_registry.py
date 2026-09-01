@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Any
 
@@ -11,8 +12,8 @@ DEFAULT_REGISTRY_PATH = Path("config/model_rules.yaml")
 
 
 class RuleRegistry:
-    def __init__(self, path: str | Path = DEFAULT_REGISTRY_PATH):
-        self.path = Path(path)
+    def __init__(self, path: str | Path | None = None):
+        self.path = Path(path or os.getenv("MODEL_RULES_PATH", str(DEFAULT_REGISTRY_PATH)))
         raw = yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
         raw_rules = raw.get("rules")
         if not isinstance(raw_rules, dict) or not raw_rules:

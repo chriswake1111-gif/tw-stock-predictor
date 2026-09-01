@@ -23,3 +23,35 @@ python tools/evidence_db_recovery.py restore backups/evidence.db restored/cache.
 ```
 
 備份與還原目的地必須是新的明確路徑；工具不會覆寫既有檔案。
+
+## Phase 18 Windows 內部封裝
+
+Phase 18 的 Windows 產品化只提供本機研究與虛擬模擬能力。Launcher 綁定
+`127.0.0.1` loopback、動態埠與每位使用者的單一 instance；不包含券商連線、
+真實委託、自動交易、雲端同步或遙測。SQLite、設定副本、備份、復原 staging、
+診斷 log 均位於 `%LOCALAPPDATA%\tw-stock-predictor`，不寫入安裝目錄。
+
+建置需要 Python 相容環境、Node.js、PyInstaller 與 Inno Setup 6：
+
+```text
+python -m pip install -c constraints.txt -r requirements-dev.txt
+python -m pip install -r packaging/windows/requirements-build.txt
+python -B tools/build_windows_package.py
+python -B tools/validate_windows_package.py dist/windows-productization --distribution-manifest dist/windows-productization/distribution-manifest.json
+```
+
+若只需產生 PyInstaller payload 而不產生 installer，可使用
+`--skip-installer`。封裝前會先建立 immutable resource payload 與內部
+`package-manifest.json`；最終 installer 完成後才建立包含 installer SHA-256 的
+`distribution-manifest.json`。驗證器是離線唯讀 gate，不會啟動服務或連線外部來源。
+
+第一次啟動會先檢查 resource manifest，再判定 canonical database 為
+`fresh`、`known_v2_upgradeable`、`legacy` 或 `corrupt_unknown`：
+
+- `fresh` 只在 loopback server bind 前套用既有 Phase 1–14 migrations。
+- `known_v2_upgradeable` 會先建立帶 migration／provenance metadata 的備份，再升級。
+- `legacy` 會保留原始 database 與 SHA-256，再以獨立 staging 建立 V2 canonical。
+- `corrupt_unknown` 或任何 manifest、hash、啟動 handshake 失敗都會 fail closed。
+
+使用 `tw-stock-predictor.exe --stop` 只會停止通過 local descriptor、build identity、
+parent process 與 loopback origin 驗證的本機 server；不會對任意 PID 或遠端 URL 發送控制。

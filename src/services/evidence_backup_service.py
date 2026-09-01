@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
+import os
+import json
+import hashlib
+from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +48,100 @@ class EvidenceBackupService:
         return Path(path).resolve()
 
     @classmethod
-    def backup(cls, source_db: str, backup_db: str) -> dict[str, Any]:
+    def _metadata_path(cls, db_path: str | Path) -> Path:
+        return Path(f"{cls._resolved(str(db_path))}.meta.json")
+
+    @classmethod
+    def _write_metadata(cls, db_path: str | Path, metadata: dict[str, Any]) -> None:
+        destination = cls._metadata_path(db_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
+        temporary.write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, destination)
+
+    @classmethod
+    def _read_metadata(cls, db_path: str | Path) -> dict[str, Any] | None:
+        path = cls._metadata_path(db_path)
+        if not path.is_file():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError("backup metadata is invalid") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError("backup metadata is invalid")
+        return payload
+
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @classmethod
+    def _migration_metadata(cls, conn: sqlite3.Connection) -> dict[str, Any]:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        result: dict[str, Any] = {"migration_ids": [], "migration_checksums": {}}
+        for table in ("schema_migrations", "additive_schema_migrations"):
+            if table not in tables:
+                continue
+            rows = conn.execute(
+                f"SELECT version_id, checksum_sha256 FROM {table} ORDER BY version_id"
+            ).fetchall()
+            for version_id, checksum in rows:
+                result["migration_ids"].append(str(version_id))
+                result["migration_checksums"][str(version_id)] = str(checksum)
+        return result
+
+    @classmethod
+    def _metadata(
+        cls,
+        db_path: Path,
+        *,
+        source_sha256: str,
+        reason: str,
+        validation: dict[str, Any],
+    ) -> dict[str, Any]:
+        with closing(sqlite3.connect(db_path)) as conn:
+            migrations = cls._migration_metadata(conn)
+        return {
+            "metadata_version": "tw_stock_backup_metadata_v1",
+            "source_sha256": source_sha256,
+            "backup_sha256": cls._sha256(db_path),
+            "app_version": os.getenv("TW_STOCK_APP_VERSION", "unknown"),
+            "build_sha": os.getenv("TW_STOCK_BUILD_SHA", "unknown"),
+            "schema_state": "known_v2" if migrations["migration_ids"] else "legacy_or_unknown",
+            "applied_migration_ids": migrations["migration_ids"],
+            "migration_checksums": migrations["migration_checksums"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "reason": reason,
+            "validation_status": validation.get("status"),
+            "foundation_counts": {
+                "operational_provenance": validation.get("operational_provenance_counts", {}),
+                "universe": validation.get("universe_foundation_counts", {}),
+                "eod": validation.get("eod_foundation_counts", {}),
+                "workflow": validation.get("research_workflow_counts", {}),
+            },
+        }
+
+    @classmethod
+    def backup(
+        cls,
+        source_db: str,
+        backup_db: str,
+        *,
+        reason: str = "manual",
+    ) -> dict[str, Any]:
         source = cls._resolved(source_db)
         destination = cls._resolved(backup_db)
         if source == destination:
@@ -53,12 +151,27 @@ class EvidenceBackupService:
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
             raise ValueError("backup destination already exists")
-        with sqlite3.connect(source) as source_conn, sqlite3.connect(destination) as dest_conn:
+        with closing(sqlite3.connect(source)) as source_conn, closing(sqlite3.connect(destination)) as dest_conn:
             source_conn.backup(dest_conn)
-        return cls.validate(str(destination))
+        validation = cls.validate(str(destination))
+        metadata = cls._metadata(
+            destination,
+            source_sha256=cls._sha256(source),
+            reason=reason,
+            validation=validation,
+        )
+        cls._write_metadata(destination, metadata)
+        validation["backup_metadata"] = metadata
+        return validation
 
     @classmethod
-    def restore(cls, backup_db: str, restored_db: str) -> dict[str, Any]:
+    def restore(
+        cls,
+        backup_db: str,
+        restored_db: str,
+        *,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
         backup = cls._resolved(backup_db)
         destination = cls._resolved(restored_db)
         if not backup.is_file():
@@ -68,14 +181,32 @@ class EvidenceBackupService:
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
             raise ValueError("restore destination already exists")
-        with sqlite3.connect(backup) as source_conn, sqlite3.connect(destination) as dest_conn:
+        with closing(sqlite3.connect(backup)) as source_conn, closing(sqlite3.connect(destination)) as dest_conn:
             source_conn.backup(dest_conn)
-        return cls.validate(str(destination))
+        validation = cls.validate(str(destination))
+        source_metadata = cls._read_metadata(backup)
+        if source_metadata is not None:
+            metadata = dict(source_metadata)
+            metadata["backup_sha256"] = cls._sha256(destination)
+            if reason is not None:
+                metadata["reason"] = reason
+        else:
+            metadata = cls._metadata(
+                destination,
+                source_sha256=cls._sha256(backup),
+                reason=reason or "recovery",
+                validation=validation,
+            )
+        cls._write_metadata(destination, metadata)
+        validation["backup_metadata"] = metadata
+        return validation
 
     @classmethod
     def validate(cls, db_path: str) -> dict[str, Any]:
         path = cls._resolved(db_path)
-        with sqlite3.connect(path) as conn:
+        if not path.is_file():
+            raise ValueError("database does not exist")
+        with closing(sqlite3.connect(path)) as conn:
             integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
             table_names = {
                 row[0]
@@ -180,7 +311,7 @@ class EvidenceBackupService:
                 )
         if integrity != "ok":
             raise RuntimeError(f"SQLite integrity check failed: {integrity}")
-        return {
+        result = {
             "status": "valid",
             "integrity_check": integrity,
             "irreplaceable_counts": counts,
@@ -189,3 +320,9 @@ class EvidenceBackupService:
             "eod_foundation_counts": eod_foundation,
             "research_workflow_counts": workflow,
         }
+        metadata = cls._read_metadata(path)
+        if metadata is not None:
+            if metadata.get("backup_sha256") != cls._sha256(path):
+                raise RuntimeError("backup metadata checksum mismatch")
+            result["backup_metadata"] = metadata
+        return result
