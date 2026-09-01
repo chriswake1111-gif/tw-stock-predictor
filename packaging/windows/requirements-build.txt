@@ -1,0 +1,3 @@
+# Reproducible build-only dependency. Runtime requirements remain in the root
+# requirements files and are not changed by the Windows packaging phase.
+pyinstaller==6.14.2

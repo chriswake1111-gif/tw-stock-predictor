@@ -54,3 +54,8 @@ jobs:
           echo "Tracked runtime cache files are not allowed."
           exit 1
         fi
+
+    - name: Validate Windows packaging source contracts
+      shell: bash
+      run: |
+        python -B -m py_compile tools/build_windows_package.py tools/validate_windows_package.py packaging/windows/*.py

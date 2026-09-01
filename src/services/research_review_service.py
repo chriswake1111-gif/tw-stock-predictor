@@ -39,11 +39,11 @@ def _received_timestamp(value: datetime | str) -> str:
 
 
 class ResearchReviewService:
-    def __init__(self, db_path: str = "data/cache.db"):
+    def __init__(self, db_path: str = "data/cache.db", *, auto_migrate: bool = True):
         self.db_path = db_path
-        self.workflow = ResearchWorkflowRepository(db_path)
-        self.snapshots = AnalysisSnapshotRepository(db_path)
-        self.comparison = SnapshotComparisonService(db_path)
+        self.workflow = ResearchWorkflowRepository(db_path, auto_migrate=auto_migrate)
+        self.snapshots = AnalysisSnapshotRepository(db_path, auto_migrate=auto_migrate)
+        self.comparison = SnapshotComparisonService(db_path, auto_migrate=auto_migrate)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)

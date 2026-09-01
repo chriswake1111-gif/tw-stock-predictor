@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,61 @@ ADDITIONAL_MIGRATION_FILES = tuple(
     Path(__file__).resolve().parents[2] / "migrations" / f"{migration_id}.sql"
     for migration_id in ADDITIONAL_MIGRATION_IDS
 )
+
+
+@contextmanager
+def _closed_sqlite_connection(db_path: str) -> Any:
+    """Keep sqlite's transaction context semantics and close its handle."""
+
+    connection = sqlite3.connect(db_path)
+    try:
+        try:
+            yield connection
+        except BaseException as exc:
+            connection.__exit__(type(exc), exc, exc.__traceback__)
+            raise
+        else:
+            connection.__exit__(None, None, None)
+    finally:
+        connection.close()
+
+
+def migration_manifest(resource_root: str | Path | None = None) -> list[dict[str, str]]:
+    """Return the immutable migration resource/checksum manifest.
+
+    The migration IDs and SQL remain the Phase 1-14 contract.  ``resource_root``
+    only changes where packaged resources are read from; it never changes the
+    ordered IDs or their SQL content.
+    """
+
+    root = Path(resource_root).resolve(strict=False) if resource_root else Path(__file__).resolve().parents[2]
+    records: list[dict[str, str]] = []
+    if resource_root is None:
+        # Preserve the existing test/tooling seam where callers temporarily
+        # replace MIGRATION_IDS/MIGRATION_FILES to model a historical head or
+        # a broken migration.  Packaged callers pass an explicit resource root
+        # and therefore never read source-tree paths.
+        baseline = tuple(zip(MIGRATION_IDS, MIGRATION_FILES))
+        additive = tuple(zip(ADDITIONAL_MIGRATION_IDS, ADDITIONAL_MIGRATION_FILES))
+    else:
+        baseline = tuple(
+            (migration_id, root / "migrations" / f"{migration_id}.sql")
+            for migration_id in MIGRATION_IDS
+        )
+        additive = tuple(
+            (migration_id, root / "migrations" / f"{migration_id}.sql")
+            for migration_id in ADDITIONAL_MIGRATION_IDS
+        )
+    for migration_id, path_value in (*baseline, *additive):
+        path = Path(path_value)
+        sql = path.read_text(encoding="utf-8")
+        records.append({
+            "version_id": migration_id,
+            "path": path.as_posix(),
+            "checksum_sha256": hashlib.sha256(sql.encode("utf-8")).hexdigest(),
+            "sql": sql,
+        })
+    return records
 
 
 # Phase 13 registry rows are part of the migration contract.  SQLite's
@@ -335,20 +391,27 @@ def _statements(sql: str) -> list[str]:
     return statements
 
 
-def apply_valuation_migration(db_path: str) -> dict[str, Any]:
+def apply_valuation_migration(
+    db_path: str,
+    *,
+    resource_root: str | Path | None = None,
+) -> dict[str, Any]:
     database_path = Path(db_path)
     if db_path != ":memory:":
         database_path.resolve().parent.mkdir(parents=True, exist_ok=True)
-    migrations = []
-    for migration_id, migration_file in zip(MIGRATION_IDS, MIGRATION_FILES):
-        sql = migration_file.read_text(encoding="utf-8")
-        migrations.append((
-            migration_id,
-            sql,
-            hashlib.sha256(sql.encode("utf-8")).hexdigest(),
-        ))
+    migration_records = migration_manifest(resource_root)
+    migrations = [
+        (record["version_id"], record["sql"], record["checksum_sha256"])
+        for record in migration_records
+        if record["version_id"] in MIGRATION_IDS
+    ]
+    additional_migrations = [
+        (record["version_id"], record["sql"], record["checksum_sha256"])
+        for record in migration_records
+        if record["version_id"] in ADDITIONAL_MIGRATION_IDS
+    ]
     applied_ids: list[str] = []
-    with sqlite3.connect(db_path) as conn:
+    with _closed_sqlite_connection(db_path) as conn:
         conn.row_factory = sqlite3.Row
         # Rebuild migrations run with FK enforcement paused, then fail closed on
         # explicit checks of the rebuilt table and its dependants before commit.
@@ -408,9 +471,7 @@ def apply_valuation_migration(db_path: str) -> dict[str, Any]:
                         applied_at TEXT NOT NULL
                     )"""
                 )
-                for migration_id, migration_file in zip(ADDITIONAL_MIGRATION_IDS, ADDITIONAL_MIGRATION_FILES):
-                    sql = migration_file.read_text(encoding="utf-8")
-                    checksum = hashlib.sha256(sql.encode("utf-8")).hexdigest()
+                for migration_id, sql, checksum in additional_migrations:
                     existing = conn.execute(
                         "SELECT checksum_sha256 FROM additive_schema_migrations WHERE version_id = ?",
                         (migration_id,),
