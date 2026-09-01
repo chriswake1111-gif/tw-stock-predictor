@@ -361,6 +361,8 @@ def test_phase18_win32_interop_declares_pointer_sized_handle_signatures():
     assert win32._kernel32.OpenProcess.restype is wintypes.HANDLE
     assert win32._kernel32.CloseHandle.argtypes == [wintypes.HANDLE]
     assert ctypes.sizeof(wintypes.HANDLE) == ctypes.sizeof(ctypes.c_void_p)
+    assert len(win32._IoCounters._fields_) == 6
+    assert ctypes.sizeof(win32._IoCounters) == 6 * ctypes.sizeof(ctypes.c_ulonglong)
 
 
 def test_phase18_frozen_entrypoints_force_packaged_mode(monkeypatch):

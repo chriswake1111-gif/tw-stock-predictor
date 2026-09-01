@@ -51,7 +51,6 @@ if os.name == "nt":
             ("ReadTransferCount", ctypes.c_ulonglong),
             ("WriteTransferCount", ctypes.c_ulonglong),
             ("OtherTransferCount", ctypes.c_ulonglong),
-            ("Reserved", ctypes.c_ulonglong * 2),
         ]
 
     class _JobObjectBasicLimitInformation(ctypes.Structure):
