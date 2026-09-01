@@ -84,6 +84,7 @@ def _pyinstaller(output_root: Path, resource_root: Path) -> Path:
     executable_root = output_root / "executables"
     executable_root.mkdir(parents=True, exist_ok=True)
     base_env = os.environ.copy()
+    base_env["TW_STOCK_SOURCE_ROOT"] = str(ROOT)
     base_env["TW_STOCK_PACKAGE_RESOURCE_ROOT"] = str(resource_root)
     for name in ("server", "launcher"):
         spec = WINDOWS_DIR / f"tw_stock_predictor_{name}.spec"

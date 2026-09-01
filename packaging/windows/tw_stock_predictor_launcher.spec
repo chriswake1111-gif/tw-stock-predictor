@@ -6,7 +6,7 @@ import os
 from PyInstaller.utils.hooks import collect_submodules
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(os.environ.get("TW_STOCK_SOURCE_ROOT", str(Path.cwd()))).resolve()
 RESOURCE_ROOT = Path(
     os.environ.get("TW_STOCK_PACKAGE_RESOURCE_ROOT", str(ROOT))
 ).resolve()
