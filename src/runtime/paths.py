@@ -72,6 +72,21 @@ def _local_app_data(environ: Mapping[str, str]) -> Path:
     return (Path.home() / "AppData" / "Local").resolve(strict=False)
 
 
+def _packaged_resource_default(executable_root: Path) -> Path:
+    """Locate resources in both supported PyInstaller onedir layouts."""
+
+    bundle_root = Path(getattr(sys, "_MEIPASS", executable_root)).resolve(strict=False)
+    candidates = (bundle_root, bundle_root / "_internal")
+    for candidate in candidates:
+        if (
+            (candidate / "package-manifest.json").is_file()
+            and (candidate / "config").is_dir()
+            and (candidate / "migrations").is_dir()
+        ):
+            return candidate
+    return bundle_root
+
+
 @dataclass(frozen=True)
 class RuntimePaths:
     install_root: Path
@@ -104,7 +119,7 @@ class RuntimePaths:
 
         if packaged:
             executable_root = Path(getattr(sys, "executable", default_project)).resolve(strict=False).parent
-            resource_default = Path(getattr(sys, "_MEIPASS", executable_root))
+            resource_default = _packaged_resource_default(executable_root)
             install_root = _absolute(
                 env.get("TW_STOCK_INSTALL_ROOT", str(executable_root)),
                 base=default_project,

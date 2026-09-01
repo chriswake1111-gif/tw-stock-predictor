@@ -7,6 +7,7 @@ import importlib.util
 import os
 import shutil
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -77,6 +78,26 @@ def test_phase18_manifest_is_relative_and_rejects_path_escape(tmp_path):
     with pytest.raises(ManifestError, match="path is invalid|escapes root"):
         validate_internal_manifest(tampered, resource_root, manifest_path=manifest_path)
     assert settings.build_sha == "phase18-test-build"
+
+
+def test_phase18_packaged_default_finds_pyinstaller_internal_resources(tmp_path, monkeypatch):
+    bundle_root = tmp_path / "bundle"
+    resource_root = bundle_root / "_internal"
+    (resource_root / "config").mkdir(parents=True)
+    (resource_root / "migrations").mkdir()
+    (resource_root / "package-manifest.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundle_root), raising=False)
+
+    paths = RuntimePaths.from_environment(
+        {
+            "TW_STOCK_PACKAGED": "true",
+            "TW_STOCK_INSTALL_ROOT": str(tmp_path / "install"),
+            "TW_STOCK_USER_ROOT": str(tmp_path / "user"),
+        },
+        project_root=REPO_ROOT,
+    )
+
+    assert paths.resource_root == resource_root.resolve()
 
 
 def test_phase18_database_states_are_read_only_and_explicit(tmp_path):
