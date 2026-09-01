@@ -181,7 +181,7 @@ function Stop-Scenario {
     )
 
     $stopProcess = New-ProductProcess -FilePath $launcher -Arguments "--stop" -ScenarioRoot $ScenarioRoot
-    $stopResult = Wait-ProductExit -Process $stopProcess
+    $stopResult = Wait-ProductExit -Process $stopProcess -Scenario "scenario stop"
     $stopPayload = $stopResult.stdout | ConvertFrom-Json
     Assert-True ($stopResult.exit_code -eq 0) "scenario stop failed: status=$($stopPayload.status),reason=$($stopPayload.reason)"
     Assert-True ($stopPayload.status -eq "stopped") "scenario stop did not report stopped"
@@ -191,10 +191,12 @@ function Stop-Scenario {
 function Wait-ProductExit {
     param(
         [System.Diagnostics.Process]$Process,
+        [string]$Scenario,
         [int]$TimeoutMilliseconds = 30000
     )
 
-    Assert-True $Process.WaitForExit($TimeoutMilliseconds) "product process did not exit: $($Process.Id)"
+    Assert-True $Process.WaitForExit($TimeoutMilliseconds) `
+        "$Scenario product process did not exit: $($Process.Id)"
     return [ordered]@{
         exit_code = $Process.ExitCode
         stdout = $Process.StandardOutput.ReadToEnd()
@@ -266,8 +268,11 @@ $upgradeProcess = $null
 $legacyProcess = $null
 $corruptProcess = $null
 $recoveryProcess = $null
+$rejectedRecoveryProcess = $null
+$writerRejectedProcess = $null
 $logProcess = $null
 try {
+    Write-Host "Smoke scenario: fresh installed startup"
     $first = New-ProductProcess -FilePath $launcher
     Wait-ForPath -Path $runtimeDescriptor -Process $first -DiagnosticRoot $user
     $descriptor = Get-Content -LiteralPath $runtimeDescriptor -Raw | ConvertFrom-Json
@@ -283,13 +288,15 @@ try {
     Assert-True ($daily.StatusCode -eq 200) "research/daily did not return HTTP 200"
 
     $second = New-ProductProcess -FilePath $launcher
-    $secondResult = Wait-ProductExit -Process $second
+    Write-Host "Smoke scenario: single-instance rejection"
+    $secondResult = Wait-ProductExit -Process $second -Scenario "single-instance rejection"
     $secondPayload = $secondResult.stdout | ConvertFrom-Json
     Assert-True ($secondResult.exit_code -eq 0) "second launch failed: $($secondResult.stderr)"
     Assert-True ($secondPayload.status -eq "existing_instance") "single-instance guard did not reject second launch"
 
     $stop = New-ProductProcess -FilePath $launcher -Arguments "--stop"
-    $stopResult = Wait-ProductExit -Process $stop
+    Write-Host "Smoke scenario: graceful stop"
+    $stopResult = Wait-ProductExit -Process $stop -Scenario "graceful stop"
     $stopPayload = $stopResult.stdout | ConvertFrom-Json
     Assert-True ($stopResult.exit_code -eq 0) `
         "stop command failed: status=$($stopPayload.status),reason=$($stopPayload.reason)"
@@ -345,7 +352,8 @@ try {
     [IO.File]::WriteAllBytes($corruptDb, [Text.Encoding]::UTF8.GetBytes("not a sqlite database"))
     $corruptHash = (Get-FileHash -LiteralPath $corruptDb -Algorithm SHA256).Hash
     $corruptProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $corruptRoot
-    $corruptResult = Wait-ProductExit -Process $corruptProcess
+    Write-Host "Smoke scenario: corrupt database fail-closed"
+    $corruptResult = Wait-ProductExit -Process $corruptProcess -Scenario "corrupt database"
     $corruptPayload = $corruptResult.stdout | ConvertFrom-Json
     Assert-True ($corruptResult.exit_code -eq 2) "corrupt installed startup did not fail"
     Assert-True ($corruptPayload.status -eq "failed" -and $corruptPayload.reason -eq "database_corrupt_unknown") `
@@ -365,7 +373,8 @@ try {
     Invoke-Fixture -FixtureArguments @("current", $recoverySource, "--symbol", "2330.TW")
     Invoke-Fixture -FixtureArguments @("backup", $recoverySource, $recoveryBackup)
     $recovery = New-ProductProcess -FilePath $launcher -Arguments "recovery activate `"$recoveryBackup`"" -ScenarioRoot $recoveryRoot
-    $recoveryResult = Wait-ProductExit -Process $recovery
+    Write-Host "Smoke scenario: installed recovery activation"
+    $recoveryResult = Wait-ProductExit -Process $recovery -Scenario "recovery activation"
     $recoveryPayload = $recoveryResult.stdout | ConvertFrom-Json
     Assert-True ($recoveryResult.exit_code -eq 0 -and $recoveryPayload.status -eq "activated") `
         "installed recovery activation failed"
@@ -377,8 +386,9 @@ try {
     Invoke-Fixture -FixtureArguments @("legacy", $invalidSource)
     Invoke-Fixture -FixtureArguments @("backup", $invalidSource, $invalidBackup)
     $beforeRejectedRecovery = (Get-FileHash -LiteralPath $recoveryDb -Algorithm SHA256).Hash
-    $rejected = New-ProductProcess -FilePath $launcher -Arguments "recovery activate `"$invalidBackup`"" -ScenarioRoot $recoveryRoot
-    $rejectedResult = Wait-ProductExit -Process $rejected
+    Write-Host "Smoke scenario: invalid recovery rejection"
+    $rejectedRecoveryProcess = New-ProductProcess -FilePath $launcher -Arguments "recovery activate `"$invalidBackup`"" -ScenarioRoot $recoveryRoot
+    $rejectedResult = Wait-ProductExit -Process $rejectedRecoveryProcess -Scenario "invalid recovery rejection"
     $rejectedPayload = $rejectedResult.stderr | ConvertFrom-Json
     Assert-True ($rejectedResult.exit_code -eq 2 -and $rejectedPayload.code -eq "restore_candidate_not_current") `
         "installed recovery did not reject a legacy candidate deterministically"
@@ -388,8 +398,9 @@ try {
     $recoveryDescriptor = Join-Path $recoveryRoot "runtime\instance.json"
     $recoveryProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $recoveryRoot
     Wait-ForPath -Path $recoveryDescriptor -Process $recoveryProcess -DiagnosticRoot $recoveryRoot
-    $writerRejected = New-ProductProcess -FilePath $launcher -Arguments "recovery activate `"$recoveryBackup`"" -ScenarioRoot $recoveryRoot
-    $writerResult = Wait-ProductExit -Process $writerRejected
+    Write-Host "Smoke scenario: active-writer recovery rejection"
+    $writerRejectedProcess = New-ProductProcess -FilePath $launcher -Arguments "recovery activate `"$recoveryBackup`"" -ScenarioRoot $recoveryRoot
+    $writerResult = Wait-ProductExit -Process $writerRejectedProcess -Scenario "active-writer recovery rejection"
     $writerPayload = $writerResult.stderr | ConvertFrom-Json
     Assert-True ($writerResult.exit_code -eq 2 -and $writerPayload.code -eq "restore_writer_active") `
         "installed recovery did not reject an active writer"
@@ -452,7 +463,7 @@ try {
     $summary | ConvertTo-Json -Depth 4
 }
 finally {
-    foreach ($process in @($first, $second, $stop, $orphan, $upgradeProcess, $legacyProcess, $corruptProcess, $recoveryProcess, $logProcess)) {
+    foreach ($process in @($first, $second, $stop, $orphan, $upgradeProcess, $legacyProcess, $corruptProcess, $recoveryProcess, $rejectedRecoveryProcess, $writerRejectedProcess, $logProcess)) {
         if ($null -ne $process -and -not $process.HasExited) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
         }
