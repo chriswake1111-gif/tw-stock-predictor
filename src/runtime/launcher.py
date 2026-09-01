@@ -264,7 +264,12 @@ class Launcher:
                 self._shutdown_child()
                 self._clear_context()
             except (LaunchError, OSError, ValueError, KeyError) as exc:
-                self._log("launcher_start_failed", str(exc), attempt=attempt + 1)
+                self._log(
+                    "launcher_start_failed",
+                    str(exc),
+                    attempt=attempt + 1,
+                    error_code=getattr(exc, "code", type(exc).__name__),
+                )
                 self._shutdown_child()
                 self._clear_context()
                 if isinstance(exc, LaunchError) and exc.code not in {"port_unavailable", "server_process_missing"}:

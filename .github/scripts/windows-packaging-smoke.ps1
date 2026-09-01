@@ -82,6 +82,7 @@ function Write-StartupDiagnostics {
         $dataPath = Join-Path $Root "data"
         Write-Host "User-root state: runtime=$([bool](Test-Path -LiteralPath $runtimePath)),logs=$([bool](Test-Path -LiteralPath $logsPath)),data=$([bool](Test-Path -LiteralPath $dataPath))"
         $codes = @()
+        $errorCodes = @()
         foreach ($log in (Get-ChildItem -LiteralPath $Root -Recurse -Filter "*.log*" -File -Force)) {
             foreach ($line in (Get-Content -LiteralPath $log.FullName)) {
                 try {
@@ -90,6 +91,13 @@ function Write-StartupDiagnostics {
                     if ($null -ne $property -and $null -ne $property.Value) {
                         $codes += [string]$property.Value
                     }
+                    $context = $record.PSObject.Properties["context"]
+                    if ($null -ne $context -and $null -ne $context.Value) {
+                        $errorCode = $context.Value.PSObject.Properties["error_code"]
+                        if ($null -ne $errorCode -and $null -ne $errorCode.Value) {
+                            $errorCodes += [string]$errorCode.Value
+                        }
+                    }
                 } catch {
                     continue
                 }
@@ -97,6 +105,9 @@ function Write-StartupDiagnostics {
         }
         if ($codes.Count -gt 0) {
             Write-Host "Startup log event codes: $($codes -join ',')"
+        }
+        if ($errorCodes.Count -gt 0) {
+            Write-Host "Startup error codes: $($errorCodes -join ',')"
         }
     }
 }
