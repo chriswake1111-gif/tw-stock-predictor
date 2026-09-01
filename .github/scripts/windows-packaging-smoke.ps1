@@ -28,6 +28,79 @@ function Resolve-FullPath {
     return [System.IO.Path]::GetFullPath($Path)
 }
 
+function Write-StructuredDiagnostic {
+    param(
+        [string]$Label,
+        [string]$Text
+    )
+
+    if (-not $Text) {
+        return
+    }
+    try {
+        $payload = $Text | ConvertFrom-Json
+        $fields = @()
+        foreach ($name in @("status", "code")) {
+            $property = $payload.PSObject.Properties[$name]
+            if ($null -ne $property -and $null -ne $property.Value) {
+                $fields += "$name=$($property.Value)"
+            }
+        }
+        if ($fields.Count -gt 0) {
+            Write-Host "$Label diagnostic: $($fields -join ',')"
+        } else {
+            Write-Host "$Label diagnostic: structured output without status/code"
+        }
+    } catch {
+        Write-Host "$Label diagnostic: non-JSON output (length=$($Text.Length))"
+    }
+}
+
+function Write-StartupDiagnostics {
+    param(
+        [System.Diagnostics.Process]$Process,
+        [string]$Root
+    )
+
+    if ($null -ne $Process) {
+        try {
+            if ($Process.HasExited) {
+                Write-Host "Startup process exit code: $($Process.ExitCode)"
+                Write-StructuredDiagnostic -Label "Startup stdout" -Text $Process.StandardOutput.ReadToEnd()
+                Write-StructuredDiagnostic -Label "Startup stderr" -Text $Process.StandardError.ReadToEnd()
+            } else {
+                Write-Host "Startup process is still running: $($Process.Id)"
+            }
+        } catch {
+            Write-Host "Unable to read startup process diagnostics"
+        }
+    }
+
+    if (Test-Path -LiteralPath $Root) {
+        $runtimePath = Join-Path $Root "runtime"
+        $logsPath = Join-Path $Root "logs"
+        $dataPath = Join-Path $Root "data"
+        Write-Host "User-root state: runtime=$([bool](Test-Path -LiteralPath $runtimePath)),logs=$([bool](Test-Path -LiteralPath $logsPath)),data=$([bool](Test-Path -LiteralPath $dataPath))"
+        $codes = @()
+        foreach ($log in (Get-ChildItem -LiteralPath $Root -Recurse -Filter "*.log*" -File -Force)) {
+            foreach ($line in (Get-Content -LiteralPath $log.FullName)) {
+                try {
+                    $record = $line | ConvertFrom-Json
+                    $property = $record.PSObject.Properties["code"]
+                    if ($null -ne $property -and $null -ne $property.Value) {
+                        $codes += [string]$property.Value
+                    }
+                } catch {
+                    continue
+                }
+            }
+        }
+        if ($codes.Count -gt 0) {
+            Write-Host "Startup log event codes: $($codes -join ',')"
+        }
+    }
+}
+
 function Assert-UnderRunnerTemp {
     param([string]$Path)
 
@@ -41,14 +114,19 @@ function Assert-UnderRunnerTemp {
 function Wait-ForPath {
     param(
         [string]$Path,
-        [int]$TimeoutSeconds = 45
+        [int]$TimeoutSeconds = 45,
+        [System.Diagnostics.Process]$Process,
+        [string]$DiagnosticRoot
     )
 
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     while (-not (Test-Path -LiteralPath $Path) -and [DateTime]::UtcNow -lt $deadline) {
         Start-Sleep -Milliseconds 500
     }
-    Assert-True (Test-Path -LiteralPath $Path) "expected path was not created: $Path"
+    if (-not (Test-Path -LiteralPath $Path)) {
+        Write-StartupDiagnostics -Process $Process -Root $DiagnosticRoot
+        Assert-True $false "expected path was not created: $Path"
+    }
 }
 
 function New-ProductProcess {
@@ -144,7 +222,7 @@ $serverPid = $null
 $orphanServerPid = $null
 try {
     $first = New-ProductProcess -FilePath $launcher
-    Wait-ForPath -Path $runtimeDescriptor
+    Wait-ForPath -Path $runtimeDescriptor -Process $first -DiagnosticRoot $user
     $descriptor = Get-Content -LiteralPath $runtimeDescriptor -Raw | ConvertFrom-Json
     Assert-True ($descriptor.origin -match '^http://127\.0\.0\.1:\d+$') "origin is not loopback: $($descriptor.origin)"
     $serverPid = [int]$descriptor.server_pid
@@ -173,7 +251,7 @@ try {
     Assert-True (-not (Test-Path -LiteralPath $runtimeDescriptor)) "runtime descriptor was not cleared"
 
     $orphan = New-ProductProcess -FilePath $launcher
-    Wait-ForPath -Path $runtimeDescriptor
+    Wait-ForPath -Path $runtimeDescriptor -Process $orphan -DiagnosticRoot $user
     $orphanDescriptor = Get-Content -LiteralPath $runtimeDescriptor -Raw | ConvertFrom-Json
     $orphanServerPid = [int]$orphanDescriptor.server_pid
     $orphanServerProcess = Get-Process -Id $orphanServerPid -ErrorAction Stop
