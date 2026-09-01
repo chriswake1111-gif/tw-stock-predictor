@@ -226,7 +226,11 @@ class StartupCoordinator:
                 return StartupResult("ready", classification)
             if classification.state is DatabaseState.KNOWN_V2_UPGRADEABLE:
                 backup = self._unique_path(self.paths.backup_dir, "pre-upgrade")
-                EvidenceBackupService.backup(str(canonical), str(backup))
+                EvidenceBackupService.backup(
+                    str(canonical),
+                    str(backup),
+                    reason="pre_upgrade",
+                )
                 self._log("database_pre_upgrade_backup", backup=str(backup))
                 self._call_migrator(canonical)
                 classification = self._call_classifier(canonical)

@@ -31,15 +31,16 @@ Uninstallable=yes
 UninstallDisplayName=TW Stock Predictor
 
 [Files]
-Source: "{#TW_STOCK_BUILD_ROOT}\tw-stock-predictor.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#TW_STOCK_BUILD_ROOT}\tw-stock-predictor-server.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#TW_STOCK_BUILD_ROOT}\tw-stock-predictor\*"; DestDir: "{app}\tw-stock-predictor"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#TW_STOCK_BUILD_ROOT}\tw-stock-predictor-server\*"; DestDir: "{app}\tw-stock-predictor-server"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\TW Stock Predictor"; Filename: "{app}\tw-stock-predictor.exe"; WorkingDir: "{app}"
-Name: "{autodesktop}\TW Stock Predictor"; Filename: "{app}\tw-stock-predictor.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autoprograms}\TW Stock Predictor"; Filename: "{app}\tw-stock-predictor\tw-stock-predictor.exe"; WorkingDir: "{app}\tw-stock-predictor"
+Name: "{autoprograms}\Stop TW Stock Predictor"; Filename: "{app}\tw-stock-predictor\tw-stock-predictor.exe"; Parameters: "--stop"; WorkingDir: "{app}\tw-stock-predictor"
+Name: "{autodesktop}\TW Stock Predictor"; Filename: "{app}\tw-stock-predictor\tw-stock-predictor.exe"; WorkingDir: "{app}\tw-stock-predictor"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
 [Run]
-Filename: "{app}\tw-stock-predictor.exe"; Description: "Launch TW Stock Predictor"; Flags: postinstall nowait skipifsilent
+Filename: "{app}\tw-stock-predictor\tw-stock-predictor.exe"; Description: "Launch TW Stock Predictor"; Flags: postinstall nowait skipifsilent

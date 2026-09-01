@@ -1,4 +1,4 @@
-"""Build the internal Windows package and optional Inno Setup installer.
+"""Build the internal Windows onedir package and optional Inno Setup installer.
 
 The script builds from a copied, immutable resource payload.  It never copies
 the repository database, logs, backups, environment files, or research output
@@ -99,8 +99,8 @@ def _pyinstaller(output_root: Path, resource_root: Path) -> Path:
         ]
         _run(command, cwd=ROOT, env=base_env)
     expected = (
-        executable_root / "tw-stock-predictor.exe",
-        executable_root / "tw-stock-predictor-server.exe",
+        executable_root / "tw-stock-predictor" / "tw-stock-predictor.exe",
+        executable_root / "tw-stock-predictor-server" / "tw-stock-predictor-server.exe",
     )
     missing = [str(path) for path in expected if not path.is_file()]
     if missing:
@@ -186,8 +186,8 @@ def main() -> int:
             output_path=output_root / "distribution-manifest.json",
             internal_manifest_path=output_root / "internal-package-manifest.json",
             artifact_paths=(
-                executable_root / "tw-stock-predictor.exe",
-                executable_root / "tw-stock-predictor-server.exe",
+                executable_root / "tw-stock-predictor" / "tw-stock-predictor.exe",
+                executable_root / "tw-stock-predictor-server" / "tw-stock-predictor-server.exe",
             ),
         )
     else:

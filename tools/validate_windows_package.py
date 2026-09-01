@@ -60,6 +60,26 @@ def _manifest_filename(value: object, *, label: str) -> str:
     return filename
 
 
+def _validate_ondir_bundle(executable_root: Path, bundle_name: str, executable_name: str) -> bool:
+    bundle = executable_root / bundle_name
+    if not bundle.is_dir():
+        _fail(f"PyInstaller onedir bundle is missing: {bundle}")
+    executable = bundle / executable_name
+    if not executable.is_file():
+        _fail(f"PyInstaller onedir executable is missing: {executable}")
+    payload_files = [item for item in bundle.rglob("*") if item.is_file()]
+    if len(payload_files) < 2:
+        _fail(f"PyInstaller onedir payload is incomplete: {bundle}")
+    runtime_payload = any(
+        item.name.lower().startswith(("python", "vcruntime", "api-ms-win"))
+        and item.suffix.lower() in {".dll", ".pyd", ".zip"}
+        for item in payload_files
+    ) or (bundle / "_internal").is_dir()
+    if not runtime_payload:
+        _fail(f"PyInstaller onedir runtime payload is missing: {bundle}")
+    return True
+
+
 def _validate_distribution_manifest(manifest_path: Path, package_root: Path) -> dict[str, object]:
     from src.runtime.manifest import EXTERNAL_MANIFEST_VERSION, sha256_file
 
@@ -94,9 +114,22 @@ def validate_package(package_root: str | Path, *, distribution_manifest: str | P
     manifest = load_manifest(manifest_path)
     internal = validate_internal_manifest(manifest, resource_root, manifest_path=manifest_path)
     frontend_assets = _assert_frontend_secret_gate(resource_root)
+    executable_root = root / "executables"
+    if not executable_root.is_dir():
+        _fail("PyInstaller executable root is missing")
+    if any(item.is_file() and item.suffix.lower() == ".exe" for item in executable_root.iterdir()):
+        _fail("top-level executable is not a valid onedir layout")
     executables = {
-        name: (root / "executables" / name).is_file()
-        for name in ("tw-stock-predictor.exe", "tw-stock-predictor-server.exe")
+        "tw-stock-predictor.exe": _validate_ondir_bundle(
+            executable_root,
+            "tw-stock-predictor",
+            "tw-stock-predictor.exe",
+        ),
+        "tw-stock-predictor-server.exe": _validate_ondir_bundle(
+            executable_root,
+            "tw-stock-predictor-server",
+            "tw-stock-predictor-server.exe",
+        ),
     }
     if not all(executables.values()):
         _fail("one or more PyInstaller executables are missing")

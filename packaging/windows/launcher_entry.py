@@ -9,6 +9,7 @@ import sys
 
 from src.runtime.diagnostics import DiagnosticLogger
 from src.runtime.launcher import Launcher, stop_existing
+from src.runtime.paths import RuntimePathError
 from src.runtime.settings import RuntimeConfigurationError, RuntimeSettings
 
 
@@ -42,7 +43,7 @@ def main() -> int:
                 return 0
         print(json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True))
         return 0 if result.status in {"started", "stopped", "not_running", "existing_instance"} else 2
-    except RuntimeConfigurationError as exc:
+    except (RuntimeConfigurationError, RuntimePathError) as exc:
         print(json.dumps({"status": "failed", "code": getattr(exc, "code", "runtime_configuration_invalid")}, sort_keys=True), file=sys.stderr)
         return 2
 

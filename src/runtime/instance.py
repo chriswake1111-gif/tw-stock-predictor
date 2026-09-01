@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ctypes
 import json
 import os
 import secrets
@@ -12,9 +11,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from .control import stop_event_name as build_stop_event_name
+from .win32 import (
+    ERROR_ALREADY_EXISTS,
+    close_handle,
+    create_mutex,
+    last_error,
+    parent_pid as win32_parent_pid,
+    process_exists as win32_process_exists,
+    release_mutex,
+)
+
 
 MUTEX_NAME = r"Local\TWStockPredictor.ProductV1"
-ERROR_ALREADY_EXISTS = 183
 
 
 class InstanceOwnershipError(RuntimeError):
@@ -33,6 +42,10 @@ class LaunchContext:
     app_version: str
     build_sha: str
     context_path: Path
+
+    @property
+    def stop_event_name(self) -> str:
+        return build_stop_event_name(self.launch_id)
 
     @classmethod
     def create(
@@ -64,6 +77,7 @@ class LaunchContext:
             "launcher_pid": self.launcher_pid,
             "app_version": self.app_version,
             "build_sha": self.build_sha,
+            "stop_event_name": self.stop_event_name,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         if include_nonce:
@@ -98,8 +112,10 @@ class InstanceDescriptor:
     origin: str
     started_at: str
     launch_id: str
+    stop_event_name: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        event_name = self.stop_event_name or build_stop_event_name(self.launch_id)
         return {
             "app_version": self.app_version,
             "build_sha": self.build_sha,
@@ -110,6 +126,7 @@ class InstanceDescriptor:
             "origin": self.origin,
             "started_at": self.started_at,
             "launch_id": self.launch_id,
+            "stop_event_name": event_name,
         }
 
 
@@ -153,42 +170,9 @@ def _windows_parent_pid(pid: int) -> int | None:
     if os.name != "nt":
         return None
     try:
-        kernel32 = ctypes.windll.kernel32
-        snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
-        if snapshot in {0, -1}:
-            return None
-
-        class ProcessEntry32W(ctypes.Structure):
-            _fields_ = [
-                ("dwSize", ctypes.c_ulong),
-                ("cntUsage", ctypes.c_ulong),
-                ("th32ProcessID", ctypes.c_ulong),
-                ("th32DefaultHeapID", ctypes.c_size_t),
-                ("th32ModuleID", ctypes.c_ulong),
-                ("cntThreads", ctypes.c_ulong),
-                ("th32ParentProcessID", ctypes.c_ulong),
-                ("pcPriClassBase", ctypes.c_long),
-                ("dwFlags", ctypes.c_ulong),
-                ("szExeFile", ctypes.c_wchar * 260),
-            ]
-
-        entry = ProcessEntry32W()
-        entry.dwSize = ctypes.sizeof(ProcessEntry32W)
-        first = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
-        if not first:
-            kernel32.CloseHandle(snapshot)
-            return None
-        while True:
-            if int(entry.th32ProcessID) == pid:
-                parent = int(entry.th32ParentProcessID)
-                kernel32.CloseHandle(snapshot)
-                return parent
-            if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
-                break
-        kernel32.CloseHandle(snapshot)
+        return win32_parent_pid(pid)
     except Exception:
         return None
-    return None
 
 
 def process_exists(pid: int) -> bool:
@@ -196,11 +180,7 @@ def process_exists(pid: int) -> bool:
         return False
     if os.name == "nt":
         try:
-            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
-            if not handle:
-                return False
-            ctypes.windll.kernel32.CloseHandle(handle)
-            return True
+            return win32_process_exists(pid)
         except Exception:
             return False
     try:
@@ -257,6 +237,12 @@ def validate_launch_context(
         raise LaunchHandshakeError("launch_id_mismatch")
     if not nonce or context.get("nonce") != nonce:
         raise LaunchHandshakeError("launch_nonce_mismatch")
+    try:
+        expected_event_name = build_stop_event_name(str(context["launch_id"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise LaunchHandshakeError("launch_stop_event_identity_invalid") from exc
+    if context.get("stop_event_name") != expected_event_name:
+        raise LaunchHandshakeError("launch_stop_event_mismatch")
     if context.get("build_sha") != expected_build_sha:
         raise LaunchHandshakeError("launch_build_identity_mismatch")
     try:
@@ -277,6 +263,7 @@ def validate_launch_context(
         "launcher_pid": expected_pid,
         "app_version": str(context.get("app_version", "unknown")),
         "build_sha": str(context["build_sha"]),
+        "stop_event_name": expected_event_name,
     }
 
 
@@ -293,14 +280,13 @@ class InstanceGuard:
         if self._handle is not None or self._lock_path is not None:
             return self
         if os.name == "nt":
-            kernel32 = ctypes.windll.kernel32
-            handle = kernel32.CreateMutexW(None, True, self.name)
+            handle = create_mutex(self.name)
             if not handle:
                 raise InstanceOwnershipError("named mutex could not be created")
-            if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
-                kernel32.CloseHandle(handle)
+            if last_error() == ERROR_ALREADY_EXISTS:
+                close_handle(handle)
                 raise InstanceOwnershipError("another instance owns the named mutex")
-            self._handle = int(handle)
+            self._handle = handle
             return self
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         lock_path = self.runtime_dir / "instance.lock"
@@ -316,9 +302,10 @@ class InstanceGuard:
         if self._handle is None:
             return
         if os.name == "nt":
-            kernel32 = ctypes.windll.kernel32
-            kernel32.ReleaseMutex(self._handle)
-            kernel32.CloseHandle(self._handle)
+            try:
+                release_mutex(self._handle)
+            finally:
+                close_handle(self._handle)
         else:
             os.close(self._handle)
             if self._lock_path:

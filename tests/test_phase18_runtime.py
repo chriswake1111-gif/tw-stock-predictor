@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import os
 import shutil
 import sqlite3
 from pathlib import Path
@@ -15,6 +16,7 @@ from src.api.main import create_app
 from src.repositories.migration_runner import apply_valuation_migration, migration_manifest
 from src.repositories.research_workflow_repository import ResearchWorkflowRepository
 from src.runtime.database_state import DatabaseState, classify_database
+from src.runtime.control import LocalStopEvent, stop_event_name
 from src.runtime.diagnostics import DiagnosticLogger
 from src.runtime.instance import LaunchContext, LaunchHandshakeError, validate_launch_context
 from src.runtime.manifest import (
@@ -24,6 +26,7 @@ from src.runtime.manifest import (
     write_manifest,
 )
 from src.runtime.paths import RuntimePaths
+from src.runtime.paths import RuntimePathError
 from src.runtime.restore import restore_backup_and_activate
 from src.runtime.settings import RuntimeSettings, packaged_auto_migrate
 from src.runtime.startup_coordinator import StartupCoordinator
@@ -125,7 +128,7 @@ def test_phase18_upgrade_creates_pre_upgrade_evidence(tmp_path):
     assert result.pre_upgrade_backup is not None
     assert result.pre_upgrade_backup.is_file()
     backup_validation = EvidenceBackupService.validate(str(result.pre_upgrade_backup))
-    assert backup_validation["backup_metadata"]["reason"] == "manual"
+    assert backup_validation["backup_metadata"]["reason"] == "pre_upgrade"
 
 
 def test_phase18_legacy_database_is_preserved_before_v2_activation(tmp_path):
@@ -267,14 +270,73 @@ def test_phase18_package_validator_accepts_clean_resource_payload(tmp_path):
     shutil.copytree(resource_root, package_root / "resource-payload")
     executables = package_root / "executables"
     executables.mkdir()
-    (executables / "tw-stock-predictor.exe").write_bytes(b"launcher")
-    (executables / "tw-stock-predictor-server.exe").write_bytes(b"server")
+    launcher_bundle = executables / "tw-stock-predictor"
+    server_bundle = executables / "tw-stock-predictor-server"
+    launcher_bundle.mkdir()
+    server_bundle.mkdir()
+    (launcher_bundle / "tw-stock-predictor.exe").write_bytes(b"launcher")
+    (launcher_bundle / "_internal").mkdir()
+    (launcher_bundle / "_internal" / "python312.dll").write_bytes(b"runtime")
+    (server_bundle / "tw-stock-predictor-server.exe").write_bytes(b"server")
+    (server_bundle / "_internal").mkdir()
+    (server_bundle / "_internal" / "python312.dll").write_bytes(b"runtime")
     from tools.validate_windows_package import validate_package
 
     result = validate_package(package_root)
     assert result["status"] == "valid"
     assert result["executables"]["tw-stock-predictor.exe"] is True
     assert settings.paths.resource_root == resource_root
+
+
+def test_phase18_installer_exposes_local_stop_shortcut():
+    installer_script = (REPO_ROOT / "packaging" / "windows" / "tw-stock-predictor.iss").read_text(
+        encoding="utf-8"
+    )
+    assert 'Name: "{autoprograms}\\Stop TW Stock Predictor"' in installer_script
+    assert 'Parameters: "--stop"' in installer_script
+
+
+def test_phase18_packaged_mutable_paths_cannot_overlap_install_resources(tmp_path):
+    resource_root = tmp_path / "resource"
+    install_root = tmp_path / "install"
+    user_root = tmp_path / "user"
+    environment = {
+        "TW_STOCK_PACKAGED": "true",
+        "TW_STOCK_RESOURCE_ROOT": str(resource_root),
+        "TW_STOCK_INSTALL_ROOT": str(install_root),
+        "TW_STOCK_USER_ROOT": str(install_root / "mutable"),
+    }
+    with pytest.raises(RuntimePathError, match="overlaps install_root"):
+        RuntimePaths.from_environment(environment, project_root=REPO_ROOT)
+
+    safe_environment = dict(environment, TW_STOCK_USER_ROOT=str(user_root), DATABASE_PATH=str(resource_root / "cache.db"))
+    with pytest.raises(RuntimePathError, match="overlaps resource_root"):
+        RuntimePaths.from_environment(safe_environment, project_root=REPO_ROOT)
+
+
+def test_phase18_local_stop_event_is_graceful_control_plane(tmp_path):
+    name = stop_event_name("phase18-test")
+    event = LocalStopEvent.create(name)
+    try:
+        assert event.wait(0.0) is False
+        event.set()
+        with LocalStopEvent.open(name) as opened:
+            assert opened.wait(0.1) is True
+    finally:
+        event.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires native Win32 APIs")
+def test_phase18_win32_interop_declares_pointer_sized_handle_signatures():
+    import ctypes
+    from ctypes import wintypes
+
+    from src.runtime import win32
+
+    assert win32._kernel32.CreateMutexW.restype is wintypes.HANDLE
+    assert win32._kernel32.OpenProcess.restype is wintypes.HANDLE
+    assert win32._kernel32.CloseHandle.argtypes == [wintypes.HANDLE]
+    assert ctypes.sizeof(wintypes.HANDLE) == ctypes.sizeof(ctypes.c_void_p)
 
 
 def test_phase18_frozen_entrypoints_force_packaged_mode(monkeypatch):

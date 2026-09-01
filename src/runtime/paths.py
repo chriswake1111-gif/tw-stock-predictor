@@ -26,6 +26,45 @@ def _absolute(value: str | Path, *, base: Path) -> Path:
     return path.resolve(strict=False)
 
 
+class RuntimePathError(ValueError):
+    code = "runtime_path_overlap"
+
+
+def _paths_overlap(first: Path, second: Path) -> bool:
+    first_text = os.path.normcase(str(first.resolve(strict=False)))
+    second_text = os.path.normcase(str(second.resolve(strict=False)))
+    try:
+        common = os.path.commonpath((first_text, second_text))
+    except ValueError:
+        return False
+    return common in {first_text, second_text}
+
+
+def _validate_packaged_isolation(paths: "RuntimePaths") -> None:
+    immutable = {
+        "install_root": paths.install_root,
+        "resource_root": paths.resource_root,
+    }
+    mutable = {
+        "user_root": paths.user_root,
+        "data_dir": paths.data_dir,
+        "logs_dir": paths.logs_dir,
+        "backup_dir": paths.backup_dir,
+        "config_dir": paths.config_dir,
+        "runtime_dir": paths.runtime_dir,
+        "database_path": paths.database_path,
+        "eod_db_path": paths.eod_db_path,
+        "universe_db_path": paths.universe_db_path,
+        "config_path": paths.config_path,
+    }
+    for mutable_name, mutable_path in mutable.items():
+        for immutable_name, immutable_path in immutable.items():
+            if _paths_overlap(mutable_path, immutable_path):
+                raise RuntimePathError(
+                    f"packaged mutable path {mutable_name} overlaps {immutable_name}"
+                )
+
+
 def _local_app_data(environ: Mapping[str, str]) -> Path:
     configured = environ.get("LOCALAPPDATA")
     if configured:
@@ -107,7 +146,7 @@ class RuntimePaths:
         frontend_default = resource_root / "frontend" / "dist"
         migrations_default = resource_root / "migrations"
 
-        return cls(
+        result = cls(
             install_root=install_root,
             resource_root=resource_root,
             user_root=user_root,
@@ -130,6 +169,9 @@ class RuntimePaths:
                 env.get("TW_STOCK_MIGRATIONS_ROOT", str(migrations_default)), base=resource_root
             ),
         )
+        if packaged:
+            _validate_packaged_isolation(result)
+        return result
 
     def ensure_user_dirs(self) -> None:
         """Create only mutable per-user directories, never the install root."""
@@ -160,4 +202,4 @@ class RuntimePaths:
         }
 
 
-__all__ = ["RuntimePaths"]
+__all__ = ["RuntimePathError", "RuntimePaths"]

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import os
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from src.api.main import create_app
 
+from .control import LocalStopEvent
 from .database_state import DatabaseState, classify_database
 from .instance import (
     InstanceDescriptor,
@@ -99,14 +101,53 @@ def run_server(settings: RuntimeSettings | None = None) -> int:
 
         if runtime_settings.port is None:
             raise ServerStartupError("server_port_missing")
-        uvicorn.run(
-            app,
-            host=runtime_settings.host,
-            port=runtime_settings.port,
-            reload=False,
-            workers=1,
-            log_config=None,
-        )
+        if runtime_settings.packaged:
+            handshake = getattr(app.state, "launch_handshake", None) or {}
+            event_name = handshake.get("stop_event_name")
+            if not isinstance(event_name, str) or not event_name:
+                raise ServerStartupError("stop_event_name_missing")
+            try:
+                stop_event = LocalStopEvent.open(event_name)
+            except OSError as exc:
+                raise ServerStartupError("stop_event_unavailable", str(exc)) from exc
+            config = uvicorn.Config(
+                app,
+                host=runtime_settings.host,
+                port=runtime_settings.port,
+                reload=False,
+                workers=1,
+                log_config=None,
+            )
+            server = uvicorn.Server(config)
+
+            def watch_stop_event() -> None:
+                if stop_event.wait():
+                    server.should_exit = True
+
+            watcher = threading.Thread(
+                target=watch_stop_event,
+                name="tw-stock-stop-watcher",
+                daemon=True,
+            )
+            watcher.start()
+            try:
+                server.run()
+            finally:
+                # Wake the watcher before closing the native handle.  Closing a
+                # handle while another thread is waiting on it is undefined on
+                # Windows and can leave an unobserved waiter behind.
+                stop_event.set()
+                watcher.join(timeout=1.0)
+                stop_event.close()
+        else:
+            uvicorn.run(
+                app,
+                host=runtime_settings.host,
+                port=runtime_settings.port,
+                reload=False,
+                workers=1,
+                log_config=None,
+            )
         return 0
     except ServerStartupError:
         raise

@@ -31,7 +31,15 @@ Phase 18 的 Windows 產品化只提供本機研究與虛擬模擬能力。Launc
 真實委託、自動交易、雲端同步或遙測。SQLite、設定副本、備份、復原 staging、
 診斷 log 均位於 `%LOCALAPPDATA%\tw-stock-predictor`，不寫入安裝目錄。
 
-建置需要 Python 相容環境、Node.js、PyInstaller 與 Inno Setup 6：
+建置需要 Python 相容環境、Node.js、PyInstaller 與 Inno Setup 6。PyInstaller 產生
+的是兩個完整的 `onedir` bundle，不是單一 exe；安裝程式會遞迴複製整個 bundle：
+
+```text
+dist/windows-productization/executables/tw-stock-predictor/
+  tw-stock-predictor.exe + bundled runtime files
+dist/windows-productization/executables/tw-stock-predictor-server/
+  tw-stock-predictor-server.exe + bundled runtime files
+```
 
 ```text
 python -m pip install -c constraints.txt -r requirements-dev.txt
@@ -40,10 +48,16 @@ python -B tools/build_windows_package.py
 python -B tools/validate_windows_package.py dist/windows-productization --distribution-manifest dist/windows-productization/distribution-manifest.json
 ```
 
-若只需產生 PyInstaller payload 而不產生 installer，可使用
+若只需產生 PyInstaller onedir payload 而不產生 installer，可使用
 `--skip-installer`。封裝前會先建立 immutable resource payload 與內部
 `package-manifest.json`；最終 installer 完成後才建立包含 installer SHA-256 的
 `distribution-manifest.json`。驗證器是離線唯讀 gate，不會啟動服務或連線外部來源。
+
+GitHub Actions 的 `windows-packaging.yml` 會在 Windows runner 上固定 Python、Node.js
+與 Inno Setup 版本，建立並驗證 onedir layout，安裝到乾淨的暫存目錄後執行 loopback
+readiness、`/research/daily`、single-instance、graceful Stop、process-tree cleanup
+與 uninstall user-data preservation smoke。完整 build 與 smoke 摘要寫入 Actions job
+summary；不會上傳使用者資料或 runtime database。
 
 第一次啟動會先檢查 resource manifest，再判定 canonical database 為
 `fresh`、`known_v2_upgradeable`、`legacy` 或 `corrupt_unknown`：

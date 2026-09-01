@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import ctypes
 import os
 import socket
 import subprocess
@@ -18,7 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 from urllib.parse import urlsplit
 
-from .database_state import DatabaseState
+from .control import LocalStopEvent, stop_event_name
 from .diagnostics import DiagnosticLogger
 from .instance import (
     InstanceDescriptor,
@@ -32,6 +31,7 @@ from .instance import (
 )
 from .settings import RuntimeSettings
 from .startup_coordinator import StartupCoordinator
+from .win32 import ProcessTreeOwner, terminate_process
 
 
 PORT_ATTEMPTS = 5
@@ -108,13 +108,22 @@ class Launcher:
         self.guard: InstanceGuard | None = None
         self.process: subprocess.Popen | None = None
         self.context: LaunchContext | None = None
+        self.stop_event: LocalStopEvent | None = None
+        self.process_tree: ProcessTreeOwner | None = None
 
     def _default_server_command(self) -> list[str]:
         if self.settings.packaged and getattr(sys, "frozen", False):
-            server_path = Path(sys.executable).resolve(strict=False).with_name(
-                "tw-stock-predictor-server.exe"
+            launcher_executable = Path(sys.executable).resolve(strict=False)
+            candidates = (
+                launcher_executable.parent.parent
+                / "tw-stock-predictor-server"
+                / "tw-stock-predictor-server.exe",
+                launcher_executable.parent / "tw-stock-predictor-server.exe",
             )
-            return [str(server_path)]
+            for candidate in candidates:
+                if candidate.is_file():
+                    return [str(candidate)]
+            return [str(candidates[0])]
         return [sys.executable, "-m", "src.runtime.server"]
 
     def _log(self, code: str, message: str = "", **context: object) -> None:
@@ -139,6 +148,7 @@ class Launcher:
             "TW_STOCK_LAUNCH_NONCE": context.nonce,
             "TW_STOCK_LAUNCHER_PID": str(context.launcher_pid),
             "TW_STOCK_LAUNCH_CONTEXT_PATH": str(context.context_path),
+            "TW_STOCK_STOP_EVENT_NAME": context.stop_event_name,
             "TW_STOCK_STARTUP_PREPARED": "true",
         })
         return self.process_factory(
@@ -147,6 +157,47 @@ class Launcher:
             env=environment,
             close_fds=True,
         )
+
+    def _clear_context(self) -> None:
+        if self.context:
+            self.context.context_path.unlink(missing_ok=True)
+            self.context = None
+
+    def _close_control(self) -> None:
+        if self.stop_event:
+            self.stop_event.close()
+            self.stop_event = None
+        if self.process_tree:
+            self.process_tree.close()
+            self.process_tree = None
+
+    def _shutdown_child(self, *, timeout_seconds: float = 5.0) -> None:
+        """Request graceful shutdown, then force only after the deadline."""
+
+        process = self.process
+        if process is not None and process.poll() is None:
+            if self.stop_event:
+                try:
+                    self.stop_event.set()
+                except OSError as exc:
+                    self._log("stop_event_signal_failed", str(exc))
+            try:
+                process.wait(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                self._log("graceful_shutdown_timeout")
+                if self.process_tree and self.process_tree.handle is not None:
+                    try:
+                        self.process_tree.terminate()
+                    except OSError as exc:
+                        self._log("job_object_termination_failed", str(exc))
+                if process.poll() is None:
+                    process.kill()
+                try:
+                    process.wait(timeout=timeout_seconds)
+                except subprocess.TimeoutExpired:
+                    self._log("forced_shutdown_timeout")
+        self.process = None
+        self._close_control()
 
     def start(self) -> LaunchResult:
         if not self.settings.packaged:
@@ -174,7 +225,11 @@ class Launcher:
                     build_sha=runtime_settings.build_sha,
                     launcher_pid=os.getpid(),
                 )
+                self.stop_event = LocalStopEvent.create(self.context.stop_event_name)
+                self.process_tree = ProcessTreeOwner.create()
                 self.process = self._spawn(runtime_settings, self.context)
+                if self.process_tree.handle is not None:
+                    self.process_tree.assign(int(self.process.pid))
                 deadline = time.monotonic() + READY_TIMEOUT_SECONDS
                 while time.monotonic() < deadline:
                     if self.process.poll() is not None:
@@ -206,44 +261,21 @@ class Launcher:
                         )
                     time.sleep(0.1)
                 self._log("port_unavailable", attempt=attempt + 1, port=port)
-                if self.process.poll() is None:
-                    self.process.terminate()
-                    self.process.wait(timeout=5)
-                self.process = None
-                if self.context:
-                    self.context.context_path.unlink(missing_ok=True)
-                    self.context = None
+                self._shutdown_child()
+                self._clear_context()
             except (LaunchError, OSError, ValueError, KeyError) as exc:
                 self._log("launcher_start_failed", str(exc), attempt=attempt + 1)
-                if self.process is not None and self.process.poll() is None:
-                    self.process.terminate()
-                    try:
-                        self.process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        self.process.kill()
-                self.process = None
-                if self.context:
-                    self.context.context_path.unlink(missing_ok=True)
-                    self.context = None
+                self._shutdown_child()
+                self._clear_context()
                 if isinstance(exc, LaunchError) and exc.code not in {"port_unavailable", "server_process_missing"}:
                     break
         self.stop()
         return LaunchResult("failed", reason="port_unavailable")
 
     def stop(self) -> LaunchResult:
-        process = self.process
-        if process is not None and process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
-        self.process = None
+        self._shutdown_child()
         clear_descriptor(self.paths.runtime_dir / "instance.json")
-        if self.context:
-            self.context.context_path.unlink(missing_ok=True)
-            self.context = None
+        self._clear_context()
         if self.guard:
             self.guard.release()
             self.guard = None
@@ -300,6 +332,13 @@ def stop_existing(
         return LaunchResult("not_running", reason="server_process_missing")
     if not _is_loopback_origin(descriptor.get("origin")):
         return LaunchResult("failed", reason="descriptor_origin_invalid")
+    try:
+        launch_id = str(descriptor["launch_id"])
+        expected_event_name = stop_event_name(launch_id)
+    except (KeyError, TypeError, ValueError):
+        return LaunchResult("failed", reason="descriptor_stop_event_invalid")
+    if descriptor.get("stop_event_name", expected_event_name) != expected_event_name:
+        return LaunchResult("failed", reason="descriptor_stop_event_mismatch")
     owned, ownership_reason = validate_process_ownership(
         descriptor,
         expected_build_sha=settings.build_sha,
@@ -308,23 +347,34 @@ def stop_existing(
     if not owned:
         return LaunchResult("failed", reason=ownership_reason)
     try:
-        if os.name == "nt":
-            handle = ctypes.windll.kernel32.OpenProcess(0x0001, False, server_pid)
-            if not handle:
-                return LaunchResult("failed", reason="stop_process_open_failed")
-            ctypes.windll.kernel32.TerminateProcess(handle, 0)
-            ctypes.windll.kernel32.CloseHandle(handle)
-        else:
-            os.kill(server_pid, 15)
+        stop_event = LocalStopEvent.open(expected_event_name)
+        stop_event.set()
     except OSError:
-        return LaunchResult("failed", reason="stop_signal_failed")
+        return LaunchResult("failed", reason="stop_event_unavailable")
+    finally:
+        if "stop_event" in locals():
+            stop_event.close()
     deadline = time.monotonic() + timeout_seconds
     while process_exists(server_pid) and time.monotonic() < deadline:
         time.sleep(0.05)
+    forced = False
+    if process_exists(server_pid):
+        forced = True
+        try:
+            if os.name == "nt":
+                if not terminate_process(server_pid, exit_code=1):
+                    return LaunchResult("failed", reason="stop_process_open_failed")
+            else:
+                os.kill(server_pid, 9)
+        except OSError:
+            return LaunchResult("failed", reason="stop_signal_failed")
+        deadline = time.monotonic() + timeout_seconds
+        while process_exists(server_pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
     if process_exists(server_pid):
         return LaunchResult("failed", reason="shutdown_timeout")
     clear_descriptor(descriptor_path)
-    return LaunchResult("stopped", reason="local_stop")
+    return LaunchResult("stopped", reason="local_stop_forced" if forced else "local_stop")
 
 
 __all__ = ["LaunchError", "LaunchResult", "Launcher", "PORT_ATTEMPTS", "stop_existing"]

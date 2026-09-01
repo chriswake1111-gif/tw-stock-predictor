@@ -7,6 +7,7 @@ import os
 import sys
 
 from src.runtime.server import ServerStartupError, run_server
+from src.runtime.paths import RuntimePathError
 from src.runtime.settings import RuntimeConfigurationError, RuntimeSettings
 
 
@@ -21,7 +22,7 @@ def _packaged_settings() -> RuntimeSettings:
 def main() -> int:
     try:
         return run_server(_packaged_settings())
-    except (RuntimeConfigurationError, ServerStartupError) as exc:
+    except (RuntimeConfigurationError, RuntimePathError, ServerStartupError) as exc:
         print(
             json.dumps(
                 {"status": "failed", "code": getattr(exc, "code", "server_startup_failed")},

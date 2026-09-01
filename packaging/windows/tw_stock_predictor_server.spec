@@ -1,4 +1,4 @@
-# PyInstaller one-file server for the local-only Windows product.
+# PyInstaller onedir server for the local-only Windows product.
 
 from pathlib import Path
 import os
@@ -63,13 +63,21 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="tw-stock-predictor-server",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
     console=True,
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="tw-stock-predictor-server",
 )
