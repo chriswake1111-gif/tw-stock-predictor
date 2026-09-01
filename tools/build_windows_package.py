@@ -20,6 +20,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS_DIR = ROOT / "packaging" / "windows"
 
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 
 def _run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> None:
     print("+", " ".join(command))
