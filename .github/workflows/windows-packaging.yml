@@ -34,9 +34,9 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Install Inno Setup 6.4.2
+      - name: Install Inno Setup 6.7.1
         shell: pwsh
-        run: choco install innosetup --version=6.4.2 --allow-downgrade --no-progress --yes
+        run: choco install innosetup --version=6.7.1 --force --no-progress --yes
 
       - name: Install Python dependencies
         shell: pwsh
