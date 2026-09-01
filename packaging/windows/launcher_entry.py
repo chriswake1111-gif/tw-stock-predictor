@@ -9,23 +9,30 @@ import sys
 
 from src.runtime.diagnostics import DiagnosticLogger
 from src.runtime.launcher import Launcher, stop_existing
-from src.runtime.paths import RuntimePathError
+from src.runtime.paths import RuntimePathError, RuntimePaths
+from src.runtime.recovery_cli import main as recovery_main
 from src.runtime.settings import RuntimeConfigurationError, RuntimeSettings
 
 
-def _packaged_settings() -> RuntimeSettings:
+def _packaged_settings(user_root: str | None = None) -> RuntimeSettings:
     environment = dict(os.environ)
     # A frozen executable must always use the local-only packaged boundary.
     environment["TW_STOCK_PACKAGED"] = "true"
-    return RuntimeSettings.from_environment(environment)
+    paths = RuntimePaths.from_environment(environment, packaged_user_root=user_root)
+    return RuntimeSettings.from_environment(environment, paths=paths)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Start or stop the local research application")
     parser.add_argument("--stop", action="store_true", help="stop the local instance through local process control")
+    parser.add_argument("--user-root", default=None, help="explicit per-user root override")
+    parser.add_argument("command", nargs="?", choices=("recovery",))
+    parser.add_argument("command_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     try:
-        settings = _packaged_settings()
+        settings = _packaged_settings(args.user_root)
+        if args.command == "recovery":
+            return recovery_main(args.command_args, paths=settings.paths, packaged=True)
         if args.stop:
             result = stop_existing(settings)
         else:

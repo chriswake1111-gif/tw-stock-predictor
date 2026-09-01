@@ -27,9 +27,10 @@ from src.runtime.manifest import (
     validate_internal_manifest,
     write_manifest,
 )
+from src.runtime.manifest import sha256_file
 from src.runtime.paths import RuntimePaths
-from src.runtime.paths import RuntimePathError
-from src.runtime.restore import restore_backup_and_activate
+from src.runtime.recovery_cli import main as recovery_cli_main
+from src.runtime.restore import RestoreError, restore_backup_and_activate
 from src.runtime.settings import RuntimeSettings, packaged_auto_migrate
 from src.runtime.startup_coordinator import StartupCoordinator
 from src.services.evidence_backup_service import EvidenceBackupService
@@ -56,13 +57,16 @@ def _packaged_settings(tmp_path: Path) -> tuple[RuntimeSettings, Path]:
     user_root = tmp_path / "user"
     environment = {
         "TW_STOCK_PACKAGED": "true",
-        "TW_STOCK_RESOURCE_ROOT": str(resource_root),
-        "TW_STOCK_USER_ROOT": str(user_root),
-        "TW_STOCK_INSTALL_ROOT": str(tmp_path / "install"),
         "TW_STOCK_APP_VERSION": "",
         "TW_STOCK_BUILD_SHA": "",
     }
-    paths = RuntimePaths.from_environment(environment, project_root=REPO_ROOT)
+    paths = RuntimePaths.from_environment(
+        environment,
+        project_root=REPO_ROOT,
+        packaged_install_root=tmp_path / "install",
+        packaged_resource_root=resource_root,
+        packaged_user_root=user_root,
+    )
     settings = RuntimeSettings.from_environment(environment, paths=paths)
     return settings, resource_root
 
@@ -236,6 +240,7 @@ def test_phase18_recovery_activates_local_candidate_and_preserves_backup(tmp_pat
         canonical,
         backup_root=tmp_path / "backups",
         runtime_dir=tmp_path / "runtime",
+        resource_root=REPO_ROOT,
     )
     assert result["status"] == "activated"
     assert result["reopened_and_revalidated"] is True
@@ -243,6 +248,67 @@ def test_phase18_recovery_activates_local_candidate_and_preserves_backup(tmp_pat
     assert result["prior_canonical_path"] is not None
     with sqlite3.connect(canonical) as conn:
         assert conn.execute("SELECT symbol FROM research_watchlist_items").fetchall() == [("2330.TW",)]
+
+
+@pytest.mark.parametrize("candidate_state", ["legacy", "upgradeable", "missing_table", "checksum_mismatch", "corrupt"])
+def test_phase18_recovery_rejects_noncurrent_candidate_without_changing_canonical(
+    tmp_path,
+    candidate_state,
+):
+    source = tmp_path / f"{candidate_state}.db"
+    backup = tmp_path / f"{candidate_state}-backup.db"
+    canonical = tmp_path / "canonical.db"
+    apply_valuation_migration(str(canonical), resource_root=REPO_ROOT)
+    canonical_hash = sha256_file(canonical)
+
+    if candidate_state == "legacy":
+        with sqlite3.connect(source) as conn:
+            conn.execute("CREATE TABLE legacy_rows(value TEXT)")
+    elif candidate_state == "corrupt":
+        backup.write_bytes(b"not a sqlite database")
+    else:
+        apply_valuation_migration(str(source), resource_root=REPO_ROOT)
+        with sqlite3.connect(source) as conn:
+            if candidate_state == "upgradeable":
+                conn.execute(
+                    "DELETE FROM additive_schema_migrations WHERE version_id=?",
+                    ("20260828_20_phase14_third_code_review_remediation",),
+                )
+            elif candidate_state == "missing_table":
+                conn.execute("DROP TABLE evaluation_idempotency_keys")
+            else:
+                conn.execute(
+                    "UPDATE additive_schema_migrations SET checksum_sha256='wrong' WHERE version_id=?",
+                    ("20260828_20_phase14_third_code_review_remediation",),
+                )
+    if candidate_state != "corrupt":
+        EvidenceBackupService.backup(str(source), str(backup))
+
+    with pytest.raises(RestoreError) as captured:
+        restore_backup_and_activate(
+            backup,
+            canonical,
+            backup_root=tmp_path / "backups",
+            runtime_dir=tmp_path / "runtime",
+            resource_root=REPO_ROOT,
+        )
+    assert getattr(captured.value, "code", "") in {
+        "restore_candidate_not_current",
+        "restore_candidate_validation_failed",
+    }
+    assert sha256_file(canonical) == canonical_hash
+
+
+def test_phase18_recovery_cli_reports_deterministic_failure(tmp_path, capsys):
+    settings, _ = _packaged_settings(tmp_path)
+    exit_code = recovery_cli_main(
+        ["activate", str(tmp_path / "missing-backup.db")],
+        paths=settings.paths,
+        packaged=True,
+    )
+    payload = json.loads(capsys.readouterr().err)
+    assert exit_code == 2
+    assert payload == {"status": "failed", "code": "restore_backup_missing"}
 
 
 def test_phase18_diagnostics_redact_nonce_and_bound_log_segments(tmp_path):
@@ -330,24 +396,60 @@ def test_phase18_installer_exposes_local_stop_shortcut():
     )
     assert 'Name: "{autoprograms}\\Stop TW Stock Predictor"' in installer_script
     assert 'Parameters: "--stop"' in installer_script
+    assert 'TW Stock Predictor Recovery Help' in installer_script
+    launcher_entry = (REPO_ROOT / "packaging" / "windows" / "launcher_entry.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'choices=("recovery",)' in launcher_entry
+    assert "recovery_main(args.command_args" in launcher_entry
 
 
-def test_phase18_packaged_mutable_paths_cannot_overlap_install_resources(tmp_path):
+def test_phase18_packaged_paths_ignore_ambient_authority_overrides(tmp_path):
     resource_root = tmp_path / "resource"
     install_root = tmp_path / "install"
-    user_root = tmp_path / "user"
+    local_app_data = tmp_path / "local-app-data"
     environment = {
         "TW_STOCK_PACKAGED": "true",
-        "TW_STOCK_RESOURCE_ROOT": str(resource_root),
-        "TW_STOCK_INSTALL_ROOT": str(install_root),
-        "TW_STOCK_USER_ROOT": str(install_root / "mutable"),
+        "LOCALAPPDATA": str(local_app_data),
+        "TW_STOCK_RESOURCE_ROOT": str(tmp_path / "ambient-resource"),
+        "TW_STOCK_INSTALL_ROOT": str(tmp_path / "ambient-install"),
+        "TW_STOCK_USER_ROOT": str(tmp_path / "ambient-user"),
+        "DATABASE_PATH": str(tmp_path / "ambient.db"),
+        "MODEL_RULES_PATH": str(tmp_path / "ambient-rules.yaml"),
     }
-    with pytest.raises(RuntimePathError, match="overlaps install_root"):
-        RuntimePaths.from_environment(environment, project_root=REPO_ROOT)
+    paths = RuntimePaths.from_environment(
+        environment,
+        project_root=REPO_ROOT,
+        packaged_install_root=install_root,
+        packaged_resource_root=resource_root,
+    )
+    assert paths.install_root == install_root.resolve()
+    assert paths.resource_root == resource_root.resolve()
+    assert paths.user_root == (local_app_data / "tw-stock-predictor").resolve()
+    assert paths.database_path == paths.user_root / "data" / "cache.db"
+    assert paths.model_rules_path == resource_root / "config" / "model_rules.yaml"
 
-    safe_environment = dict(environment, TW_STOCK_USER_ROOT=str(user_root), DATABASE_PATH=str(resource_root / "cache.db"))
-    with pytest.raises(RuntimePathError, match="overlaps resource_root"):
-        RuntimePaths.from_environment(safe_environment, project_root=REPO_ROOT)
+
+def test_phase18_explicit_packaged_user_root_keeps_all_mutable_paths_contained(tmp_path):
+    user_root = tmp_path / "explicit-user"
+    paths = RuntimePaths.from_environment(
+        {"TW_STOCK_PACKAGED": "true"},
+        project_root=REPO_ROOT,
+        packaged_install_root=tmp_path / "install",
+        packaged_resource_root=tmp_path / "resource",
+        packaged_user_root=user_root,
+    )
+    assert paths.user_root == user_root.resolve()
+    for path in (
+        paths.data_dir,
+        paths.logs_dir,
+        paths.backup_dir,
+        paths.config_dir,
+        paths.runtime_dir,
+        paths.database_path,
+        paths.config_path,
+    ):
+        assert path.is_relative_to(paths.user_root)
 
 
 def test_phase18_local_stop_event_is_graceful_control_plane(tmp_path):

@@ -131,7 +131,10 @@ class Launcher:
             self.logger.emit(code, phase="launcher", message=message, **context)
 
     def _command(self) -> list[str]:
-        return list(self.server_command)
+        command = list(self.server_command)
+        if self.settings.packaged and getattr(sys, "frozen", False):
+            command.extend(("--user-root", str(self.paths.user_root)))
+        return command
 
     def _spawn(self, settings: RuntimeSettings, context: LaunchContext) -> subprocess.Popen:
         environment = os.environ.copy()

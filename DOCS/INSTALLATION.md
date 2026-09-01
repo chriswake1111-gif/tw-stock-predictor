@@ -30,6 +30,9 @@ Phase 18 的 Windows 產品化只提供本機研究與虛擬模擬能力。Launc
 `127.0.0.1` loopback、動態埠與每位使用者的單一 instance；不包含券商連線、
 真實委託、自動交易、雲端同步或遙測。SQLite、設定副本、備份、復原 staging、
 診斷 log 均位於 `%LOCALAPPDATA%\tw-stock-predictor`，不寫入安裝目錄。
+封裝模式不接受一般環境變數改寫 install/resource/model-rules/frontend/migrations
+權限；mutable 子路徑也固定在 user root 下。`--user-root` 是明示的本機／CI
+隔離參數，所有衍生資料、設定、runtime、backup 與 log 仍必須位於該 root 內。
 
 建置需要 Python 相容環境、Node.js、PyInstaller 與 Inno Setup 6。PyInstaller 產生
 的是兩個完整的 `onedir` bundle，不是單一 exe；安裝程式會遞迴複製整個 bundle：
@@ -55,9 +58,13 @@ python -B tools/validate_windows_package.py dist/windows-productization --distri
 
 GitHub Actions 的 `windows-packaging.yml` 會在 Windows runner 上固定 Python、Node.js
 與 Inno Setup 版本，建立並驗證 onedir layout，安裝到乾淨的暫存目錄後執行 loopback
-readiness、`/research/daily`、single-instance、graceful Stop、process-tree cleanup
-與 uninstall user-data preservation smoke。完整 build 與 smoke 摘要寫入 Actions job
-summary；不會上傳使用者資料或 runtime database。
+readiness、`/research/daily`、single-instance、graceful Stop、process-tree cleanup，
+以及 known-current／upgradeable／legacy／corrupt database、installed recovery、bounded
+logging 與 uninstall user-data preservation smoke。產品 process 會以不含 repository、
+Python、Node 或 npm 的最小 system PATH 啟動；fixture 準備與產品 process 隔離。完整
+build 與 smoke 摘要寫入 Actions job summary；不會上傳使用者資料或 runtime database。
+成功 workflow 另保留 installer、internal／distribution manifests 與 build／smoke
+summary 作為 14 天的 GitHub Actions review artifact；不收錄 runtime DB、user data 或 logs。
 
 第一次啟動會先檢查 resource manifest，再判定 canonical database 為
 `fresh`、`known_v2_upgradeable`、`legacy` 或 `corrupt_unknown`：
@@ -69,3 +76,16 @@ summary；不會上傳使用者資料或 runtime database。
 
 使用 `tw-stock-predictor.exe --stop` 只會停止通過 local descriptor、build identity、
 parent process 與 loopback origin 驗證的本機 server；不會對任意 PID 或遠端 URL 發送控制。
+
+安裝後的本機 recovery command 不需要 repository 或另外安裝 Python：
+
+```text
+tw-stock-predictor.exe recovery validate <backup.db>
+tw-stock-predictor.exe recovery activate <backup.db>
+```
+
+`activate` 的 canonical、backup root 與 runtime ownership 固定使用目前 user root；封裝模式
+拒絕以參數改寫這些權限。候選與 activation 後 canonical 都必須重新分類為
+`known_v2_current`，且 metadata checksum、完整 required-table contract、migration ID／checksum
+全部通過才回傳 `status=activated`。失敗固定回傳 JSON `status=failed`、穩定 `code` 與
+exit code `2`，不會新增 FastAPI recovery／shutdown endpoint。

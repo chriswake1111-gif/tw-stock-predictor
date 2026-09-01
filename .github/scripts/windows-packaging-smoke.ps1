@@ -143,20 +143,49 @@ function Wait-ForPath {
 function New-ProductProcess {
     param(
         [string]$FilePath,
-        [string]$Arguments = ""
+        [string]$Arguments = "",
+        [string]$ScenarioRoot = $UserRoot
     )
 
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
     $startInfo.FileName = $FilePath
-    $startInfo.Arguments = $Arguments
-    $startInfo.WorkingDirectory = Split-Path -Parent $FilePath
+    $rootArgument = "--user-root `"$ScenarioRoot`""
+    $startInfo.Arguments = if ($Arguments) { "$rootArgument $Arguments" } else { $rootArgument }
+    $startInfo.WorkingDirectory = $InstallRoot
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
-    $startInfo.EnvironmentVariables["TW_STOCK_PACKAGED"] = "true"
-    $startInfo.EnvironmentVariables["TW_STOCK_USER_ROOT"] = $UserRoot
+    $startInfo.EnvironmentVariables.Clear()
+    foreach ($name in @("SystemRoot", "WINDIR", "TEMP", "TMP", "COMSPEC", "PATHEXT")) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if ($value) {
+            $startInfo.EnvironmentVariables[$name] = $value
+        }
+    }
+    $startInfo.EnvironmentVariables["PATH"] = "$env:SystemRoot\System32;$env:SystemRoot"
     return [System.Diagnostics.Process]::Start($startInfo)
+}
+
+function Invoke-Fixture {
+    param([string[]]$FixtureArguments)
+
+    & python -B "$env:GITHUB_WORKSPACE\.github\scripts\phase18-smoke-fixture.py" @FixtureArguments | Out-Null
+    Assert-True ($LASTEXITCODE -eq 0) "fixture command failed: $($FixtureArguments -join ' ')"
+}
+
+function Stop-Scenario {
+    param(
+        [System.Diagnostics.Process]$LauncherProcess,
+        [string]$ScenarioRoot
+    )
+
+    $stopProcess = New-ProductProcess -FilePath $launcher -Arguments "--stop" -ScenarioRoot $ScenarioRoot
+    $stopResult = Wait-ProductExit -Process $stopProcess
+    $stopPayload = $stopResult.stdout | ConvertFrom-Json
+    Assert-True ($stopResult.exit_code -eq 0) "scenario stop failed: status=$($stopPayload.status),reason=$($stopPayload.reason)"
+    Assert-True ($stopPayload.status -eq "stopped") "scenario stop did not report stopped"
+    Assert-True $LauncherProcess.WaitForExit(15000) "scenario launcher did not exit"
 }
 
 function Wait-ProductExit {
@@ -202,6 +231,7 @@ $server = Join-Path $install "tw-stock-predictor-server\tw-stock-predictor-serve
 $runtimeDescriptor = Join-Path $user "runtime\instance.json"
 $sentinel = Join-Path $user "data\user-sentinel.txt"
 $smokeSummaryPath = Join-Path $package "smoke-summary.json"
+$fixture = Join-Path $env:GITHUB_WORKSPACE ".github\scripts\phase18-smoke-fixture.py"
 
 if (Test-Path -LiteralPath $install) {
     Remove-Item -LiteralPath $install -Recurse -Force
@@ -213,6 +243,7 @@ New-Item -ItemType Directory -Path $install -Force | Out-Null
 New-Item -ItemType Directory -Path $user -Force | Out-Null
 
 Assert-True (Test-Path -LiteralPath $installer) "installer is missing: $installer"
+Assert-True (Test-Path -LiteralPath $fixture) "smoke fixture helper is missing: $fixture"
 
 $installDirArgument = "/DIR=`"$install`""
 $installerProcess = Start-Process -FilePath $installer -ArgumentList @(
@@ -231,6 +262,11 @@ $stop = $null
 $orphan = $null
 $serverPid = $null
 $orphanServerPid = $null
+$upgradeProcess = $null
+$legacyProcess = $null
+$corruptProcess = $null
+$recoveryProcess = $null
+$logProcess = $null
 try {
     $first = New-ProductProcess -FilePath $launcher
     Wait-ForPath -Path $runtimeDescriptor -Process $first -DiagnosticRoot $user
@@ -274,6 +310,110 @@ try {
     Assert-True $orphan.WaitForExit(15000) "orphan launcher did not exit after forced termination"
     Assert-ProcessGone -ProcessId $orphanServerPid
 
+    # Installed known-v2-upgradeable startup must create pre-upgrade evidence.
+    $upgradeRoot = Join-Path $env:RUNNER_TEMP "tw-stock-predictor-upgradeable"
+    $upgradeDb = Join-Path $upgradeRoot "data\cache.db"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $upgradeDb) -Force | Out-Null
+    Invoke-Fixture -FixtureArguments @("upgradeable", $upgradeDb)
+    $upgradeDescriptor = Join-Path $upgradeRoot "runtime\instance.json"
+    $upgradeProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $upgradeRoot
+    Wait-ForPath -Path $upgradeDescriptor -Process $upgradeProcess -DiagnosticRoot $upgradeRoot
+    Stop-Scenario -LauncherProcess $upgradeProcess -ScenarioRoot $upgradeRoot
+    $preUpgradeMetadata = Get-ChildItem -LiteralPath (Join-Path $upgradeRoot "backup") -Recurse -Filter "*.meta.json" -File |
+        Where-Object { (Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json).reason -eq "pre_upgrade" }
+    Assert-True ($preUpgradeMetadata.Count -ge 1) "installed upgrade did not preserve pre-upgrade metadata"
+
+    # Installed legacy startup must preserve the source and activate a new current V2 DB.
+    $legacyRoot = Join-Path $env:RUNNER_TEMP "tw-stock-predictor-legacy"
+    $legacyDb = Join-Path $legacyRoot "data\cache.db"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $legacyDb) -Force | Out-Null
+    Invoke-Fixture -FixtureArguments @("legacy", $legacyDb)
+    $legacyHash = (Get-FileHash -LiteralPath $legacyDb -Algorithm SHA256).Hash
+    $legacyDescriptor = Join-Path $legacyRoot "runtime\instance.json"
+    $legacyProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $legacyRoot
+    Wait-ForPath -Path $legacyDescriptor -Process $legacyProcess -DiagnosticRoot $legacyRoot
+    Stop-Scenario -LauncherProcess $legacyProcess -ScenarioRoot $legacyRoot
+    $legacyArchives = Get-ChildItem -LiteralPath (Join-Path $legacyRoot "backup\legacy") -Filter "legacy-source-*.db" -File
+    Assert-True ($legacyArchives.Count -ge 1) "installed legacy source archive is missing"
+    Assert-True ((Get-FileHash -LiteralPath $legacyArchives[0].FullName -Algorithm SHA256).Hash -eq $legacyHash) `
+        "installed legacy source archive hash changed"
+
+    # Corrupt/unknown startup must fail closed without replacing the canonical bytes.
+    $corruptRoot = Join-Path $env:RUNNER_TEMP "tw-stock-predictor-corrupt"
+    $corruptDb = Join-Path $corruptRoot "data\cache.db"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $corruptDb) -Force | Out-Null
+    [IO.File]::WriteAllBytes($corruptDb, [Text.Encoding]::UTF8.GetBytes("not a sqlite database"))
+    $corruptHash = (Get-FileHash -LiteralPath $corruptDb -Algorithm SHA256).Hash
+    $corruptProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $corruptRoot
+    $corruptResult = Wait-ProductExit -Process $corruptProcess
+    $corruptPayload = $corruptResult.stdout | ConvertFrom-Json
+    Assert-True ($corruptResult.exit_code -eq 2) "corrupt installed startup did not fail"
+    Assert-True ($corruptPayload.status -eq "failed" -and $corruptPayload.reason -eq "database_corrupt_unknown") `
+        "corrupt installed startup returned the wrong failure"
+    Assert-True ((Get-FileHash -LiteralPath $corruptDb -Algorithm SHA256).Hash -eq $corruptHash) `
+        "corrupt canonical changed during failed startup"
+
+    # Installed recovery CLI: success, fail-closed preservation, and active-writer rejection.
+    $recoveryRoot = Join-Path $env:RUNNER_TEMP "tw-stock-predictor-recovery"
+    $recoveryDb = Join-Path $recoveryRoot "data\cache.db"
+    $recoverySource = Join-Path $recoveryRoot "fixture\source.db"
+    $recoveryBackup = Join-Path $recoveryRoot "backup\source-backup.db"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $recoveryDb) -Force | Out-Null
+    New-Item -ItemType Directory -Path (Split-Path -Parent $recoverySource) -Force | Out-Null
+    New-Item -ItemType Directory -Path (Split-Path -Parent $recoveryBackup) -Force | Out-Null
+    Invoke-Fixture -FixtureArguments @("current", $recoveryDb, "--symbol", "2317.TW")
+    Invoke-Fixture -FixtureArguments @("current", $recoverySource, "--symbol", "2330.TW")
+    Invoke-Fixture -FixtureArguments @("backup", $recoverySource, $recoveryBackup)
+    $recovery = New-ProductProcess -FilePath $launcher -Arguments "recovery activate `"$recoveryBackup`"" -ScenarioRoot $recoveryRoot
+    $recoveryResult = Wait-ProductExit -Process $recovery
+    $recoveryPayload = $recoveryResult.stdout | ConvertFrom-Json
+    Assert-True ($recoveryResult.exit_code -eq 0 -and $recoveryPayload.status -eq "activated") `
+        "installed recovery activation failed"
+    $symbolPayload = & python -B $fixture symbols $recoveryDb | ConvertFrom-Json
+    Assert-True (($symbolPayload.symbols -join ",") -eq "2330.TW") "installed recovery activated the wrong database"
+
+    $invalidSource = Join-Path $recoveryRoot "fixture\legacy.db"
+    $invalidBackup = Join-Path $recoveryRoot "backup\legacy-backup.db"
+    Invoke-Fixture -FixtureArguments @("legacy", $invalidSource)
+    Invoke-Fixture -FixtureArguments @("backup", $invalidSource, $invalidBackup)
+    $beforeRejectedRecovery = (Get-FileHash -LiteralPath $recoveryDb -Algorithm SHA256).Hash
+    $rejected = New-ProductProcess -FilePath $launcher -Arguments "recovery activate `"$invalidBackup`"" -ScenarioRoot $recoveryRoot
+    $rejectedResult = Wait-ProductExit -Process $rejected
+    $rejectedPayload = $rejectedResult.stderr | ConvertFrom-Json
+    Assert-True ($rejectedResult.exit_code -eq 2 -and $rejectedPayload.code -eq "restore_candidate_not_current") `
+        "installed recovery did not reject a legacy candidate deterministically"
+    Assert-True ((Get-FileHash -LiteralPath $recoveryDb -Algorithm SHA256).Hash -eq $beforeRejectedRecovery) `
+        "canonical changed after rejected recovery"
+
+    $recoveryDescriptor = Join-Path $recoveryRoot "runtime\instance.json"
+    $recoveryProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $recoveryRoot
+    Wait-ForPath -Path $recoveryDescriptor -Process $recoveryProcess -DiagnosticRoot $recoveryRoot
+    $writerRejected = New-ProductProcess -FilePath $launcher -Arguments "recovery activate `"$recoveryBackup`"" -ScenarioRoot $recoveryRoot
+    $writerResult = Wait-ProductExit -Process $writerRejected
+    $writerPayload = $writerResult.stderr | ConvertFrom-Json
+    Assert-True ($writerResult.exit_code -eq 2 -and $writerPayload.code -eq "restore_writer_active") `
+        "installed recovery did not reject an active writer"
+    Stop-Scenario -LauncherProcess $recoveryProcess -ScenarioRoot $recoveryRoot
+
+    # Installed logging must retain only its own bounded segments and preserve non-log files.
+    $logRoot = Join-Path $env:RUNNER_TEMP "tw-stock-predictor-logs"
+    $logDir = Join-Path $logRoot "logs"
+    New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+    $largeLog = Join-Path $logDir "launcher.log"
+    [IO.File]::WriteAllBytes($largeLog, (New-Object byte[] (11 * 1024 * 1024)))
+    $nonLog = Join-Path $logDir "preserve.bin"
+    [IO.File]::WriteAllBytes($nonLog, [byte[]](1, 2, 3, 4))
+    $logDescriptor = Join-Path $logRoot "runtime\instance.json"
+    $logProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $logRoot
+    Wait-ForPath -Path $logDescriptor -Process $logProcess -DiagnosticRoot $logRoot
+    Stop-Scenario -LauncherProcess $logProcess -ScenarioRoot $logRoot
+    $logicalLogs = Get-ChildItem -LiteralPath $logDir -Filter "launcher.log*" -File
+    Assert-True ($logicalLogs.Count -le 6) "installed logging retained too many segments"
+    Assert-True ((($logicalLogs | Measure-Object -Property Length -Sum).Sum) -le (60 * 1024 * 1024)) `
+        "installed logical log exceeded 60 MiB"
+    Assert-True (([IO.File]::ReadAllBytes($nonLog) -join ",") -eq "1,2,3,4") `
+        "installed logging changed a non-log file"
+
     New-Item -ItemType Directory -Path (Split-Path -Parent $sentinel) -Force | Out-Null
     Set-Content -LiteralPath $sentinel -Value "preserve-me" -NoNewline
     $uninstaller = Join-Path $install "unins000.exe"
@@ -297,14 +437,22 @@ try {
         single_instance_guard = $true
         graceful_stop = $true
         process_tree_cleanup = $true
+        known_v2_current = $true
+        known_v2_upgradeable = $true
+        legacy_preservation = $true
+        corrupt_unknown_fail_closed = $true
+        installed_recovery = $true
+        recovery_failure_preservation = $true
+        active_writer_rejection = $true
+        bounded_log_retention = $true
         uninstall_preserved_user_data = $true
-        runtime_dependencies = "installed_onedir_executables_only"
+        runtime_dependencies = "installed_onedir_executables_with_minimal_system_path_only"
     }
     $summary | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $smokeSummaryPath -Encoding UTF8
     $summary | ConvertTo-Json -Depth 4
 }
 finally {
-    foreach ($process in @($first, $second, $stop, $orphan)) {
+    foreach ($process in @($first, $second, $stop, $orphan, $upgradeProcess, $legacyProcess, $corruptProcess, $recoveryProcess, $logProcess)) {
         if ($null -ne $process -and -not $process.HasExited) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
         }

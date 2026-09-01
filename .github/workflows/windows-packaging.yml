@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/windows-packaging.yml"
       - ".github/scripts/windows-packaging-smoke.ps1"
+      - ".github/scripts/phase18-smoke-fixture.py"
       - "packaging/windows/**"
       - "src/runtime/**"
       - "src/api/**"
@@ -97,3 +98,17 @@ jobs:
             Get-Content -LiteralPath $smoke | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value '```'
           }
+
+      - name: Retain installer and review evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tw-stock-predictor-windows-${{ github.event.pull_request.head.sha || github.sha }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            dist/windows-productization/installer/tw-stock-predictor-setup.exe
+            dist/windows-productization/distribution-manifest.json
+            dist/windows-productization/internal-package-manifest.json
+            dist/windows-productization/build-summary.json
+            dist/windows-productization/smoke-summary.json

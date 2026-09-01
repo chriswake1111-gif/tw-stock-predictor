@@ -37,6 +37,7 @@ Source: "{#TW_STOCK_BUILD_ROOT}\tw-stock-predictor-server\*"; DestDir: "{app}\tw
 [Icons]
 Name: "{autoprograms}\TW Stock Predictor"; Filename: "{app}\tw-stock-predictor\tw-stock-predictor.exe"; WorkingDir: "{app}\tw-stock-predictor"
 Name: "{autoprograms}\Stop TW Stock Predictor"; Filename: "{app}\tw-stock-predictor\tw-stock-predictor.exe"; Parameters: "--stop"; WorkingDir: "{app}\tw-stock-predictor"
+Name: "{autoprograms}\TW Stock Predictor Recovery Help"; Filename: "{cmd}"; Parameters: "/K ""{app}\tw-stock-predictor\tw-stock-predictor.exe"" recovery --help"; WorkingDir: "{app}\tw-stock-predictor"
 Name: "{autodesktop}\TW Stock Predictor"; Filename: "{app}\tw-stock-predictor\tw-stock-predictor.exe"; WorkingDir: "{app}\tw-stock-predictor"; Tasks: desktopicon
 
 [Tasks]

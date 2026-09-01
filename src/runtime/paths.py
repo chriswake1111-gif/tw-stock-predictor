@@ -27,7 +27,7 @@ def _absolute(value: str | Path, *, base: Path) -> Path:
 
 
 class RuntimePathError(ValueError):
-    code = "runtime_path_overlap"
+    code = "runtime_path_authority_invalid"
 
 
 def _paths_overlap(first: Path, second: Path) -> bool:
@@ -38,6 +38,15 @@ def _paths_overlap(first: Path, second: Path) -> bool:
     except ValueError:
         return False
     return common in {first_text, second_text}
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    path_text = os.path.normcase(str(path.resolve(strict=False)))
+    root_text = os.path.normcase(str(root.resolve(strict=False)))
+    try:
+        return os.path.commonpath((path_text, root_text)) == root_text
+    except ValueError:
+        return False
 
 
 def _validate_packaged_isolation(paths: "RuntimePaths") -> None:
@@ -58,11 +67,25 @@ def _validate_packaged_isolation(paths: "RuntimePaths") -> None:
         "config_path": paths.config_path,
     }
     for mutable_name, mutable_path in mutable.items():
+        if not _path_is_within(mutable_path, paths.user_root):
+            raise RuntimePathError(
+                f"packaged mutable path {mutable_name} escapes user_root"
+            )
         for immutable_name, immutable_path in immutable.items():
             if _paths_overlap(mutable_path, immutable_path):
                 raise RuntimePathError(
                     f"packaged mutable path {mutable_name} overlaps {immutable_name}"
                 )
+    packaged_resources = {
+        "model_rules_path": paths.model_rules_path,
+        "frontend_dist": paths.frontend_dist,
+        "migrations_dir": paths.migrations_dir,
+    }
+    for resource_name, resource_path in packaged_resources.items():
+        if not _path_is_within(resource_path, paths.resource_root):
+            raise RuntimePathError(
+                f"packaged immutable path {resource_name} escapes resource_root"
+            )
 
 
 def _local_app_data(environ: Mapping[str, str]) -> Path:
@@ -111,6 +134,9 @@ class RuntimePaths:
         environ: Mapping[str, str] | None = None,
         *,
         project_root: str | Path | None = None,
+        packaged_install_root: str | Path | None = None,
+        packaged_resource_root: str | Path | None = None,
+        packaged_user_root: str | Path | None = None,
     ) -> "RuntimePaths":
         env = environ if environ is not None else os.environ
         default_project = Path(project_root or Path(__file__).resolve().parents[2])
@@ -121,16 +147,16 @@ class RuntimePaths:
             executable_root = Path(getattr(sys, "executable", default_project)).resolve(strict=False).parent
             resource_default = _packaged_resource_default(executable_root)
             install_root = _absolute(
-                env.get("TW_STOCK_INSTALL_ROOT", str(executable_root)),
+                packaged_install_root or executable_root,
                 base=default_project,
             )
             resource_root = _absolute(
-                env.get("TW_STOCK_RESOURCE_ROOT", str(resource_default)),
+                packaged_resource_root or resource_default,
                 base=install_root,
             )
             user_default = _local_app_data(env) / "tw-stock-predictor"
             user_root = _absolute(
-                env.get("TW_STOCK_USER_ROOT", str(user_default)),
+                packaged_user_root or user_default,
                 base=default_project,
             )
         else:
@@ -147,14 +173,17 @@ class RuntimePaths:
                 base=install_root,
             )
 
-        data_dir = _absolute(env.get("TW_STOCK_DATA_ROOT", str(user_root / "data")), base=user_root)
-        logs_dir = _absolute(env.get("TW_STOCK_LOG_ROOT", str(user_root / "logs")), base=user_root)
-        backup_dir = _absolute(env.get("TW_STOCK_BACKUP_ROOT", str(user_root / "backup")), base=user_root)
-        config_dir = _absolute(env.get("TW_STOCK_CONFIG_ROOT", str(user_root / "config")), base=user_root)
-        runtime_dir = _absolute(env.get("TW_STOCK_RUNTIME_ROOT", str(user_root / "runtime")), base=user_root)
+        def configured(name: str, default: Path) -> str | Path:
+            return default if packaged else env.get(name, str(default))
+
+        data_dir = _absolute(configured("TW_STOCK_DATA_ROOT", user_root / "data"), base=user_root)
+        logs_dir = _absolute(configured("TW_STOCK_LOG_ROOT", user_root / "logs"), base=user_root)
+        backup_dir = _absolute(configured("TW_STOCK_BACKUP_ROOT", user_root / "backup"), base=user_root)
+        config_dir = _absolute(configured("TW_STOCK_CONFIG_ROOT", user_root / "config"), base=user_root)
+        runtime_dir = _absolute(configured("TW_STOCK_RUNTIME_ROOT", user_root / "runtime"), base=user_root)
 
         def db_path(name: str, default: Path) -> Path:
-            return _absolute(env.get(name, str(default)), base=user_root)
+            return _absolute(configured(name, default), base=user_root)
 
         config_default = config_dir / "config.yaml" if packaged else resource_root / "config" / "config.yaml"
         model_rules_default = resource_root / "config" / "model_rules.yaml"
@@ -173,15 +202,15 @@ class RuntimePaths:
             database_path=db_path("DATABASE_PATH", data_dir / "cache.db"),
             eod_db_path=db_path("EOD_DB_PATH", data_dir / "cache.db"),
             universe_db_path=db_path("UNIVERSE_DB_PATH", data_dir / "cache.db"),
-            config_path=_absolute(env.get("CONFIG_PATH", str(config_default)), base=user_root),
+            config_path=_absolute(configured("CONFIG_PATH", config_default), base=user_root),
             model_rules_path=_absolute(
-                env.get("MODEL_RULES_PATH", str(model_rules_default)), base=resource_root
+                configured("MODEL_RULES_PATH", model_rules_default), base=resource_root
             ),
             frontend_dist=_absolute(
-                env.get("TW_STOCK_FRONTEND_DIST", str(frontend_default)), base=resource_root
+                configured("TW_STOCK_FRONTEND_DIST", frontend_default), base=resource_root
             ),
             migrations_dir=_absolute(
-                env.get("TW_STOCK_MIGRATIONS_ROOT", str(migrations_default)), base=resource_root
+                configured("TW_STOCK_MIGRATIONS_ROOT", migrations_default), base=resource_root
             ),
         )
         if packaged:

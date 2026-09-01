@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import os
 import shutil
+import sqlite3
 import uuid
 from pathlib import Path
 from typing import Any
 
 from src.services.evidence_backup_service import EvidenceBackupService
 
+from .database_state import DatabaseClassification, DatabaseState, classify_database
 from .instance import (
     InstanceGuard,
     InstanceOwnershipError,
@@ -62,20 +64,52 @@ def _preserve_previous(canonical: Path, operation_dir: Path) -> tuple[Path | Non
     return previous, previous_metadata
 
 
+def _validate_backup_candidate(candidate: Path) -> dict[str, Any]:
+    try:
+        validation = EvidenceBackupService.validate(str(candidate))
+    except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+        raise RestoreError("restore_candidate_validation_failed", str(exc)) from exc
+    if validation.get("status") != "valid":
+        raise RestoreError("restore_candidate_validation_failed")
+    if "backup_metadata" not in validation:
+        raise RestoreError("restore_candidate_metadata_missing")
+    return validation
+
+
+def _require_current_database(
+    path: Path,
+    *,
+    resource_root: Path | None,
+    code: str,
+) -> DatabaseClassification:
+    try:
+        classification = classify_database(path, resource_root=resource_root)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise RestoreError(code, str(exc)) from exc
+    if classification.state is not DatabaseState.KNOWN_V2_CURRENT:
+        raise RestoreError(
+            code,
+            f"{classification.state.value}:{classification.reason}",
+        )
+    return classification
+
+
 def _activate_owned(
     candidate: Path,
     canonical: Path,
     *,
     backup_root: Path,
     runtime_dir: Path,
+    resource_root: Path | None,
 ) -> dict[str, Any]:
     if not candidate.is_file():
         raise RestoreError("restore_candidate_missing")
-    validation = EvidenceBackupService.validate(str(candidate))
-    if validation.get("status") != "valid":
-        raise RestoreError("restore_candidate_validation_failed")
-    if "backup_metadata" not in validation:
-        raise RestoreError("restore_candidate_metadata_missing")
+    validation = _validate_backup_candidate(candidate)
+    candidate_database = _require_current_database(
+        candidate,
+        resource_root=resource_root,
+        code="restore_candidate_not_current",
+    )
 
     operation_id = uuid.uuid4().hex
     operation_dir = backup_root / "restore-staging" / operation_id
@@ -86,7 +120,12 @@ def _activate_owned(
     staged_metadata = _metadata_path(staged)
     if candidate_metadata.is_file():
         shutil.copy2(candidate_metadata, staged_metadata)
-    staged_validation = EvidenceBackupService.validate(str(staged))
+    staged_validation = _validate_backup_candidate(staged)
+    _require_current_database(
+        staged,
+        resource_root=resource_root,
+        code="restore_staged_candidate_not_current",
+    )
     previous, previous_metadata = _preserve_previous(canonical, operation_dir)
     displaced = operation_dir / "displaced-canonical.db"
     displaced_metadata = _metadata_path(displaced)
@@ -114,6 +153,11 @@ def _activate_owned(
         post = EvidenceBackupService.validate(str(canonical))
         if post.get("status") != "valid":
             raise RestoreError("restore_post_activation_validation_failed")
+        post_database = _require_current_database(
+            canonical,
+            resource_root=resource_root,
+            code="restore_post_activation_not_current",
+        )
     except Exception as exc:
         if canonical.is_file():
             os.replace(canonical, operation_dir / "failed-postcheck.db")
@@ -136,6 +180,9 @@ def _activate_owned(
         "prior_canonical_path": str(previous) if previous else None,
         "prior_canonical_metadata_path": str(previous_metadata) if previous_metadata else None,
         "validation": post,
+        "database": post_database.to_dict(),
+        "candidate_database": candidate_database.to_dict(),
+        "staged_validation": staged_validation,
         "reopened_and_revalidated": True,
     }
 
@@ -146,6 +193,7 @@ def activate_candidate(
     *,
     backup_root: str | Path,
     runtime_dir: str | Path,
+    resource_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Explicitly activate a validated candidate through local control only."""
 
@@ -153,6 +201,7 @@ def activate_candidate(
     canonical = Path(canonical_db).resolve(strict=False)
     root = Path(backup_root).resolve(strict=False)
     runtime = Path(runtime_dir).resolve(strict=False)
+    resources = Path(resource_root).resolve(strict=False) if resource_root is not None else None
     if candidate == canonical:
         raise RestoreError("restore_candidate_must_differ_from_canonical")
     _ensure_no_active_writer(runtime)
@@ -164,6 +213,7 @@ def activate_candidate(
                 canonical,
                 backup_root=root,
                 runtime_dir=runtime,
+                resource_root=resources,
             )
     except InstanceOwnershipError as exc:
         raise RestoreError("restore_instance_ownership_unavailable", str(exc)) from exc
@@ -175,6 +225,7 @@ def restore_backup_and_activate(
     *,
     backup_root: str | Path,
     runtime_dir: str | Path,
+    resource_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Copy a backup to a unique candidate, then activate only explicitly."""
 
@@ -182,6 +233,7 @@ def restore_backup_and_activate(
     canonical = Path(canonical_db).resolve(strict=False)
     root = Path(backup_root).resolve(strict=False)
     runtime = Path(runtime_dir).resolve(strict=False)
+    resources = Path(resource_root).resolve(strict=False) if resource_root is not None else None
     if not backup.is_file():
         raise RestoreError("restore_backup_missing")
     _ensure_no_active_writer(runtime)
@@ -192,12 +244,16 @@ def restore_backup_and_activate(
             operation_dir = root / "restore-staging" / operation_id
             operation_dir.mkdir(parents=True, exist_ok=False)
             candidate = operation_dir / "candidate.db"
-            EvidenceBackupService.restore(str(backup), str(candidate), reason="recovery")
+            try:
+                EvidenceBackupService.restore(str(backup), str(candidate), reason="recovery")
+            except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+                raise RestoreError("restore_candidate_validation_failed", str(exc)) from exc
             result = _activate_owned(
                 candidate,
                 canonical,
                 backup_root=root,
                 runtime_dir=runtime,
+                resource_root=resources,
             )
             result["source_backup_path"] = str(backup)
             result["source_backup_preserved"] = True
