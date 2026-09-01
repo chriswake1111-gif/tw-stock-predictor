@@ -36,7 +36,7 @@ jobs:
 
       - name: Install Inno Setup 6.4.2
         shell: pwsh
-        run: choco install innosetup --version=6.4.2 --no-progress --yes
+        run: choco install innosetup --version=6.4.2 --allow-downgrade --no-progress --yes
 
       - name: Install Python dependencies
         shell: pwsh
@@ -86,12 +86,14 @@ jobs:
           $summary = "$env:GITHUB_WORKSPACE\dist\windows-productization\build-summary.json"
           $smoke = "$env:GITHUB_WORKSPACE\dist\windows-productization\smoke-summary.json"
           if (Test-Path -LiteralPath $summary) {
-            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "## Build summary`n```json"
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value '## Build summary'
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value '```json'
             Get-Content -LiteralPath $summary | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
-            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "```"
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value '```'
           }
           if (Test-Path -LiteralPath $smoke) {
-            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "## Installed smoke summary`n```json"
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value '## Installed smoke summary'
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value '```json'
             Get-Content -LiteralPath $smoke | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
-            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "```"
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value '```'
           }
