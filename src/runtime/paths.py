@@ -20,7 +20,13 @@ def _is_true(value: str | None) -> bool:
 
 
 def _absolute(value: str | Path, *, base: Path) -> Path:
-    path = Path(value).expanduser()
+    path = Path(value)
+    # ``Path.expanduser()`` consults HOME/USERPROFILE even when callers have
+    # already supplied an absolute path.  The packaged launcher intentionally
+    # runs with a minimal environment, so only consult the home directory when
+    # the input actually contains a user-home marker.
+    if str(path).startswith("~"):
+        path = path.expanduser()
     if not path.is_absolute():
         path = base / path
     return path.resolve(strict=False)
@@ -154,9 +160,13 @@ class RuntimePaths:
                 packaged_resource_root or resource_default,
                 base=install_root,
             )
-            user_default = _local_app_data(env) / "tw-stock-predictor"
+            user_default = (
+                Path(packaged_user_root)
+                if packaged_user_root is not None
+                else _local_app_data(env) / "tw-stock-predictor"
+            )
             user_root = _absolute(
-                packaged_user_root or user_default,
+                user_default,
                 base=default_project,
             )
         else:

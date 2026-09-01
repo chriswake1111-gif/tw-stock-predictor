@@ -452,6 +452,29 @@ def test_phase18_explicit_packaged_user_root_keeps_all_mutable_paths_contained(t
         assert path.is_relative_to(paths.user_root)
 
 
+def test_phase18_explicit_packaged_user_root_does_not_require_home_environment(
+    tmp_path,
+    monkeypatch,
+):
+    user_root = (tmp_path / "explicit-user").resolve()
+    monkeypatch.setattr(
+        Path,
+        "home",
+        classmethod(lambda cls: (_ for _ in ()).throw(RuntimeError("home unavailable"))),
+    )
+
+    paths = RuntimePaths.from_environment(
+        {"TW_STOCK_PACKAGED": "true"},
+        project_root=REPO_ROOT,
+        packaged_install_root=(tmp_path / "install").resolve(),
+        packaged_resource_root=(tmp_path / "resource").resolve(),
+        packaged_user_root=user_root,
+    )
+
+    assert paths.user_root == user_root
+    assert paths.runtime_dir == user_root / "runtime"
+
+
 def test_phase18_local_stop_event_is_graceful_control_plane(tmp_path):
     name = stop_event_name("phase18-test")
     event = LocalStopEvent.create(name)
