@@ -13,6 +13,7 @@ INFINITE = 0xFFFFFFFF
 WAIT_OBJECT_0 = 0x00000000
 WAIT_TIMEOUT = 0x00000102
 WAIT_FAILED = 0xFFFFFFFF
+STILL_ACTIVE = 259
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 PROCESS_TERMINATE = 0x0001
@@ -92,6 +93,8 @@ if os.name == "nt":
     _kernel32.WaitForSingleObject.restype = wintypes.DWORD
     _kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     _kernel32.OpenProcess.restype = wintypes.HANDLE
+    _kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    _kernel32.GetExitCodeProcess.restype = wintypes.BOOL
     _kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
     _kernel32.TerminateProcess.restype = wintypes.BOOL
     _kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
@@ -171,13 +174,17 @@ def wait_for_handle(handle: int, timeout_seconds: float | None = None) -> int:
 
 
 def process_exists(pid: int) -> bool:
-    handle = _handle_value(
-        _require_windows().OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-    )
+    kernel32 = _require_windows()
+    handle = _handle_value(kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid))
     if not handle:
         return False
-    close_handle(handle)
-    return True
+    try:
+        exit_code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return False
+        return int(exit_code.value) == STILL_ACTIVE
+    finally:
+        close_handle(handle)
 
 
 def open_process(pid: int, access: int) -> int | None:
@@ -278,6 +285,7 @@ __all__ = [
     "INFINITE",
     "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE",
     "ProcessTreeOwner",
+    "STILL_ACTIVE",
     "SYNCHRONIZE",
     "TH32CS_SNAPPROCESS",
     "WAIT_FAILED",

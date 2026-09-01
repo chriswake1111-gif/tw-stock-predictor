@@ -7,6 +7,7 @@ import importlib.util
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -359,10 +360,23 @@ def test_phase18_win32_interop_declares_pointer_sized_handle_signatures():
 
     assert win32._kernel32.CreateMutexW.restype is wintypes.HANDLE
     assert win32._kernel32.OpenProcess.restype is wintypes.HANDLE
+    assert win32._kernel32.GetExitCodeProcess.argtypes == [
+        wintypes.HANDLE,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
     assert win32._kernel32.CloseHandle.argtypes == [wintypes.HANDLE]
     assert ctypes.sizeof(wintypes.HANDLE) == ctypes.sizeof(ctypes.c_void_p)
     assert len(win32._IoCounters._fields_) == 6
     assert ctypes.sizeof(win32._IoCounters) == 6 * ctypes.sizeof(ctypes.c_ulonglong)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires native Win32 APIs")
+def test_phase18_win32_process_exists_rejects_terminated_process_with_open_handle():
+    from src.runtime import win32
+
+    process = subprocess.Popen([sys.executable, "-c", "pass"])
+    process.wait(timeout=5)
+    assert win32.process_exists(process.pid) is False
 
 
 def test_phase18_frozen_entrypoints_force_packaged_mode(monkeypatch):
