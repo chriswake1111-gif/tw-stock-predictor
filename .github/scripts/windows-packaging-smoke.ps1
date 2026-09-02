@@ -287,6 +287,24 @@ try {
     $daily = Invoke-WebRequest -Uri "$($descriptor.origin)/research/daily" -UseBasicParsing -TimeoutSec 15
     Assert-True ($daily.StatusCode -eq 200) "research/daily did not return HTTP 200"
 
+    # Phase 19 clean-machine data-operations verification
+    $dataStatus = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/status" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($null -ne $dataStatus.readiness) "data-operations status readiness missing"
+
+    $csrfRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/csrf-token" -UseBasicParsing -TimeoutSec 15 -SessionVariable "smokeSession"
+    Assert-True ($null -ne $csrfRes.csrf_token) "csrf token missing"
+
+    $syncHeaders = @{
+        "Origin" = "$($descriptor.origin)"
+        "X-CSRF-Token" = $csrfRes.csrf_token
+        "Content-Type" = "application/json"
+    }
+    $syncRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/sync" -Method POST -Headers $syncHeaders -Body "{}" -WebSession $smokeSession -TimeoutSec 15
+    Assert-True ($syncRes.status -eq "running") "sync did not start"
+
+    $enableRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/symbols/2330.TW/enable" -Method POST -Headers $syncHeaders -Body "{}" -WebSession $smokeSession -TimeoutSec 15
+    Assert-True ($enableRes.status -eq "running") "enable symbol did not start"
+
     $second = New-ProductProcess -FilePath $launcher
     Write-Host "Smoke scenario: single-instance rejection"
     $secondResult = Wait-ProductExit -Process $second -Scenario "single-instance rejection"

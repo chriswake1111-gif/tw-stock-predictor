@@ -40,7 +40,7 @@ def main() -> int:
             with sqlite3.connect(args.database) as conn:
                 conn.execute(
                     "DELETE FROM additive_schema_migrations WHERE version_id=?",
-                    ("20260828_20_phase14_third_code_review_remediation",),
+                    ("20260902_21_installed_data_operations",),
                 )
         result: object = {"status": "created", "state": args.command}
     elif args.command == "legacy":

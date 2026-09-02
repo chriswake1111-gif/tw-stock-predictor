@@ -116,7 +116,7 @@ def csrf_token(request: Request, response: Response):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     response.set_cookie(
         CSRF_COOKIE_NAME, session_id, httponly=True, samesite="strict",
-        secure=False, path="/api/v2/research",
+        secure=False, path="/api/v2",
     )
     response.headers["Cache-Control"] = "no-store"
     return {"csrf_token": token, "expires_at": expires.isoformat().replace("+00:00", "Z")}

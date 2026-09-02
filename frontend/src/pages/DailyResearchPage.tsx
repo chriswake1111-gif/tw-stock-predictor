@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useRef, useState, type FormEvent } from "react";
 import { evidenceApi } from "../api/client";
 import { researchWorkflowApi } from "../api/researchClient";
+import { DataOperationsModal } from "../components/DataOperationsModal";
 import type {
   DailyResearchItem,
   DailyResearchResponse,
@@ -73,6 +74,7 @@ export function DailyResearchPage() {
   const [message, setMessage] = useState("");
   const [detail, setDetail] = useState<DailyResearchResponse | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [isDataModalOpen, setIsDataModalOpen] = useState(false);
   const baselineKeys = useRef<Record<string, string>>({});
   const refreshKeys = useRef<Record<string, string>>({});
 
@@ -195,6 +197,12 @@ export function DailyResearchPage() {
           </p>
         </div>
       </header>
+
+      <div style={{ marginBottom: "16px" }}>
+        <button type="button" onClick={() => setIsDataModalOpen(true)}>
+          本機市場資料維護與同步
+        </button>
+      </div>
 
       <form className="research-controls daily-context-form" onSubmit={applyRequest}>
         <label>
@@ -338,6 +346,8 @@ export function DailyResearchPage() {
           <pre>{JSON.stringify(detail.item.comparison ?? null, null, 2)}</pre>
         </section>
       ) : null}
+
+      <DataOperationsModal isOpen={isDataModalOpen} onClose={() => setIsDataModalOpen(false)} />
     </div>
   );
 }

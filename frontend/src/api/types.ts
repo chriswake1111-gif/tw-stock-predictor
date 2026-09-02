@@ -664,3 +664,35 @@ export interface DailySnapshotRefreshResponse {
   snapshot: DailyResearchSnapshotReference;
   refresh_gate: Record<string, unknown>;
 }
+
+export interface DataOperationsActiveOperation {
+  operation_id: string;
+  operation_type: string;
+  status: string;
+  current_stage: string;
+  lease_expires_at: string;
+  created_at: string;
+}
+
+export interface DataOperationsStatusResponse {
+  readiness: "not_initialized" | "partial" | "ready" | "stale";
+  is_syncing: boolean;
+  active_operation: DataOperationsActiveOperation | null;
+  market_context_summary: {
+    calendar_status: string;
+    latest_eod_date: string | null;
+    m1b_latest_period: string | null;
+  };
+}
+
+export interface SyncTriggerResponse {
+  operation_id: string;
+  status: string;
+  current_stage: string;
+}
+
+export interface EnableSymbolResponse {
+  operation_id: string;
+  status: string;
+  current_stage: string;
+}

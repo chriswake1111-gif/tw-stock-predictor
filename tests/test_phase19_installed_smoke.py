@@ -1,4 +1,4 @@
-﻿"""Phase 19 Installed Data Synchronization / Clean-Machine and Upgrade Smoke Proofs."""
+"""Phase 19 Installed Data Synchronization / Clean-Machine and Upgrade Smoke Proofs."""
 
 from __future__ import annotations
 
@@ -107,10 +107,10 @@ def test_scenario_a_clean_machine_bootstrap(monkeypatch: pytest.MonkeyPatch) -> 
         assert startup_res.database.state is DatabaseState.KNOWN_V2_CURRENT
 
         app = create_app(settings=settings, startup_result=startup_res)
-        client = TestClient(app, base_url="http://127.0.0.1:8000")
+        client = TestClient(app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
 
         # 1. Initial status before sync
-        res_initial = client.get("/api/v2/installed-data/status")
+        res_initial = client.get("/api/v2/data-operations/status")
         assert res_initial.status_code == 200
         initial_data = res_initial.json()
         assert initial_data["readiness"] == InstalledReadiness.NOT_INITIALIZED.value
@@ -141,7 +141,7 @@ def test_scenario_a_clean_machine_bootstrap(monkeypatch: pytest.MonkeyPatch) -> 
         )
 
         # 3. Status after sync
-        res_after = client.get("/api/v2/installed-data/status")
+        res_after = client.get("/api/v2/data-operations/status")
         assert res_after.status_code == 200
         after_data = res_after.json()
         assert after_data["readiness"] == InstalledReadiness.READY.value
@@ -243,7 +243,7 @@ def test_scenario_b_upgraded_database_migration_21(monkeypatch: pytest.MonkeyPat
 
         # Preflight / API read verification (BC-2)
         app = create_app(settings=settings, startup_result=startup_res)
-        client = TestClient(app, base_url="http://127.0.0.1:8000")
+        client = TestClient(app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
 
         # BC-2: GET /api/v2/market-context/eod-close/as-of/2330.TW?knowledge_cutoff_at=2026-08-27T16:00:00Z
         res_eod = client.get(

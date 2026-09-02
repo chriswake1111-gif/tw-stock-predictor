@@ -10,18 +10,20 @@
 - [x] **WP03 Centralized Egress Transport**: 建立 `src/collectors/installed_egress_client.py`，嚴格限制 9 大白名單端點、TLS 憑證檢查、憑證脫敏、15MB 上限與 deadline 預算防護 (`tests/test_phase19_egress_security.py` 10/10 passed)。
 - [x] **WP04 Operation Repository & Startup Recovery**: 建立 `InstalledDataOperationsRepository`，管理連線生命週期與 atomic 斷電/崩潰復原 (`recover_interrupted_operations`)，並整合進 `StartupCoordinator._finalize_ready` (`tests/test_phase19_repository_lineage.py` 3/3 passed, `tests/test_phase19_startup_recovery.py` 2/2 passed)。
 - [x] **WP05 Stage Pipeline Orchestrator**: 建立 `InstalledDataSyncService`，依 6 大階段依序執行同步，每次寫入前重新查證 durable DB running 狀態並動態展期租約 (`tests/test_phase19_pipeline_orchestrator.py` 3/3 passed)。
-- [x] **WP06 Read-Only Status & Operations Endpoints**: 建立 `src/api/routes/v2_installed_data_operations.py`，公開唯讀 `/api/v2/installed-data/status` 與 `/operations/{id}`，並提供受保護之 `/sync`、`/bootstrap`、`/enable-symbol` 與 `/cancel` (`tests/test_phase19_api_endpoints.py` 3/3 passed)。
-- [x] **WP07 Clean-Machine & Upgrade Smoke Proofs**: 建立 `tests/test_phase19_installed_smoke.py` 與 `scripts/verify_phase19_installed_package.py`，驗證 Scenario A（全新安裝乾淨開機與同步）及 Scenario B（既有 DB 升級 Migration 21 並保留快照，通過 BC-2 與 BC-3 驗證）(2/2 passed)。
-- [x] **WP08 Full Regression**: 全系統回歸測試 857 passed, 0 failed in 161s (`python -m pytest -q`)。
+- [x] **WP06 Read-Only Status & Operations Endpoints**: 建立 `src/api/routes/installed_data_operations.py`，公開唯讀 `/api/v2/data-operations/status`、`/csrf-token`（發行 `path="/api/v2"` cookie）、`/operations/{id}`，並提供受保護之 `/sync`、`/cancel`、`/symbols/{symbol}/enable`；更新 `ResearchBoundaryMiddleware` 支援多前綴與獨立寫入閘門 (`tests/test_phase19_api_endpoints.py` 5/5 passed)。
+- [x] **WP07 React/TypeScript Frontend Integration**: 建立 `frontend/src/api/dataOperationsClient.ts`、`frontend/src/components/DataOperationsModal.tsx`，並在 `DailyResearchPage.tsx` 整合本機市場資料維護按鈕；所有前端測試通過（30 passed, 0 failed），正式 bundle 建置通過（PASS assets=2）。
+- [x] **WP08 Full Regression Matrix**: 全系統回歸測試 859 passed, 0 failed in 283.94s (`python -m pytest -q`)。
+- [x] **WP09 Windows Packaging CI & Clean-Machine Smoke**: 更新 `.github/workflows/windows-packaging.yml`、`.github/scripts/windows-packaging-smoke.ps1` 與 `.github/scripts/phase18-smoke-fixture.py`，完整涵蓋 Phase 19 檔案觸發、Migration 21 升級驗證與乾淨安裝 Scenario A/B 資料操作冒煙檢驗（31 passed, 0 failed in `test_phase18_runtime.py` + `test_phase19_installed_smoke.py`）。
 
 ### 核心安全與邊界聲明
 - 本系統持續嚴格遵守 `DOCS/PRODUCT_BOUNDARY.md`：無券商 API、無真實帳號連線、無自動交易或跟單功能。
 - 所有外網存取均經由 `InstalledEgressClient` 白名單端點，絕無任意 URL 存取。
 
 ### 下一步待辦
-- 提交 LUK-75 程式碼審查與合併。
+- 提交 Draft PR 與執行 Main CI 審核，進入 Phase 19 Code Review。
 
 ---
+
 
 ## 2026-09-01 交班：Layer 1 完成，準備小型 Productization Phase
 
