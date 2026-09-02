@@ -14,7 +14,10 @@ import re
 import sqlite3
 import time
 import uuid
-from typing import Any, Callable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Mapping
+
+if TYPE_CHECKING:
+    from src.domain.installed_data_operations import InstalledWriteAuthorization
 
 from src.collectors.eod_close_collectors import (
     TPEX_EOD_RESOURCE_ID,
@@ -116,6 +119,8 @@ class EodCloseIngestionService:
         foundation: DataFoundationRepository | None = None,
         repository: EodCloseRepository | None = None,
         failure_injector: Callable[[str], None] | None = None,
+        authorization: InstalledWriteAuthorization | None = None,
+        active_instance_id: str | None = None,
     ) -> None:
         self.db_path = db_path
         self.enabled = (
@@ -126,9 +131,22 @@ class EodCloseIngestionService:
         self.foundation = foundation or DataFoundationRepository(db_path)
         self.repository = repository or EodCloseRepository(db_path)
         self.failure_injector = failure_injector
+        self.authorization = authorization
+        self.active_instance_id = active_instance_id
 
-    def _require_enabled(self) -> None:
-        if not self.enabled:
+    def _require_enabled(
+        self,
+        resource_id: str | None = None,
+        current_instance_id: str | None = None,
+    ) -> None:
+        authorized_via_capability = (
+            self.authorization is not None
+            and self.authorization.is_valid(
+                current_instance_id or self.active_instance_id,
+                resource_id,
+            )
+        )
+        if not self.enabled and not authorized_via_capability:
             raise EodIngestionDisabled("EOD ingestion writes require explicit operator enablement")
 
     def _inject_failure(self, point: str) -> None:
@@ -730,14 +748,16 @@ class EodCloseIngestionService:
         identity_by_code: Mapping[str, Mapping[str, Any]] | None = None,
         classification_by_code: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        self._require_enabled()
         normalized_venue = str(venue).strip().upper()
         if normalized_venue == "TWSE":
+            resource_id = TWSE_EOD_RESOURCE_ID
             parsed = parse_twse_snapshot(payload)
         elif normalized_venue == "TPEX":
+            resource_id = TPEX_EOD_RESOURCE_ID
             parsed = parse_tpex_snapshot(payload)
         else:
             raise ValueError("venue must be TWSE or TPEX")
+        self._require_enabled(resource_id=resource_id)
         received = _now_or(received_at)
         published = normalize_utc_timestamp(source_published_at, "source_published_at") if source_published_at else None
         raw_payload_sha256 = _normalize_raw_hash(
@@ -954,7 +974,7 @@ class EodCloseIngestionService:
         idempotency_key: str | None = None,
         actor_id: str = "phase14-operator",
     ) -> dict[str, Any]:
-        self._require_enabled()
+        self._require_enabled(resource_id=TWSE_ISIN_CLASSIFICATION_RESOURCE_ID)
         normalized_venue = str(venue).strip().upper()
         expected_market = {"TWSE": "上市", "TPEX": "上櫃"}.get(normalized_venue)
         if expected_market is None:

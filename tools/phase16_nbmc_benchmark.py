@@ -1262,7 +1262,7 @@ def assert_fixture_semantics(path: Path, variant: str) -> None:
 def build_database(path: Path, variant: str) -> None:
     migration = apply_valuation_migration(str(path))
     applied_migrations = tuple(migration.get("applied_additive_migration_ids") or ())
-    if not applied_migrations or applied_migrations[-1] != BENCHMARK_MIGRATION_VERSION:
+    if not applied_migrations or BENCHMARK_MIGRATION_VERSION not in applied_migrations:
         raise RuntimeError("benchmark_migration_version_mismatch")
     with sqlite3.connect(path) as conn:
         conn.row_factory = sqlite3.Row

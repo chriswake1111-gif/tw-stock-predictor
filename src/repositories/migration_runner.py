@@ -44,6 +44,7 @@ ADDITIONAL_MIGRATION_IDS = (
     "20260827_18_phase14_eod_close_context",
     "20260827_19_phase14_second_code_review_remediation",
     "20260828_20_phase14_third_code_review_remediation",
+    "20260902_21_installed_data_operations",
 )
 ADDITIONAL_MIGRATION_FILES = tuple(
     Path(__file__).resolve().parents[2] / "migrations" / f"{migration_id}.sql"

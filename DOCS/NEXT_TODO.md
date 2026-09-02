@@ -1,5 +1,28 @@
 # 專案進度與下階段待辦 (NEXT_TODO.md)
 
+## 2026-09-03 交班：Phase 19 Installed Data Operations 實作完成 (LUK-75)
+
+### 當前狀態與成果
+
+- [x] **WP00 Preflight Contracts (STOP Gate)**: 驗證 Live signatures、ISIN 解析、Cross-venue rules、Fail-closed malformed parsing 與 Migration 20+21 不變量 (`tests/test_phase19_preflight_contracts.py` 6/6 passed)。
+- [x] **WP01 Domain Capabilities & Models**: 建立 `src/domain/installed_data_operations.py`、`migrations/20260902_21_installed_data_operations.sql`，並於 `migration_runner.py` 註冊 Migration 21。
+- [x] **WP02 Domain Write Guard Integration**: `UniverseWriteGuard` 與 `EodCloseIngestionService` 整合 Capability 租約檢驗 (`tests/test_phase19_domain_capabilities.py` 10/10 passed)。
+- [x] **WP03 Centralized Egress Transport**: 建立 `src/collectors/installed_egress_client.py`，嚴格限制 9 大白名單端點、TLS 憑證檢查、憑證脫敏、15MB 上限與 deadline 預算防護 (`tests/test_phase19_egress_security.py` 10/10 passed)。
+- [x] **WP04 Operation Repository & Startup Recovery**: 建立 `InstalledDataOperationsRepository`，管理連線生命週期與 atomic 斷電/崩潰復原 (`recover_interrupted_operations`)，並整合進 `StartupCoordinator._finalize_ready` (`tests/test_phase19_repository_lineage.py` 3/3 passed, `tests/test_phase19_startup_recovery.py` 2/2 passed)。
+- [x] **WP05 Stage Pipeline Orchestrator**: 建立 `InstalledDataSyncService`，依 6 大階段依序執行同步，每次寫入前重新查證 durable DB running 狀態並動態展期租約 (`tests/test_phase19_pipeline_orchestrator.py` 3/3 passed)。
+- [x] **WP06 Read-Only Status & Operations Endpoints**: 建立 `src/api/routes/v2_installed_data_operations.py`，公開唯讀 `/api/v2/installed-data/status` 與 `/operations/{id}`，並提供受保護之 `/sync`、`/bootstrap`、`/enable-symbol` 與 `/cancel` (`tests/test_phase19_api_endpoints.py` 3/3 passed)。
+- [x] **WP07 Clean-Machine & Upgrade Smoke Proofs**: 建立 `tests/test_phase19_installed_smoke.py` 與 `scripts/verify_phase19_installed_package.py`，驗證 Scenario A（全新安裝乾淨開機與同步）及 Scenario B（既有 DB 升級 Migration 21 並保留快照，通過 BC-2 與 BC-3 驗證）(2/2 passed)。
+- [x] **WP08 Full Regression**: 全系統回歸測試 857 passed, 0 failed in 161s (`python -m pytest -q`)。
+
+### 核心安全與邊界聲明
+- 本系統持續嚴格遵守 `DOCS/PRODUCT_BOUNDARY.md`：無券商 API、無真實帳號連線、無自動交易或跟單功能。
+- 所有外網存取均經由 `InstalledEgressClient` 白名單端點，絕無任意 URL 存取。
+
+### 下一步待辦
+- 提交 LUK-75 程式碼審查與合併。
+
+---
+
 ## 2026-09-01 交班：Layer 1 完成，準備小型 Productization Phase
 
 ### 當前基線
