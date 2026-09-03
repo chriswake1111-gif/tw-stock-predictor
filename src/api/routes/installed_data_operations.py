@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -19,7 +20,10 @@ from src.domain.installed_data_operations import (
 from src.repositories.installed_data_operations_repository import (
     InstalledDataOperationsRepository,
 )
-from src.services.installed_data_sync_service import InstalledDataSyncService
+from src.services.installed_data_sync_service import (
+    GLOBAL_OPERATION_DEADLINE_SECONDS,
+    InstalledDataSyncService,
+)
 
 router = APIRouter(prefix="/api/v2/data-operations", tags=["Data Operations"])
 
@@ -197,14 +201,17 @@ def trigger_sync_operation(
     except OperationActiveConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    deadline_sec = min(body.deadline_seconds, GLOBAL_OPERATION_DEADLINE_SECONDS)
+    deadline_monotonic = time.monotonic() + deadline_sec
+
     def _run_bg():
         try:
-            sync_svc.run_stage_prerequisites_calendar(op_id, auth)
-            sync_svc.run_stage_universe(op_id, auth)
-            sync_svc.run_stage_classification(op_id, auth, body.target_symbols)
-            sync_svc.run_stage_eod(op_id, auth)
-            sync_svc.run_stage_turnover_and_cbc(op_id, auth)
-            sync_svc.run_stage_projection(op_id, auth)
+            sync_svc.run_stage_prerequisites_calendar(op_id, auth, deadline_monotonic)
+            sync_svc.run_stage_universe(op_id, auth, deadline_monotonic)
+            sync_svc.run_stage_classification(op_id, auth, body.target_symbols, deadline_monotonic)
+            sync_svc.run_stage_eod(op_id, auth, deadline_monotonic)
+            sync_svc.run_stage_turnover_and_cbc(op_id, auth, deadline_monotonic)
+            sync_svc.run_stage_projection(op_id, auth, deadline_monotonic)
         except Exception as exc:
             auth.revoke()
             sync_svc.operation_repo.finalize_operation(
@@ -254,9 +261,12 @@ def enable_symbol(
     except OperationActiveConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    deadline_sec = GLOBAL_OPERATION_DEADLINE_SECONDS
+    deadline_monotonic = time.monotonic() + deadline_sec
+
     def _run_bg():
         try:
-            sync_svc.run_symbol_enablement_pipeline(op_id, auth, clean_sym)
+            sync_svc.run_symbol_enablement_pipeline(op_id, auth, clean_sym, deadline_monotonic)
         except Exception as exc:
             auth.revoke()
             sync_svc.operation_repo.finalize_operation(

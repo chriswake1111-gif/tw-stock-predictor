@@ -149,11 +149,15 @@ function Wait-ForDataOperation {
 
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
-        $op = Invoke-RestMethod -Uri "$Origin/api/v2/data-operations/operations/$OperationId" -UseBasicParsing -TimeoutSec 10
-        if ($op.status -in @("succeeded", "failed", "partial", "cancelled", "interrupted")) {
-            return $op
+        try {
+            $op = Invoke-RestMethod -Uri "$Origin/api/v2/data-operations/operations/$OperationId" -UseBasicParsing -TimeoutSec 30
+            if ($op.status -in @("succeeded", "failed", "partial", "cancelled", "interrupted")) {
+                return $op
+            }
+        } catch {
+            Write-Host "Transient poll attempt for $OperationId caught: $($_.Exception.Message)"
         }
-        Start-Sleep -Milliseconds 1000
+        Start-Sleep -Milliseconds 1500
     }
     Assert-True $false "operation $OperationId did not reach terminal state within $TimeoutSeconds seconds"
 }
