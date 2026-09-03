@@ -1016,7 +1016,11 @@ class EodCloseIngestionService:
             eligibility_status = (
                 EligibilityStatus.ELIGIBLE
                 if parsed.state == "accepted"
-                else EligibilityStatus.AWAITING_REVIEW
+                else (
+                    EligibilityStatus.AWAITING_REVIEW
+                    if quality_status == DataHealthStatus.AWAITING_REVIEW
+                    else EligibilityStatus.INELIGIBLE
+                )
             )
             revision = RawResourceRevision(
                 raw_resource_revision_id="pending",

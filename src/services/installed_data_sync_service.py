@@ -498,7 +498,10 @@ class InstalledDataSyncService:
                     max_retries=1,
                     deadline_monotonic=deadline_monotonic,
                 )
-                html_text = body.decode("utf-8", errors="replace")
+                try:
+                    html_text = body.decode("ms950")
+                except UnicodeDecodeError:
+                    html_text = body.decode("utf-8", errors="replace")
                 ingest_res = eod_svc.ingest_classification_html(
                     official_code=code,
                     html=html_text,
@@ -986,7 +989,10 @@ class InstalledDataSyncService:
             max_retries=1,
             deadline_monotonic=deadline_monotonic,
         )
-        html_text = body.decode("utf-8", errors="replace")
+        try:
+            html_text = body.decode("ms950")
+        except UnicodeDecodeError:
+            html_text = body.decode("utf-8", errors="replace")
         ingest_res = eod_svc.ingest_classification_html(
             official_code=code,
             html=html_text,

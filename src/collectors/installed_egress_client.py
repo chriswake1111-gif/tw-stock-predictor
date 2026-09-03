@@ -152,6 +152,8 @@ class InstalledEgressClient:
                     raise EgressSecurityError(
                         f"Unexpected redirect response (status {response.status_code}) rejected"
                     )
+                if response.status_code >= 400:
+                    response.raise_for_status()
 
                 # Stream and enforce 15MB payload cap
                 content_chunks: list[bytes] = []

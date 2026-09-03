@@ -144,13 +144,22 @@ function Wait-ForDataOperation {
     param(
         [string]$Origin,
         [string]$OperationId,
-        [int]$TimeoutSeconds = 120
+        [int]$TimeoutSeconds = 120,
+        [Microsoft.PowerShell.Commands.WebRequestSession]$WebSession = $null
     )
 
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
         try {
-            $op = Invoke-RestMethod -Uri "$Origin/api/v2/data-operations/operations/$OperationId" -UseBasicParsing -TimeoutSec 30
+            $restParams = @{
+                Uri = "$Origin/api/v2/data-operations/operations/$OperationId"
+                UseBasicParsing = $true
+                TimeoutSec = 30
+            }
+            if ($null -ne $WebSession) {
+                $restParams["WebSession"] = $WebSession
+            }
+            $op = Invoke-RestMethod @restParams
             if ($op.status -in @("succeeded", "failed", "partial", "cancelled", "interrupted")) {
                 return $op
             }
@@ -324,13 +333,13 @@ try {
     # 1. Trigger sync and poll to terminal completed state
     $syncRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/sync" -Method POST -Headers $syncHeaders -Body "{}" -WebSession $smokeSession -TimeoutSec 15
     Assert-True ($syncRes.status -in @("running", "succeeded")) "sync did not start"
-    $syncOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $syncRes.operation_id -TimeoutSeconds 120
+    $syncOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $syncRes.operation_id -TimeoutSeconds 120 -WebSession $smokeSession
     Assert-True ($syncOp.status -in @("succeeded", "partial")) "sync operation failed: $($syncOp.status)"
 
     # 2. Trigger on-demand symbol enablement and poll to terminal completed state
     $enableRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/symbols/2330.TW/enable" -Method POST -Headers $syncHeaders -Body "{}" -WebSession $smokeSession -TimeoutSec 15
     Assert-True ($enableRes.status -in @("running", "succeeded")) "enable symbol did not start"
-    $enableOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $enableRes.operation_id -TimeoutSeconds 120
+    $enableOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $enableRes.operation_id -TimeoutSeconds 120 -WebSession $smokeSession
     Assert-True ($enableOp.status -in @("succeeded", "partial")) "enable symbol operation failed: $($enableOp.status)"
 
     # 3. Assert BC-2: Authoritative Phase 14 EOD context proof
