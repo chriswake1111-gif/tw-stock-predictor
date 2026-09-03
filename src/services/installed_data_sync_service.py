@@ -911,6 +911,7 @@ class InstalledDataSyncService:
         self,
         operation_id: str,
         authorization: InstalledWriteAuthorization,
+        deadline_monotonic: float | None = None,
     ) -> None:
         self.operation_repo.transition_stage(
             operation_id,
