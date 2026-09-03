@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import inspect
 import shutil
+import sqlite3
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -220,6 +221,8 @@ class StartupCoordinator:
         legacy_archive: Path | None = None,
     ) -> StartupResult:
         try:
+            with sqlite3.connect(str(canonical)) as conn:
+                conn.execute("PRAGMA journal_mode = WAL")
             InstalledDataOperationsRepository(str(canonical)).recover_interrupted_operations()
         except Exception as exc:
             raise StartupFailure("operation_recovery_failed", str(exc)) from exc
