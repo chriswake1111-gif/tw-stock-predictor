@@ -158,6 +158,8 @@ class Launcher:
             self._command(),
             cwd=str(settings.paths.resource_root),
             env=environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             close_fds=True,
         )
 

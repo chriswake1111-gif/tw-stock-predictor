@@ -154,7 +154,7 @@ function Wait-ForDataOperation {
             $restParams = @{
                 Uri = "$Origin/api/v2/data-operations/operations/$OperationId"
                 UseBasicParsing = $true
-                TimeoutSec = 30
+                TimeoutSec = 10
             }
             if ($null -ne $WebSession) {
                 $restParams["WebSession"] = $WebSession
