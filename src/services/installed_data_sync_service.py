@@ -1563,31 +1563,22 @@ class InstalledDataSyncService:
         )
 
         # 6. Verify requested symbol became publicly eligible before marking accepted
-        obs = eod_repo.get_close_as_of(code, as_of_date=trade_date)
-        is_eligible = (
-            obs is not None
-            and obs.get("observation_status") == "available"
-            and obs.get("public_eligibility_status") == "eligible"
-            and obs.get("close_value") is not None
-        )
-        if not is_eligible:
-            with self.operation_repo._get_connection() as conn:
-                obs_row = conn.execute(
-                    """
-                    SELECT observation_status, public_eligibility_status, close_value
-                    FROM eod_close_observations
-                    WHERE official_code = ? AND trade_date = ?
-                    ORDER BY revision_number DESC LIMIT 1
-                    """,
-                    (code, trade_date),
-                ).fetchone()
-                if (
-                    obs_row
-                    and obs_row[0] == "available"
-                    and obs_row[1] == "eligible"
-                    and obs_row[2] is not None
-                ):
-                    is_eligible = True
+        with self.operation_repo._get_connection() as conn:
+            obs_row = conn.execute(
+                """
+                SELECT observation_status, public_eligibility_status, close_value
+                FROM eod_close_observations
+                WHERE official_code = ? AND trade_date = ?
+                ORDER BY revision_number DESC LIMIT 1
+                """,
+                (code, trade_date),
+            ).fetchone()
+            is_eligible = (
+                obs_row is not None
+                and obs_row[0] == "available"
+                and obs_row[1] == "eligible"
+                and obs_row[2] is not None
+            )
 
         if is_eligible:
             self.operation_repo.update_item(
