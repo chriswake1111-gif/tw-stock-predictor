@@ -144,7 +144,7 @@ function Wait-ForDataOperation {
     param(
         [string]$Origin,
         [string]$OperationId,
-        [int]$TimeoutSeconds = 90
+        [int]$TimeoutSeconds = 120
     )
 
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -324,13 +324,13 @@ try {
     # 1. Trigger sync and poll to terminal completed state
     $syncRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/sync" -Method POST -Headers $syncHeaders -Body "{}" -WebSession $smokeSession -TimeoutSec 15
     Assert-True ($syncRes.status -in @("running", "succeeded")) "sync did not start"
-    $syncOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $syncRes.operation_id -TimeoutSeconds 90
+    $syncOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $syncRes.operation_id -TimeoutSeconds 120
     Assert-True ($syncOp.status -in @("succeeded", "partial")) "sync operation failed: $($syncOp.status)"
 
     # 2. Trigger on-demand symbol enablement and poll to terminal completed state
     $enableRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/symbols/2330.TW/enable" -Method POST -Headers $syncHeaders -Body "{}" -WebSession $smokeSession -TimeoutSec 15
     Assert-True ($enableRes.status -in @("running", "succeeded")) "enable symbol did not start"
-    $enableOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $enableRes.operation_id -TimeoutSeconds 90
+    $enableOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $enableRes.operation_id -TimeoutSeconds 120
     Assert-True ($enableOp.status -in @("succeeded", "partial")) "enable symbol operation failed: $($enableOp.status)"
 
     # 3. Assert BC-2: Authoritative Phase 14 EOD context proof

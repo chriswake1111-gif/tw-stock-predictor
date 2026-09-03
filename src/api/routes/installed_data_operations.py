@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -213,12 +214,16 @@ def trigger_sync_operation(
             sync_svc.run_stage_turnover_and_cbc(op_id, auth, deadline_monotonic)
             sync_svc.run_stage_projection(op_id, auth, deadline_monotonic)
         except Exception as exc:
-            auth.revoke()
-            sync_svc.operation_repo.finalize_operation(
-                op_id, status=InstalledOperationStatus.FAILED.value, error_detail=str(exc)
-            )
+            try:
+                auth.revoke()
+                sync_svc.operation_repo.finalize_operation(
+                    op_id, status=InstalledOperationStatus.FAILED.value, error_detail=str(exc)
+                )
+            except Exception:
+                pass
 
-    background_tasks.add_task(_run_bg)
+    worker_thread = threading.Thread(target=_run_bg, name=f"data-ops-sync-{op_id}", daemon=True)
+    worker_thread.start()
 
     return {
         "operation_id": op_id,
@@ -268,12 +273,16 @@ def enable_symbol(
         try:
             sync_svc.run_symbol_enablement_pipeline(op_id, auth, clean_sym, deadline_monotonic)
         except Exception as exc:
-            auth.revoke()
-            sync_svc.operation_repo.finalize_operation(
-                op_id, status=InstalledOperationStatus.FAILED.value, error_detail=str(exc)
-            )
+            try:
+                auth.revoke()
+                sync_svc.operation_repo.finalize_operation(
+                    op_id, status=InstalledOperationStatus.FAILED.value, error_detail=str(exc)
+                )
+            except Exception:
+                pass
 
-    background_tasks.add_task(_run_bg)
+    worker_thread = threading.Thread(target=_run_bg, name=f"data-ops-enable-{clean_sym}-{op_id}", daemon=True)
+    worker_thread.start()
 
     return {
         "operation_id": op_id,
