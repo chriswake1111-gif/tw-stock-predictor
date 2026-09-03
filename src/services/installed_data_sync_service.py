@@ -1317,7 +1317,7 @@ class InstalledDataSyncService:
             knowledge_cutoff_at=now,
         )
         eod_repo = EodCloseRepository(self.db_path)
-        classification_context = eod_repo.latest_classification(code, venue=venue)
+        classification_context = eod_repo.latest_classification_for_code(code)
 
         # 5. Governed EOD materialization using approved Phase 14 path with bound contexts
         self._require_live_write_authorization(operation_id, authorization, venue_resource)
