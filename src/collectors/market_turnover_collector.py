@@ -35,12 +35,18 @@ class MarketTurnoverCollector:
     def _iso_date(value: str) -> str:
         text = str(value).strip().replace(".", "/")
         parts = text.split("/")
-        if len(parts) != 3:
-            return datetime.strptime(text, "%Y-%m-%d").date().isoformat()
-        year = int(parts[0])
-        if year < 1911:
-            year += 1911
-        return f"{year:04d}-{int(parts[1]):02d}-{int(parts[2]):02d}"
+        if len(parts) == 3:
+            year = int(parts[0])
+            if year < 1911:
+                year += 1911
+            return f"{year:04d}-{int(parts[1]):02d}-{int(parts[2]):02d}"
+        clean = text.replace("-", "").replace("/", "")
+        if len(clean) == 7 and clean.isdigit():
+            year = int(clean[:3]) + 1911
+            return f"{year:04d}-{int(clean[3:5]):02d}-{int(clean[5:7]):02d}"
+        if len(clean) == 8 and clean.isdigit():
+            return f"{clean[:4]}-{clean[4:6]}-{clean[6:8]}"
+        return datetime.strptime(text, "%Y-%m-%d").date().isoformat()
 
     @classmethod
     def parse_twse_openapi(cls, payload: list[dict], trade_date: str) -> float | None:
