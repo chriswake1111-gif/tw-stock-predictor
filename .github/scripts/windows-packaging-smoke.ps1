@@ -535,14 +535,18 @@ try {
     $summary | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $smokeSummaryPath -Encoding UTF8
     $summary | ConvertTo-Json -Depth 4
 }
-finally {
-    if ($Error.Count -gt 0) {
-        Write-Host "Diagnostic: Dumping logs on failure from RUNNER_TEMP ($env:RUNNER_TEMP)..."
-        Get-ChildItem -Path $env:RUNNER_TEMP -Recurse -Filter "*.log*" -File -ErrorAction SilentlyContinue | ForEach-Object {
+catch {
+    Write-Host "Smoke test failed: $_"
+    Write-Host "Diagnostic: Dumping logs on failure from UserRoot ($UserRoot)..."
+    Get-ChildItem -Path $UserRoot -Recurse -Filter "*.log" -File -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.Length -lt 1048576) {
             Write-Host "=== LOG: $($_.FullName) ==="
             Get-Content -LiteralPath $_.FullName -Tail 50 -ErrorAction SilentlyContinue
         }
     }
+    throw
+}
+finally {
     foreach ($process in @($first, $second, $stop, $orphan, $upgradeProcess, $legacyProcess, $corruptProcess, $recoveryProcess, $rejectedRecoveryProcess, $writerRejectedProcess, $logProcess)) {
         if ($null -ne $process -and -not $process.HasExited) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
