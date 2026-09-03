@@ -424,7 +424,8 @@ try {
     if (-not $marketDateB) {
         $marketDateB = [DateTime]::UtcNow.ToString("yyyy-MM-dd")
     }
-    $dailyContextRes = Invoke-RestMethod -Uri "$($upgradeDesc.origin)/api/v2/research/daily-context?market_date=$marketDateB&knowledge_cutoff_at=$cutoff" -UseBasicParsing -TimeoutSec 15
+    $cutoffB = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $dailyContextRes = Invoke-RestMethod -Uri "$($upgradeDesc.origin)/api/v2/research/daily-context?market_date=$marketDateB&knowledge_cutoff_at=$cutoffB" -UseBasicParsing -TimeoutSec 15
     Assert-True ($null -ne $dailyContextRes) "Scenario B: GET /api/v2/research/daily-context did not return data"
     Assert-True ($dailyContextRes.items.Count -ge 1) "Scenario B: daily-context items empty"
     $item2330 = $dailyContextRes.items | Where-Object { $_.canonical_symbol -eq "2330.TW" }
