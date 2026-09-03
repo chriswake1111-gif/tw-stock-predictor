@@ -171,7 +171,7 @@ class InstalledDataSyncService:
         self,
         operation_type: str = InstalledOperationType.SYNC.value,
         target_symbols: Sequence[str] | None = None,
-        lease_duration_seconds: int = 60,
+        lease_duration_seconds: int = 180,
     ) -> tuple[str, InstalledWriteAuthorization]:
         operation_id = f"op_{uuid4().hex}"
         op_row = self.operation_repo.create_operation(
@@ -258,7 +258,7 @@ class InstalledDataSyncService:
         new_lease = self.operation_repo.transition_stage(
             operation_id,
             InstalledOperationStage.UNIVERSE.value,
-            lease_duration_seconds=60,
+            lease_duration_seconds=180,
             expected_owner_id=authorization.instance_id,
         )
         authorization.refresh_lease(new_lease)
@@ -693,7 +693,7 @@ class InstalledDataSyncService:
         new_lease = self.operation_repo.transition_stage(
             operation_id,
             InstalledOperationStage.CLASSIFICATION.value,
-            lease_duration_seconds=60,
+            lease_duration_seconds=180,
             expected_owner_id=authorization.instance_id,
         )
         authorization.refresh_lease(new_lease)
@@ -783,7 +783,7 @@ class InstalledDataSyncService:
         new_lease = self.operation_repo.transition_stage(
             operation_id,
             InstalledOperationStage.EOD.value,
-            lease_duration_seconds=60,
+            lease_duration_seconds=180,
             expected_owner_id=authorization.instance_id,
         )
         authorization.refresh_lease(new_lease)
@@ -794,6 +794,18 @@ class InstalledDataSyncService:
             active_instance_id=self.runtime_instance_id,
         )
 
+        now = utc_now_timestamp()
+        universe_repo = UniverseRepository(self.db_path)
+        eod_repo = EodCloseRepository(self.db_path)
+
+        with self.operation_repo._get_connection() as conn:
+            classified_codes = {
+                str(r[0])
+                for r in conn.execute(
+                    "SELECT DISTINCT official_code FROM eod_product_classification_evidence WHERE classification_state = 'accepted'"
+                ).fetchall()
+            }
+
         # 1. TWSE EOD
         self._require_live_write_authorization(operation_id, authorization, TWSE_EOD_RESOURCE_ID)
         twse_item = f"item_{uuid4().hex}"
@@ -803,9 +815,6 @@ class InstalledDataSyncService:
             stage=InstalledOperationStage.EOD.value,
             resource_id=TWSE_EOD_RESOURCE_ID,
         )
-        now = utc_now_timestamp()
-        universe_repo = UniverseRepository(self.db_path)
-        eod_repo = EodCloseRepository(self.db_path)
 
         try:
             status_code, body, _ = self.egress_client.fetch(
@@ -814,10 +823,11 @@ class InstalledDataSyncService:
             )
             payload = json.loads(body.decode("utf-8")) if body else []
             parsed_twse = parse_twse_snapshot(payload)
-            codes = [row.official_code for row in parsed_twse.rows]
+            snapshot_codes = {row.official_code for row in parsed_twse.rows}
+            target_codes = classified_codes & snapshot_codes
             identity_by_code = {}
             classification_by_code = {}
-            for code in codes:
+            for code in target_codes:
                 try:
                     ident = universe_repo.identity_context_for_eod(
                         canonical_symbol=f"{code}.TW",
@@ -857,6 +867,13 @@ class InstalledDataSyncService:
             raise
 
         # 2. TPEx EOD
+        new_lease = self.operation_repo.extend_lease(
+            operation_id,
+            lease_duration_seconds=180,
+            expected_owner_id=authorization.instance_id,
+        )
+        authorization.refresh_lease(new_lease)
+
         self._require_live_write_authorization(operation_id, authorization, TPEX_EOD_RESOURCE_ID)
         tpex_item = f"item_{uuid4().hex}"
         self.operation_repo.create_item(
@@ -872,10 +889,11 @@ class InstalledDataSyncService:
             )
             payload = json.loads(body.decode("utf-8")) if body else []
             parsed_tpex = parse_tpex_snapshot(payload)
-            codes = [row.official_code for row in parsed_tpex.rows]
+            snapshot_codes_tpex = {row.official_code for row in parsed_tpex.rows}
+            target_codes_tpex = classified_codes & snapshot_codes_tpex
             identity_by_code_tpex = {}
             classification_by_code_tpex = {}
-            for code in codes:
+            for code in target_codes_tpex:
                 try:
                     ident = universe_repo.identity_context_for_eod(
                         canonical_symbol=f"{code}.TWO",
@@ -923,7 +941,7 @@ class InstalledDataSyncService:
         new_lease = self.operation_repo.transition_stage(
             operation_id,
             InstalledOperationStage.TURNOVER_AND_CBC.value,
-            lease_duration_seconds=60,
+            lease_duration_seconds=180,
             expected_owner_id=authorization.instance_id,
         )
         authorization.refresh_lease(new_lease)
@@ -1344,7 +1362,7 @@ class InstalledDataSyncService:
         self.operation_repo.transition_stage(
             operation_id,
             InstalledOperationStage.PROJECTION.value,
-            lease_duration_seconds=60,
+            lease_duration_seconds=180,
             expected_owner_id=authorization.instance_id,
         )
         self._require_live_write_authorization(operation_id, authorization, "twse.trading-calendar")
