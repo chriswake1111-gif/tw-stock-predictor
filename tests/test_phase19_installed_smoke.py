@@ -95,7 +95,7 @@ def _create_packaged_settings(tmp_path: Path) -> tuple[RuntimeSettings, StartupC
 
 def test_scenario_a_clean_machine_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
     """Scenario A: Clean machine bootstrap in packaged mode."""
-    with tempfile.TemporaryDirectory() as temp_dir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
         tmp_path = Path(temp_dir)
         settings, coordinator = _create_packaged_settings(tmp_path)
         monkeypatch.setenv("DATABASE_PATH", str(settings.paths.database_path))
@@ -177,11 +177,20 @@ def test_scenario_a_clean_machine_bootstrap(monkeypatch: pytest.MonkeyPatch) -> 
         assert after_data["readiness"] == InstalledReadiness.READY.value
         assert after_data["market_context_summary"]["latest_eod_date"] == "2026-08-27"
 
-        # 4. Daily research & analysis regression reads (BC-3)
         res_analysis = client.get("/api/v2/analysis/2330.TW")
         assert res_analysis.status_code == 200
         analysis_data = res_analysis.json()
         assert analysis_data.get("symbol") == "2330.TW" or "symbol" in analysis_data or "status" in analysis_data
+
+        import sqlite3
+        conn = sqlite3.connect(str(settings.paths.database_path))
+        try:
+            fks = conn.execute("PRAGMA foreign_key_check").fetchall()
+        finally:
+            conn.close()
+        assert fks == []
+        db_classification = classify_database(str(settings.paths.database_path))
+        assert db_classification.state is DatabaseState.KNOWN_V2_CURRENT
 
         del client
         del app
@@ -191,7 +200,7 @@ def test_scenario_a_clean_machine_bootstrap(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_scenario_b_upgraded_database_migration_21(monkeypatch: pytest.MonkeyPatch) -> None:
     """Scenario B: Existing database upgraded with Migration 21 preserving data and backups."""
-    with tempfile.TemporaryDirectory() as temp_dir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
         tmp_path = Path(temp_dir)
         settings, coordinator = _create_packaged_settings(tmp_path)
         db_path = settings.paths.database_path
