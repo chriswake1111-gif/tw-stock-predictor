@@ -1,6 +1,28 @@
 -- Phase 19: Installed Data Synchronization / Local Data Operations V1
 -- Additive tables for parent data operation lifecycle and child item tracking.
 
+INSERT INTO data_resources (
+    resource_id, provider_id, logical_resource_key, resource_type, market,
+    expected_frequency, freshness_policy, parser_id, parser_version,
+    schema_version, storage_policy, enabled, created_at, payload_fingerprint
+)
+VALUES
+(
+    'twse.t187ap03_L', 'twse-universe-official',
+    'twse.t187ap03_L.installed', 'symbol_master', 'TWSE', 'periodic',
+    'unknown_without_official_cadence', 'twse_universe_master', '1',
+    'phase13', 'archive_raw', 1, '2026-09-01T00:00:00Z',
+    '1e3665c8f7640f7031de4c8526eeace37873f34df8adebdff32792f94e8e808d'
+),
+(
+    'tpex.mopsfin_t187ap03_O', 'tpex-universe-official',
+    'tpex.mopsfin_t187ap03_O.installed', 'symbol_master', 'TPEX', 'periodic',
+    'unknown_without_official_cadence', 'tpex_universe_master', '1',
+    'phase13', 'archive_raw', 1, '2026-09-01T00:00:00Z',
+    '2feb2b0cd9e896bc8a3d0e3b77410557a0d3357ea3bdd94c7ede4e1274265d66'
+)
+ON CONFLICT(resource_id) DO NOTHING;
+
 CREATE TABLE installed_data_operations (
     operation_id TEXT PRIMARY KEY,
     operation_type TEXT NOT NULL CHECK (

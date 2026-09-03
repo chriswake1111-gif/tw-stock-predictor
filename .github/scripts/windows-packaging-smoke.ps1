@@ -426,6 +426,11 @@ try {
     }
     $dailyContextRes = Invoke-RestMethod -Uri "$($upgradeDesc.origin)/api/v2/research/daily-context?market_date=$marketDateB&knowledge_cutoff_at=$cutoff" -UseBasicParsing -TimeoutSec 15
     Assert-True ($null -ne $dailyContextRes) "Scenario B: GET /api/v2/research/daily-context did not return data"
+    Assert-True ($dailyContextRes.items.Count -ge 1) "Scenario B: daily-context items empty"
+    $item2330 = $dailyContextRes.items | Where-Object { $_.canonical_symbol -eq "2330.TW" }
+    Assert-True ($null -ne $item2330) "Scenario B: 2330.TW not found in daily-context items"
+    Assert-True ($item2330.watchlist_reference.symbol -eq "2330.TW") "Scenario B: 2330.TW queue item identity mismatch"
+    Assert-True ($item2330.quality.phase14_status -eq "available") "Scenario B: 2330.TW did not consume materialized Phase14 EOD evidence"
 
     # Verify /research/daily UI bookmarkable route
     $dailyUiRes = Invoke-WebRequest -Uri "$($upgradeDesc.origin)/research/daily" -UseBasicParsing -TimeoutSec 15

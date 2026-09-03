@@ -1,4 +1,4 @@
-﻿"""Tests for Phase 19 InstalledDataOperationsRepository and item lineage."""
+"""Tests for Phase 19 InstalledDataOperationsRepository and item lineage."""
 
 from __future__ import annotations
 
@@ -122,4 +122,29 @@ def test_item_lineage_tracking(repo: tuple[InstalledDataOperationsRepository, st
     items = repository.list_items_by_operation("op-items")
     assert len(items) == 1
     assert items[0].item_id == "item-1"
+    assert items[0].resource_id == "twse.trading-calendar"
     assert items[0].status == InstalledItemStatus.ACCEPTED.value
+
+    # Test exact Phase 19 capability IDs for universe
+    item2 = repository.create_item(
+        item_id="item-2",
+        operation_id="op-items",
+        stage=InstalledOperationStage.UNIVERSE.value,
+        resource_id="twse.t187ap03_L",
+    )
+    assert item2.resource_id == "twse.t187ap03_L"
+
+    item3 = repository.create_item(
+        item_id="item-3",
+        operation_id="op-items",
+        stage=InstalledOperationStage.UNIVERSE.value,
+        resource_id="tpex.mopsfin_t187ap03_O",
+    )
+    assert item3.resource_id == "tpex.mopsfin_t187ap03_O"
+
+    items_all = repository.list_items_by_operation("op-items")
+    assert [i.resource_id for i in items_all] == [
+        "twse.trading-calendar",
+        "twse.t187ap03_L",
+        "tpex.mopsfin_t187ap03_O",
+    ]

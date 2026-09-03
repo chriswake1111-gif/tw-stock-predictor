@@ -12,6 +12,7 @@ import pytest
 
 from src.collectors.installed_egress_client import InstalledEgressClient
 from src.domain.installed_data_operations import (
+    InstalledItemStatus,
     InstalledOperationStatus,
     InstalledOperationType,
     OperationActiveConflict,
@@ -23,6 +24,7 @@ from src.repositories.installed_data_operations_repository import (
 from src.repositories.migration_runner import apply_valuation_migration
 from src.services.installed_data_sync_service import InstalledDataSyncService
 from src.services.installed_readiness_evaluator import evaluate_installed_readiness
+from src.services.production_ingestion_service import ProductionIngestionService
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
@@ -149,3 +151,112 @@ def test_end_to_end_sync_pipeline(
 
     items = repo.list_items_by_operation(op_id)
     assert len(items) >= 4
+
+
+def test_universe_ingestion_records_row_errors_and_partial_status(
+    sync_env: tuple[InstalledDataSyncService, InstalledDataOperationsRepository, str]
+) -> None:
+    service, repo, db_path = sync_env
+
+    # 1 valid row (2330) and 1 invalid row (missing/empty code)
+    twse_universe_json = json.dumps([
+        {"公司代號": "2330", "公司名稱": "台積電"},
+        {"公司代號": "INVALID_CODE_EXTRA_LONG_12345", "公司名稱": "測試無效"},
+    ], ensure_ascii=False).encode("utf-8")
+
+    service.egress_client.fetch.side_effect = lambda url, **kw: (
+        (200, twse_universe_json, {}) if "t187ap03_L" in url
+        else (200, b"[]", {})
+    )
+
+    op_id, auth = service.create_operation_and_capability()
+    try:
+        service.run_stage_universe(op_id, auth)
+    except Exception:
+        pass
+
+    items = repo.list_items_by_operation(op_id)
+    twse_item = next((it for it in items if it.resource_id == "twse.t187ap03_L"), None)
+    assert twse_item is not None
+    # Must record actual status and error details without swallowing
+    assert twse_item.status in (InstalledItemStatus.PARTIAL.value, InstalledItemStatus.FAILED.value)
+    assert twse_item.error_detail is not None
+
+
+def test_cbc_failure_records_failed_status_and_does_not_block_sync(
+    sync_env: tuple[InstalledDataSyncService, InstalledDataOperationsRepository, str]
+) -> None:
+    service, repo, db_path = sync_env
+    ProductionIngestionService(db_path)
+
+    twse_turnover_json = (FIXTURES / "twse_fmtqik_openapi.json").read_bytes()
+    tpex_turnover_json = (FIXTURES / "tpex_daily_trading_index_openapi.json").read_bytes()
+    # Malformed CBC payload
+    corrupt_cbc_json = b"{\"data\": {\"dataSets\": [\"corrupt_string_not_list\"]}}"
+
+    def custom_fetch(url: str, **kwargs):
+        if "FMTQIK" in url:
+            return 200, twse_turnover_json, {}
+        if "tpex_daily_trading_index" in url:
+            return 200, tpex_turnover_json, {}
+        if "EF15M01" in url:
+            return 200, corrupt_cbc_json, {}
+        return 200, b"[]", {}
+
+    service.egress_client.fetch.side_effect = custom_fetch
+
+    op_id, auth = service.create_operation_and_capability()
+    # Turnover and CBC stage should succeed without raising, but record CBC as failed/partial
+    service.run_stage_turnover_and_cbc(op_id, auth)
+
+    items = repo.list_items_by_operation(op_id)
+    cbc_item = next((it for it in items if it.resource_id == "cbc.m1b"), None)
+    assert cbc_item is not None
+    assert cbc_item.status in (InstalledItemStatus.FAILED.value, InstalledItemStatus.PARTIAL.value)
+
+
+def test_symbol_enablement_fails_closed_on_missing_session(
+    sync_env: tuple[InstalledDataSyncService, InstalledDataOperationsRepository, str]
+) -> None:
+    service, repo, _ = sync_env
+
+    eod_json = (FIXTURES / "eod_twse_stock_day_all.json").read_bytes()
+    isin_html = (FIXTURES / "eod_isin_supported.html").read_bytes()
+
+    service.egress_client.fetch.side_effect = lambda url, **kw: (
+        (200, isin_html, {}) if "isin" in url
+        else (200, eod_json, {}) if "STOCK_DAY_ALL" in url
+        else (200, b"[]", {})
+    )
+
+    op_id, auth = service.create_operation_and_capability()
+    # Since calendar was not run, calendar session for the date is missing -> must fail closed
+    with pytest.raises(ValueError, match="not an authorized trading session"):
+        service.run_symbol_enablement_pipeline(op_id, auth, symbol="2330.TW")
+
+
+def test_symbol_enablement_fails_closed_on_missing_identity(
+    sync_env: tuple[InstalledDataSyncService, InstalledDataOperationsRepository, str]
+) -> None:
+    service, repo, _ = sync_env
+
+    # Valid calendar session
+    calendar_json = json.dumps([
+        {"Name": "交易日", "Date": "1150827", "Weekday": "四", "Description": "正常交易日"},
+    ], ensure_ascii=False).encode("utf-8")
+    eod_json = (FIXTURES / "eod_twse_stock_day_all.json").read_bytes()
+    isin_html = (FIXTURES / "eod_isin_supported.html").read_bytes()
+
+    service.egress_client.fetch.side_effect = lambda url, **kw: (
+        (200, calendar_json, {}) if "holiday" in url
+        else (200, isin_html, {}) if "isin" in url
+        else (200, eod_json, {}) if "STOCK_DAY_ALL" in url
+        else (200, b"[]", {})
+    )
+
+    op_id, auth = service.create_operation_and_capability()
+    service.run_stage_prerequisites_calendar(op_id, auth)
+
+    # Without universe ingestion, persisted identity context is missing -> must fail closed
+    with pytest.raises(ValueError, match="persisted identity context missing"):
+        service.run_symbol_enablement_pipeline(op_id, auth, symbol="2330.TW")

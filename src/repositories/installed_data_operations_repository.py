@@ -21,16 +21,6 @@ from src.domain.installed_data_operations import (
 from src.domain.valuation import utc_now_timestamp
 
 
-_CAPABILITY_TO_STORAGE_RESOURCE = {
-    "twse.t187ap03_L": "twse-universe-master",
-    "tpex.mopsfin_t187ap03_O": "tpex-universe-master",
-}
-_STORAGE_TO_CAPABILITY_RESOURCE = {
-    "twse-universe-master": "twse.t187ap03_L",
-    "tpex-universe-master": "tpex.mopsfin_t187ap03_O",
-}
-
-
 class InstalledDataOperationsRepository:
     def __init__(self, db_path: str = "data/cache.db") -> None:
         self.db_path = db_path
@@ -276,7 +266,6 @@ class InstalledDataOperationsRepository:
         self, item_id: str, operation_id: str, stage: str, resource_id: str
     ) -> InstalledItemRow:
         now = utc_now_timestamp()
-        storage_resource = _CAPABILITY_TO_STORAGE_RESOURCE.get(resource_id, resource_id)
         with self._get_connection() as conn:
             conn.execute(
                 """
@@ -285,7 +274,7 @@ class InstalledDataOperationsRepository:
                     status, attempt_count, created_at
                 ) VALUES (?, ?, ?, ?, 'running', 1, ?)
                 """,
-                (item_id, operation_id, stage, storage_resource, now),
+                (item_id, operation_id, stage, resource_id, now),
             )
         return InstalledItemRow(
             item_id=item_id,
@@ -343,9 +332,7 @@ class InstalledDataOperationsRepository:
                     item_id=row["item_id"],
                     operation_id=row["operation_id"],
                     stage=row["stage"],
-                    resource_id=_STORAGE_TO_CAPABILITY_RESOURCE.get(
-                        row["resource_id"], row["resource_id"]
-                    ),
+                    resource_id=row["resource_id"],
                     status=row["status"],
                     raw_resource_revision_id=row["raw_resource_revision_id"],
                     ingestion_run_id=row["ingestion_run_id"],

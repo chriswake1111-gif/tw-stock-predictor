@@ -67,7 +67,10 @@ from src.collectors.eod_close_collectors import (
 from src.domain.liquidity import MarketTurnoverObservation, M1BMonthlyObservation
 from src.repositories.eod_close_repository import EodCloseRepository
 from src.repositories.liquidity_repository import LiquidityRepository
-from src.repositories.universe_repository import UniverseRepository
+from src.repositories.universe_repository import (
+    UniverseIdentityRepository,
+    UniverseRepository,
+)
 from src.services.installed_readiness_evaluator import evaluate_installed_readiness
 from src.services.universe_write_guard import UniverseOperatorContext, UniverseWriteGuard
 
@@ -260,13 +263,13 @@ class InstalledDataSyncService:
         )
         authorization.refresh_lease(new_lease)
         foundation = DataFoundationRepository(self.db_path)
-        universe_repo = UniverseRepository(
-            self.db_path,
-            guard=UniverseWriteGuard(
-                authorization=authorization,
-                active_instance_id=authorization.instance_id,
-            ),
+        u_guard = UniverseWriteGuard(
+            authorization=authorization,
+            active_instance_id=authorization.instance_id,
         )
+        universe_repo = UniverseRepository(self.db_path, guard=u_guard)
+        identity_repo = UniverseIdentityRepository(self.db_path, guard=u_guard)
+        universe_ingestion = UniverseIngestionService(self.db_path, guard=u_guard)
 
         # 1. TWSE Universe
         twse_resource = "twse.t187ap03_L"
@@ -279,6 +282,7 @@ class InstalledDataSyncService:
             stage=InstalledOperationStage.UNIVERSE.value,
             resource_id=twse_resource,
         )
+        child_run_id = f"run_twse_univ_{uuid4().hex[:10]}"
         try:
             status_code, body, _ = self.egress_client.fetch(
                 "https://openapi.twse.com.tw/v1/opendata/t187ap03_L",
@@ -288,7 +292,6 @@ class InstalledDataSyncService:
             payload = json.loads(body.decode("utf-8")) if body else []
             rows = parse_universe_payload("twse.t187ap03_L", payload)
 
-            child_run_id = f"run_twse_univ_{uuid4().hex[:10]}"
             child_run = IngestionRun(
                 ingestion_run_id=child_run_id,
                 started_at=utc_now_timestamp(),
@@ -326,6 +329,9 @@ class InstalledDataSyncService:
                 lock_id=f"lock_{child_run_id}",
                 audit_id=f"audit_{child_run_id}",
             )
+            twse_accepted = 0
+            twse_rejected = 0
+            twse_errors: list[str] = []
             for r in rows:
                 c = str(
                     r.get("official_code")
@@ -343,7 +349,7 @@ class InstalledDataSyncService:
                     or ""
                 ).strip()
                 try:
-                    anchor = universe_repo.allocate_instrument(
+                    anchor = identity_repo.get_or_create(
                         venue="TWSE",
                         official_code=c,
                         source_identity=f"twse:{c}",
@@ -351,7 +357,11 @@ class InstalledDataSyncService:
                         source_reference="twse.t187ap03_L",
                         context=u_ctx_twse,
                     )
-                    universe_repo.add_revision(
+                    universe_ingestion.ingest_revision(
+                        context=u_ctx_twse,
+                        idempotency_key=f"univ-twse-{c}-{raw['raw_resource_revision_id']}",
+                        raw_resource_revision_id=raw["raw_resource_revision_id"],
+                        raw_payload_sha256=raw_hash,
                         instrument_id=anchor["instrument_id"],
                         resource_id="twse-universe-master",
                         logical_revision_key=f"twse:{c}:master",
@@ -375,8 +385,6 @@ class InstalledDataSyncService:
                             "raw_resource_revision_id": raw["raw_resource_revision_id"],
                             "raw_payload_sha256": raw_hash,
                         },
-                        context=u_ctx_twse,
-                        idempotency_key=f"univ-twse-{c}-{raw_hash[:8]}",
                     )
                     universe_repo.add_lifecycle_event(
                         instrument_id=anchor["instrument_id"],
@@ -396,9 +404,25 @@ class InstalledDataSyncService:
                         reason="initial_master_normal",
                         context=u_ctx_twse,
                     )
+                    twse_accepted += 1
                 except Exception as exc:
-                    print(f"TWSE ROW EXC: {type(exc)} {exc}")
+                    twse_rejected += 1
+                    twse_errors.append(f"{c}: {exc}")
 
+            if twse_rejected == 0 and twse_accepted > 0:
+                twse_item_status = IngestionItemStatus.ACCEPTED
+                twse_inst_status = InstalledItemStatus.ACCEPTED.value
+                twse_run_status = IngestionRunStatus.SUCCEEDED
+            elif twse_accepted > 0:
+                twse_item_status = IngestionItemStatus.PARTIAL
+                twse_inst_status = InstalledItemStatus.PARTIAL.value
+                twse_run_status = IngestionRunStatus.PARTIAL
+            else:
+                twse_item_status = IngestionItemStatus.REJECTED
+                twse_inst_status = InstalledItemStatus.FAILED.value
+                twse_run_status = IngestionRunStatus.FAILED
+
+            twse_reason = "; ".join(twse_errors[:5]) if twse_errors else ("ingestion rejected" if twse_rejected > 0 else None)
             child_item_id = f"item_twse_univ_{uuid4().hex[:10]}"
             foundation.add_run_item(
                 IngestionRunItem(
@@ -408,14 +432,15 @@ class InstalledDataSyncService:
                     resource_id=twse_storage,
                     started_at=child_run.started_at,
                     completed_at=now,
-                    status=IngestionItemStatus.ACCEPTED,
-                    quality_status=DataHealthStatus.FRESH,
+                    status=twse_item_status,
+                    quality_status=DataHealthStatus.FRESH if twse_rejected == 0 else DataHealthStatus.PARTIAL,
                     raw_payload_sha256=raw_hash,
                     parser_version="1",
                     schema_fingerprint=sha256_text("phase13"),
                     record_count=len(rows),
-                    accepted_count=len(rows),
-                    rejected_count=0,
+                    accepted_count=twse_accepted,
+                    rejected_count=twse_rejected,
+                    reason=twse_reason,
                 )
             )
             foundation.complete_run(
@@ -427,19 +452,24 @@ class InstalledDataSyncService:
                     runner_version=child_run.runner_version,
                     requested_resources=child_run.requested_resources,
                     actor_id=child_run.actor_id,
-                    status=IngestionRunStatus.SUCCEEDED,
+                    status=twse_run_status,
                 )
             )
             foundation.release_resource_lock(twse_storage, child_run_id)
 
             self.operation_repo.update_item(
                 item_id=twse_item_id,
-                status=InstalledItemStatus.ACCEPTED.value,
+                status=twse_inst_status,
                 ingestion_run_id=child_run_id,
                 ingestion_run_item_id=child_item_id,
                 raw_resource_revision_id=raw["raw_resource_revision_id"],
+                error_detail="; ".join(twse_errors[:5]) if twse_errors else None,
             )
         except Exception as exc:
+            try:
+                foundation.release_resource_lock(twse_storage, child_run_id)
+            except Exception:
+                pass
             self.operation_repo.update_item(
                 item_id=twse_item_id,
                 status=InstalledItemStatus.FAILED.value,
@@ -458,6 +488,7 @@ class InstalledDataSyncService:
             stage=InstalledOperationStage.UNIVERSE.value,
             resource_id=tpex_resource,
         )
+        child_run_id = f"run_tpex_univ_{uuid4().hex[:10]}"
         try:
             status_code, body, _ = self.egress_client.fetch(
                 "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O",
@@ -467,7 +498,6 @@ class InstalledDataSyncService:
             payload = json.loads(body.decode("utf-8")) if body else []
             rows = parse_universe_payload("tpex.mopsfin_t187ap03_O", payload)
 
-            child_run_id = f"run_tpex_univ_{uuid4().hex[:10]}"
             child_run = IngestionRun(
                 ingestion_run_id=child_run_id,
                 started_at=utc_now_timestamp(),
@@ -505,6 +535,9 @@ class InstalledDataSyncService:
                 lock_id=f"lock_{child_run_id}",
                 audit_id=f"audit_{child_run_id}",
             )
+            tpex_accepted = 0
+            tpex_rejected = 0
+            tpex_errors: list[str] = []
             for r in rows:
                 c = str(
                     r.get("official_code")
@@ -522,7 +555,7 @@ class InstalledDataSyncService:
                     or ""
                 ).strip()
                 try:
-                    anchor = universe_repo.allocate_instrument(
+                    anchor = identity_repo.get_or_create(
                         venue="TPEX",
                         official_code=c,
                         source_identity=f"tpex:{c}",
@@ -530,7 +563,11 @@ class InstalledDataSyncService:
                         source_reference="tpex.mopsfin_t187ap03_O",
                         context=u_ctx_tpex,
                     )
-                    universe_repo.add_revision(
+                    universe_ingestion.ingest_revision(
+                        context=u_ctx_tpex,
+                        idempotency_key=f"univ-tpex-{c}-{raw['raw_resource_revision_id']}",
+                        raw_resource_revision_id=raw["raw_resource_revision_id"],
+                        raw_payload_sha256=raw_hash,
                         instrument_id=anchor["instrument_id"],
                         resource_id="tpex-universe-master",
                         logical_revision_key=f"tpex:{c}:master",
@@ -554,8 +591,6 @@ class InstalledDataSyncService:
                             "raw_resource_revision_id": raw["raw_resource_revision_id"],
                             "raw_payload_sha256": raw_hash,
                         },
-                        context=u_ctx_tpex,
-                        idempotency_key=f"univ-tpex-{c}-{raw_hash[:8]}",
                     )
                     universe_repo.add_lifecycle_event(
                         instrument_id=anchor["instrument_id"],
@@ -575,9 +610,25 @@ class InstalledDataSyncService:
                         reason="initial_master_normal",
                         context=u_ctx_tpex,
                     )
-                except Exception:
-                    pass
+                    tpex_accepted += 1
+                except Exception as exc:
+                    tpex_rejected += 1
+                    tpex_errors.append(f"{c}: {exc}")
 
+            if tpex_rejected == 0 and tpex_accepted > 0:
+                tpex_item_status = IngestionItemStatus.ACCEPTED
+                tpex_inst_status = InstalledItemStatus.ACCEPTED.value
+                tpex_run_status = IngestionRunStatus.SUCCEEDED
+            elif tpex_accepted > 0:
+                tpex_item_status = IngestionItemStatus.PARTIAL
+                tpex_inst_status = InstalledItemStatus.PARTIAL.value
+                tpex_run_status = IngestionRunStatus.PARTIAL
+            else:
+                tpex_item_status = IngestionItemStatus.REJECTED
+                tpex_inst_status = InstalledItemStatus.FAILED.value
+                tpex_run_status = IngestionRunStatus.FAILED
+
+            tpex_reason = "; ".join(tpex_errors[:5]) if tpex_errors else ("ingestion rejected" if tpex_rejected > 0 else None)
             child_item_id = f"item_tpex_univ_{uuid4().hex[:10]}"
             foundation.add_run_item(
                 IngestionRunItem(
@@ -587,14 +638,15 @@ class InstalledDataSyncService:
                     resource_id=tpex_storage,
                     started_at=child_run.started_at,
                     completed_at=now,
-                    status=IngestionItemStatus.ACCEPTED,
-                    quality_status=DataHealthStatus.FRESH,
+                    status=tpex_item_status,
+                    quality_status=DataHealthStatus.FRESH if tpex_rejected == 0 else DataHealthStatus.PARTIAL,
                     raw_payload_sha256=raw_hash,
                     parser_version="1",
                     schema_fingerprint=sha256_text("phase13"),
                     record_count=len(rows),
-                    accepted_count=len(rows),
-                    rejected_count=0,
+                    accepted_count=tpex_accepted,
+                    rejected_count=tpex_rejected,
+                    reason=tpex_reason,
                 )
             )
             foundation.complete_run(
@@ -606,19 +658,24 @@ class InstalledDataSyncService:
                     runner_version=child_run.runner_version,
                     requested_resources=child_run.requested_resources,
                     actor_id=child_run.actor_id,
-                    status=IngestionRunStatus.SUCCEEDED,
+                    status=tpex_run_status,
                 )
             )
             foundation.release_resource_lock(tpex_storage, child_run_id)
 
             self.operation_repo.update_item(
                 item_id=tpex_item_id,
-                status=InstalledItemStatus.ACCEPTED.value,
+                status=tpex_inst_status,
                 ingestion_run_id=child_run_id,
                 ingestion_run_item_id=child_item_id,
                 raw_resource_revision_id=raw["raw_resource_revision_id"],
+                error_detail="; ".join(tpex_errors[:5]) if tpex_errors else None,
             )
         except Exception as exc:
+            try:
+                foundation.release_resource_lock(tpex_storage, child_run_id)
+            except Exception:
+                pass
             self.operation_repo.update_item(
                 item_id=tpex_item_id,
                 status=InstalledItemStatus.FAILED.value,
@@ -746,16 +803,37 @@ class InstalledDataSyncService:
             stage=InstalledOperationStage.EOD.value,
             resource_id=TWSE_EOD_RESOURCE_ID,
         )
+        now = utc_now_timestamp()
+        universe_repo = UniverseRepository(self.db_path)
+        eod_repo = EodCloseRepository(self.db_path)
+
         try:
             status_code, body, _ = self.egress_client.fetch(
                 "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
                 deadline_monotonic=deadline_monotonic,
             )
             payload = json.loads(body.decode("utf-8")) if body else []
+            parsed_twse = parse_twse_snapshot(payload)
+            codes = [row.official_code for row in parsed_twse.rows]
+            identity_by_code = {}
+            classification_by_code = {}
+            for code in codes:
+                ident = universe_repo.identity_context_for_eod(
+                    canonical_symbol=f"{code}.TW",
+                    knowledge_cutoff_at=now,
+                )
+                if ident:
+                    identity_by_code[code] = ident
+                classif = eod_repo.latest_classification_for_code(code)
+                if classif:
+                    classification_by_code[code] = classif
+
             eod_res = eod_svc.ingest_price_payload(
                 venue="TWSE",
                 payload=payload,
                 actor_id=authorization.actor_id,
+                identity_by_code=identity_by_code,
+                classification_by_code=classification_by_code,
             )
             self.operation_repo.update_item(
                 item_id=twse_item,
@@ -787,10 +865,27 @@ class InstalledDataSyncService:
                 deadline_monotonic=deadline_monotonic,
             )
             payload = json.loads(body.decode("utf-8")) if body else []
+            parsed_tpex = parse_tpex_snapshot(payload)
+            codes = [row.official_code for row in parsed_tpex.rows]
+            identity_by_code_tpex = {}
+            classification_by_code_tpex = {}
+            for code in codes:
+                ident = universe_repo.identity_context_for_eod(
+                    canonical_symbol=f"{code}.TWO",
+                    knowledge_cutoff_at=now,
+                )
+                if ident:
+                    identity_by_code_tpex[code] = ident
+                classif = eod_repo.latest_classification_for_code(code)
+                if classif:
+                    classification_by_code_tpex[code] = classif
+
             eod_res = eod_svc.ingest_price_payload(
                 venue="TPEX",
                 payload=payload,
                 actor_id=authorization.actor_id,
+                identity_by_code=identity_by_code_tpex,
+                classification_by_code=classification_by_code_tpex,
             )
             self.operation_repo.update_item(
                 item_id=tpex_item,
@@ -995,24 +1090,29 @@ class InstalledDataSyncService:
             # Materialize combined turnover observations into LiquidityRepository
             liquidity_repo = LiquidityRepository(self.db_path)
             dates_twse: dict[str, float] = {}
+            twse_row_errors = 0
             for r in twse_payload:
                 try:
                     d = MarketTurnoverCollector._iso_date(r.get("Date", ""))
                     val = float(str(r.get("TradeValue", 0)).replace(",", ""))
                     dates_twse[d] = val
                 except Exception:
-                    pass
+                    twse_row_errors += 1
 
             dates_tpex: dict[str, float] = {}
+            tpex_row_errors = 0
             for r in tpex_payload:
                 try:
                     d = MarketTurnoverCollector._iso_date(r.get("Date", ""))
                     val = float(str(r.get("TradeAmount", 0)).replace(",", ""))
                     dates_tpex[d] = val
                 except Exception:
-                    pass
+                    tpex_row_errors += 1
 
-            for d in sorted(set(dates_twse.keys()) | set(dates_tpex.keys())):
+            turnover_added = 0
+            turnover_rejected = 0
+            all_turnover_dates = sorted(set(dates_twse.keys()) | set(dates_tpex.keys()))
+            for d in all_turnover_dates:
                 tw_val = dates_twse.get(d)
                 tp_val = dates_tpex.get(d)
                 try:
@@ -1031,12 +1131,20 @@ class InstalledDataSyncService:
                         revision=1,
                     )
                     liquidity_repo.add_turnover(obs)
+                    turnover_added += 1
                 except Exception:
-                    pass
+                    turnover_rejected += 1
+
+            if turnover_added > 0 and turnover_rejected == 0 and twse_row_errors == 0 and tpex_row_errors == 0:
+                tpex_turn_status = InstalledItemStatus.ACCEPTED.value
+            elif turnover_added > 0:
+                tpex_turn_status = InstalledItemStatus.PARTIAL.value
+            else:
+                tpex_turn_status = InstalledItemStatus.FAILED.value
 
             self.operation_repo.update_item(
                 item_id=item_tpex_turnover,
-                status=InstalledItemStatus.ACCEPTED.value,
+                status=tpex_turn_status,
                 ingestion_run_id=child_run_id,
                 ingestion_run_item_id=child_item_id,
                 raw_resource_revision_id=raw["raw_resource_revision_id"],
@@ -1059,13 +1167,13 @@ class InstalledDataSyncService:
             stage=InstalledOperationStage.TURNOVER_AND_CBC.value,
             resource_id=cbc_resource,
         )
+        child_run_id = f"run_cbc_m1b_{uuid4().hex[:10]}"
         try:
             status_code, body, _ = self.egress_client.fetch(
                 "https://cpx.cbc.gov.tw/API/DataAPI/Get?FileName=EF15M01",
                 deadline_monotonic=deadline_monotonic,
             )
             raw_hash = sha256_text(body.decode("utf-8"))
-            child_run_id = f"run_cbc_m1b_{uuid4().hex[:10]}"
             child_run = IngestionRun(
                 ingestion_run_id=child_run_id,
                 started_at=utc_now_timestamp(),
@@ -1098,6 +1206,10 @@ class InstalledDataSyncService:
 
             # Materialize CBC M1B into LiquidityRepository
             liquidity_repo = LiquidityRepository(self.db_path)
+            cbc_parsed = 0
+            cbc_accepted = 0
+            cbc_rejected = 0
+            cbc_error = None
             try:
                 cbc_payload = json.loads(body.decode("utf-8")) if body else {}
                 data_rows = []
@@ -1106,7 +1218,7 @@ class InstalledDataSyncService:
                     data_rows = official_data.get("dataSets", [])
                 else:
                     data_rows = cbc_payload.get("result", {}).get("data", [])
-
+                cbc_parsed = len(data_rows)
                 for r in data_rows:
                     if not r or not isinstance(r, list) or len(r) < 2:
                         continue
@@ -1118,6 +1230,7 @@ class InstalledDataSyncService:
                     try:
                         val = float(val_str)
                     except ValueError:
+                        cbc_rejected += 1
                         continue
                     m1b_obs = M1BMonthlyObservation(
                         period=period,
@@ -1133,10 +1246,28 @@ class InstalledDataSyncService:
                     )
                     try:
                         liquidity_repo.add_m1b(m1b_obs)
-                    except Exception:
-                        pass
+                        cbc_accepted += 1
+                    except Exception as exc:
+                        cbc_rejected += 1
             except Exception as cbc_parse_exc:
-                logger.debug("CBC parsing error: %s", cbc_parse_exc)
+                cbc_error = str(cbc_parse_exc)
+
+            if cbc_error or (cbc_parsed > 0 and cbc_accepted == 0):
+                cbc_item_status = IngestionItemStatus.REJECTED
+                cbc_inst_status = InstalledItemStatus.FAILED.value
+                cbc_run_status = IngestionRunStatus.FAILED
+            elif cbc_rejected > 0:
+                cbc_item_status = IngestionItemStatus.PARTIAL
+                cbc_inst_status = InstalledItemStatus.PARTIAL.value
+                cbc_run_status = IngestionRunStatus.PARTIAL
+            elif cbc_accepted > 0:
+                cbc_item_status = IngestionItemStatus.ACCEPTED
+                cbc_inst_status = InstalledItemStatus.ACCEPTED.value
+                cbc_run_status = IngestionRunStatus.SUCCEEDED
+            else:
+                cbc_item_status = IngestionItemStatus.PARTIAL
+                cbc_inst_status = InstalledItemStatus.PARTIAL.value
+                cbc_run_status = IngestionRunStatus.PARTIAL
 
             child_item_id = f"item_cbc_m1b_{uuid4().hex[:10]}"
             foundation.add_run_item(
@@ -1147,11 +1278,15 @@ class InstalledDataSyncService:
                     resource_id=cbc_resource,
                     started_at=child_run.started_at,
                     completed_at=now,
-                    status=IngestionItemStatus.ACCEPTED,
-                    quality_status=DataHealthStatus.FRESH,
+                    status=cbc_item_status,
+                    quality_status=DataHealthStatus.FRESH if cbc_rejected == 0 and not cbc_error else DataHealthStatus.PARTIAL,
                     raw_payload_sha256=raw_hash,
                     parser_version="1",
                     schema_fingerprint=sha256_text("1"),
+                    record_count=cbc_parsed,
+                    accepted_count=cbc_accepted,
+                    rejected_count=cbc_rejected,
+                    reason=cbc_error or ("ingestion rejected" if cbc_rejected > 0 else None),
                 )
             )
             foundation.complete_run(
@@ -1163,23 +1298,28 @@ class InstalledDataSyncService:
                     runner_version=child_run.runner_version,
                     requested_resources=child_run.requested_resources,
                     actor_id=child_run.actor_id,
-                    status=IngestionRunStatus.SUCCEEDED,
+                    status=cbc_run_status,
                 )
             )
             foundation.release_resource_lock(cbc_resource, child_run_id)
 
             self.operation_repo.update_item(
                 item_id=item_cbc,
-                status=InstalledItemStatus.ACCEPTED.value,
+                status=cbc_inst_status,
                 ingestion_run_id=child_run_id,
                 ingestion_run_item_id=child_item_id,
                 raw_resource_revision_id=raw["raw_resource_revision_id"],
+                error_detail=cbc_error,
             )
         except Exception as exc:
-            # Non-blocking
+            try:
+                foundation.release_resource_lock(cbc_resource, child_run_id)
+            except Exception:
+                pass
+            # Non-blocking for sync, but record failure accurately
             self.operation_repo.update_item(
                 item_id=item_cbc,
-                status=InstalledItemStatus.PARTIAL.value,
+                status=InstalledItemStatus.FAILED.value,
                 error_detail=str(exc),
             )
 
@@ -1302,11 +1442,17 @@ class InstalledDataSyncService:
 
         with self.operation_repo._get_connection() as conn:
             cal_row = conn.execute(
-                "SELECT session_status FROM trading_calendar_revisions WHERE trade_date = ? AND status = 'available'",
+                """
+                SELECT session_status FROM trading_calendar_revisions
+                WHERE trade_date = ? AND status = 'available'
+                """,
                 (trade_date,),
             ).fetchone()
-            if cal_row and cal_row[0] != "trading":
-                raise ValueError(f"source session {trade_date} is not an authorized trading session: status={cal_row[0]}")
+            if not cal_row or cal_row[0] not in ("trading", "special"):
+                raise ValueError(
+                    f"source session {trade_date} is not an authorized trading session: "
+                    f"status={cal_row[0] if cal_row else 'missing'}"
+                )
 
         # 4. Reload persisted identity and classification proof
         now = utc_now_timestamp()
@@ -1316,8 +1462,21 @@ class InstalledDataSyncService:
             canonical_symbol=canonical_sym,
             knowledge_cutoff_at=now,
         )
+        if not identity_context:
+            raise ValueError(
+                f"persisted identity context missing for symbol {canonical_sym}"
+            )
+
         eod_repo = EodCloseRepository(self.db_path)
         classification_context = eod_repo.latest_classification_for_code(code)
+        if (
+            not classification_context
+            or classification_context.get("classification_state") != "accepted"
+        ):
+            raise ValueError(
+                f"persisted accepted classification context missing for symbol {canonical_sym}: "
+                f"state={classification_context.get('classification_state') if classification_context else 'missing'}"
+            )
 
         # 5. Governed EOD materialization using approved Phase 14 path with bound contexts
         self._require_live_write_authorization(operation_id, authorization, venue_resource)
@@ -1332,16 +1491,55 @@ class InstalledDataSyncService:
             venue=venue,
             payload=eod_payload,
             actor_id=authorization.actor_id,
-            identity_by_code={code: identity_context} if identity_context else None,
-            classification_by_code={code: classification_context} if classification_context else None,
+            identity_by_code={code: identity_context},
+            classification_by_code={code: classification_context},
         )
-        self.operation_repo.update_item(
-            item_id=eod_item,
-            status=InstalledItemStatus.ACCEPTED.value,
-            ingestion_run_id=eod_res.get("run_id"),
-            ingestion_run_item_id=eod_res.get("item_id"),
-            raw_resource_revision_id=eod_res.get("raw_resource_revision_id"),
+
+        # 6. Verify requested symbol became publicly eligible before marking accepted
+        obs = eod_repo.get_close_as_of(code, as_of_date=trade_date)
+        is_eligible = (
+            obs is not None
+            and obs.get("observation_status") == "available"
+            and obs.get("public_eligibility_status") == "eligible"
+            and obs.get("close_value") is not None
         )
+        if not is_eligible:
+            with self.operation_repo._get_connection() as conn:
+                obs_row = conn.execute(
+                    """
+                    SELECT observation_status, public_eligibility_status, close_value
+                    FROM eod_close_observations
+                    WHERE official_code = ? AND trade_date = ?
+                    ORDER BY revision_number DESC LIMIT 1
+                    """,
+                    (code, trade_date),
+                ).fetchone()
+                if (
+                    obs_row
+                    and obs_row[0] == "available"
+                    and obs_row[1] == "eligible"
+                    and obs_row[2] is not None
+                ):
+                    is_eligible = True
+
+        if is_eligible:
+            self.operation_repo.update_item(
+                item_id=eod_item,
+                status=InstalledItemStatus.ACCEPTED.value,
+                ingestion_run_id=eod_res.get("run_id"),
+                ingestion_run_item_id=eod_res.get("item_id"),
+                raw_resource_revision_id=eod_res.get("raw_resource_revision_id"),
+            )
+        else:
+            self.operation_repo.update_item(
+                item_id=eod_item,
+                status=InstalledItemStatus.PARTIAL.value,
+                ingestion_run_id=eod_res.get("run_id"),
+                ingestion_run_item_id=eod_res.get("item_id"),
+                raw_resource_revision_id=eod_res.get("raw_resource_revision_id"),
+                error_detail=f"symbol {code} did not become publicly eligible after eod materialization",
+            )
+            raise ValueError(f"symbol {code} did not become publicly eligible after eod materialization")
 
         # 6. Readiness refresh & completion
         self.run_stage_projection(operation_id, authorization)

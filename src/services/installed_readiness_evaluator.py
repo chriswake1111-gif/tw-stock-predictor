@@ -14,10 +14,10 @@ def evaluate_installed_readiness(
 ) -> tuple[InstalledReadiness, dict[str, Any]]:
     """Evaluates positive domain proof across the five required pillars:
 
-    1. Calendar session proof (accepted trading calendar entries exist)
+    1. Calendar session proof (positive trading sessions exist)
     2. Identity epoch proof (universe instruments with identity_epoch >= 1)
-    3. Listing/Trading state proof (lifecycle or operational events recorded)
-    4. Eligible EOD proof (valid EOD close observations/snapshots exist)
+    3. Listing AND Trading state proof (both listed lifecycle AND normal operational events exist)
+    4. Eligible EOD proof (eligible public EOD close observations exist)
     5. Venue turnover proof (market_turnover_daily contains both TWSE and TPEx turnover)
 
     CBC M1B is supplementary/nonblocking.
@@ -27,27 +27,24 @@ def evaluate_installed_readiness(
     calendar_count = 0
     latest_calendar_trading_date: str | None = None
     try:
-        row = conn.execute("SELECT COUNT(*) FROM trading_calendar_revisions").fetchone()
-        calendar_count = int(row[0]) if row else 0
-
-        # Query latest trading date in calendar
         if as_of_date:
             row_cal = conn.execute(
                 """
-                SELECT MAX(trade_date) FROM trading_calendar_revisions
-                WHERE session_status = 'trading' AND trade_date <= ?
+                SELECT COUNT(*), MAX(trade_date) FROM trading_calendar_revisions
+                WHERE session_status IN ('trading', 'special') AND status = 'available' AND trade_date <= ?
                 """,
                 (as_of_date,),
             ).fetchone()
         else:
             row_cal = conn.execute(
                 """
-                SELECT MAX(trade_date) FROM trading_calendar_revisions
-                WHERE session_status = 'trading'
+                SELECT COUNT(*), MAX(trade_date) FROM trading_calendar_revisions
+                WHERE session_status IN ('trading', 'special') AND status = 'available'
                 """
             ).fetchone()
         if row_cal and row_cal[0]:
-            latest_calendar_trading_date = str(row_cal[0])
+            calendar_count = int(row_cal[0])
+            latest_calendar_trading_date = str(row_cal[1]) if row_cal[1] else None
     except sqlite3.Error:
         pass
 
@@ -60,50 +57,71 @@ def evaluate_installed_readiness(
     except sqlite3.Error:
         pass
 
-    listing_trading_count = 0
+    listing_count = 0
     try:
-        row_life = conn.execute("SELECT COUNT(*) FROM universe_lifecycle_events").fetchone()
+        row_life = conn.execute(
+            "SELECT COUNT(*) FROM universe_lifecycle_events WHERE event_type = 'listed' AND status = 'accepted'"
+        ).fetchone()
         if row_life and row_life[0]:
-            listing_trading_count += int(row_life[0])
+            listing_count = int(row_life[0])
     except sqlite3.Error:
         pass
 
+    operational_count = 0
     try:
-        row_op = conn.execute("SELECT COUNT(*) FROM universe_operational_state_events").fetchone()
+        row_op = conn.execute(
+            "SELECT COUNT(*) FROM universe_operational_state_events WHERE trading_state = 'normal' AND status = 'accepted'"
+        ).fetchone()
         if row_op and row_op[0]:
-            listing_trading_count += int(row_op[0])
+            operational_count = int(row_op[0])
     except sqlite3.Error:
         pass
 
     eod_count = 0
     latest_eod_date: str | None = None
     try:
-        # Check source snapshots or observations
-        row_snap = conn.execute(
-            "SELECT COUNT(*), MAX(source_trade_date) FROM eod_close_source_snapshots WHERE source_trade_date_status = 'valid'"
-        ).fetchone()
-        if row_snap and row_snap[0] is not None and int(row_snap[0]) > 0:
-            eod_count = int(row_snap[0])
-            latest_eod_date = str(row_snap[1]) if row_snap[1] else None
+        if as_of_date:
+            row_obs = conn.execute(
+                """
+                SELECT COUNT(*), MAX(trade_date) FROM eod_close_observations
+                WHERE observation_status = 'available' AND public_eligibility_status = 'eligible'
+                  AND close_value IS NOT NULL AND trade_date <= ?
+                """,
+                (as_of_date,),
+            ).fetchone()
         else:
             row_obs = conn.execute(
-                "SELECT COUNT(*), MAX(trade_date) FROM eod_close_observations WHERE status = 'available'"
+                """
+                SELECT COUNT(*), MAX(trade_date) FROM eod_close_observations
+                WHERE observation_status = 'available' AND public_eligibility_status = 'eligible'
+                  AND close_value IS NOT NULL
+                """
             ).fetchone()
-            if row_obs and row_obs[0] is not None:
-                eod_count = int(row_obs[0])
-                latest_eod_date = str(row_obs[1]) if row_obs[1] else None
+        if row_obs and row_obs[0] is not None:
+            eod_count = int(row_obs[0])
+            latest_eod_date = str(row_obs[1]) if row_obs[1] else None
     except sqlite3.Error:
         pass
 
     turnover_count = 0
     try:
-        row = conn.execute(
-            """
-            SELECT COUNT(*) FROM market_turnover_daily
-            WHERE twse_turnover_twd IS NOT NULL AND tpex_turnover_twd IS NOT NULL
-            """
-        ).fetchone()
-        turnover_count = int(row[0]) if row else 0
+        if as_of_date:
+            row_turn = conn.execute(
+                """
+                SELECT COUNT(*) FROM market_turnover_daily
+                WHERE twse_turnover_twd IS NOT NULL AND tpex_turnover_twd IS NOT NULL
+                  AND trade_date <= ?
+                """,
+                (as_of_date,),
+            ).fetchone()
+        else:
+            row_turn = conn.execute(
+                """
+                SELECT COUNT(*) FROM market_turnover_daily
+                WHERE twse_turnover_twd IS NOT NULL AND tpex_turnover_twd IS NOT NULL
+                """
+            ).fetchone()
+        turnover_count = int(row_turn[0]) if row_turn else 0
     except sqlite3.Error:
         pass
 
@@ -121,18 +139,20 @@ def evaluate_installed_readiness(
         "calendar_sessions": calendar_count,
         "latest_calendar_trading_date": latest_calendar_trading_date,
         "identity_instruments": identity_count,
-        "listing_trading_events": listing_trading_count,
+        "listing_events": listing_count,
+        "operational_events": operational_count,
+        "listing_trading_events": listing_count + operational_count,
         "eod_observations": eod_count,
         "latest_eod_date": latest_eod_date,
         "turnover_records": turnover_count,
         "cbc_m1b_period": cbc_period,
     }
 
-    # Evaluation
     all_zero = (
         calendar_count == 0
         and identity_count == 0
-        and listing_trading_count == 0
+        and listing_count == 0
+        and operational_count == 0
         and eod_count == 0
         and turnover_count == 0
     )
@@ -142,7 +162,8 @@ def evaluate_installed_readiness(
     all_pillars_proven = (
         calendar_count > 0
         and identity_count > 0
-        and listing_trading_count > 0
+        and listing_count > 0
+        and operational_count > 0
         and eod_count > 0
         and turnover_count > 0
     )
