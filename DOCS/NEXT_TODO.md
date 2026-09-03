@@ -1,26 +1,34 @@
 # 專案進度與下階段待辦 (NEXT_TODO.md)
 
-## 2026-09-03 交班：Phase 19 Installed Data Operations 實作完成 (LUK-75)
+## 2026-09-03 交班：Phase 19 First Code Review 修正完成，雙綠燈通過，進入 Second Review (LUK-75)
 
 ### 當前狀態與成果
 
-- [x] **WP00 Preflight Contracts (STOP Gate)**: 驗證 Live signatures、ISIN 解析、Cross-venue rules、Fail-closed malformed parsing 與 Migration 20+21 不變量 (`tests/test_phase19_preflight_contracts.py` 6/6 passed)。
-- [x] **WP01 Domain Capabilities & Models**: 建立 `src/domain/installed_data_operations.py`、`migrations/20260902_21_installed_data_operations.sql`，並於 `migration_runner.py` 註冊 Migration 21。
-- [x] **WP02 Domain Write Guard Integration**: `UniverseWriteGuard` 與 `EodCloseIngestionService` 整合 Capability 租約檢驗 (`tests/test_phase19_domain_capabilities.py` 10/10 passed)。
-- [x] **WP03 Centralized Egress Transport**: 建立 `src/collectors/installed_egress_client.py`，嚴格限制 9 大白名單端點、TLS 憑證檢查、憑證脫敏、15MB 上限與 deadline 預算防護 (`tests/test_phase19_egress_security.py` 10/10 passed)。
-- [x] **WP04 Operation Repository & Startup Recovery**: 建立 `InstalledDataOperationsRepository`，管理連線生命週期與 atomic 斷電/崩潰復原 (`recover_interrupted_operations`)，並整合進 `StartupCoordinator._finalize_ready` (`tests/test_phase19_repository_lineage.py` 3/3 passed, `tests/test_phase19_startup_recovery.py` 2/2 passed)。
-- [x] **WP05 Stage Pipeline Orchestrator**: 建立 `InstalledDataSyncService`，依 6 大階段依序執行同步，每次寫入前重新查證 durable DB running 狀態並動態展期租約 (`tests/test_phase19_pipeline_orchestrator.py` 3/3 passed)。
-- [x] **WP06 Read-Only Status & Operations Endpoints**: 建立 `src/api/routes/installed_data_operations.py`，公開唯讀 `/api/v2/data-operations/status`、`/csrf-token`（發行 `path="/api/v2"` cookie）、`/operations/{id}`，並提供受保護之 `/sync`、`/cancel`、`/symbols/{symbol}/enable`；更新 `ResearchBoundaryMiddleware` 支援多前綴與獨立寫入閘門 (`tests/test_phase19_api_endpoints.py` 5/5 passed)。
-- [x] **WP07 React/TypeScript Frontend Integration**: 建立 `frontend/src/api/dataOperationsClient.ts`、`frontend/src/components/DataOperationsModal.tsx`，並在 `DailyResearchPage.tsx` 整合本機市場資料維護按鈕；所有前端測試通過（30 passed, 0 failed），正式 bundle 建置通過（PASS assets=2）。
-- [x] **WP08 Full Regression Matrix**: 全系統回歸測試 859 passed, 0 failed in 283.94s (`python -m pytest -q`)。
-- [x] **WP09 Windows Packaging CI & Clean-Machine Smoke**: 更新 `.github/workflows/windows-packaging.yml`、`.github/scripts/windows-packaging-smoke.ps1` 與 `.github/scripts/phase18-smoke-fixture.py`，完整涵蓋 Phase 19 檔案觸發、Migration 21 升級驗證與乾淨安裝 Scenario A/B 資料操作冒煙檢驗（31 passed, 0 failed in `test_phase18_runtime.py` + `test_phase19_installed_smoke.py`）。
+- [x] **First Code Review 10 大審查項全部修正完畢 (P1-1 ~ P1-9, P2)**:
+  - P1-1: Lineage 與外鍵完整性修復，解耦 `operation_id` 與 child `ingestion_run_id`，移除 Migration 21 靜態寫入衝突。
+  - P1-2: 6 大階段依序調度與 8 大資料集完整同步（TWSE 日曆、上市/上櫃 Universe、動態觀察名單分類、上市/上櫃收盤行情、成交金額、CBC M1B 非阻塞同步、Domain readiness 正向投影）。
+  - P1-3: 個股隨選啟用（On-Demand Symbol Enablement）嚴格依 6 步流程執行。
+  - P1-4: 嚴格本機 instance authority（`launch_id`）與每次細粒度寫入前之租約與 running 狀態再查證。
+  - P1-5: `BEGIN IMMEDIATE` 單一原子 operation claim 與 partial unique index。
+  - P1-6: 恢復全域 90.0s deadline 上限防護。
+  - P1-7: `InstalledEgressClient` 嚴格 9 大端點完全比對白名單。
+  - P1-8: Windows 封裝與冒煙測試完整驗證（非同步解耦背景服務、管道死鎖徹底修復、乾淨環境 18 項斷言全數 PASS）。
+  - P1-9: ESLint 與全端測試乾淨（Python 862 passed, Vitest 30 passed, ESLint 0 errors, 0 warnings）。
+  - P2: 移除所有公開寫入別名，嚴格遵循 `/api/v2/data-operations/*` 與 `/api/v2/data-operations/symbols/{symbol}/enable`。
+- [x] **雙綠燈 CI 驗證通過 (Exact Head: `90f7b4f94d7d676e69c477b1435e1d47d84bf2e8`)**:
+  - `Anti-Gravity TU Predictor CI`: Success in 4m 16s (Run `33726420411`, Job `100556286377`).
+  - `TW Stock Predictor Windows Productization`: Success in 7m 52s (Run `33726419768`, Job `100556279317`).
+- [x] **PR #18 與 Linear LUK-75 回寫完畢**:
+  - GitHub PR #18 保持 Draft / Open / Unmerged 狀態，更新完整取證與對照矩陣。
+  - Linear LUK-75 已回寫完整 Review Remediation 留言（Comment ID: `f837491c-d5b1-4c37-aeb7-6e40356291b7`）。
 
 ### 核心安全與邊界聲明
 - 本系統持續嚴格遵守 `DOCS/PRODUCT_BOUNDARY.md`：無券商 API、無真實帳號連線、無自動交易或跟單功能。
 - 所有外網存取均經由 `InstalledEgressClient` 白名單端點，絕無任意 URL 存取。
+- Merge Gate: `NOT AUTHORIZED`；部署或自動合併：`NOT AUTHORIZED`。
 
 ### 下一步待辦
-- 提交 Draft PR 與執行 Main CI 審核，進入 Phase 19 Code Review。
+- 保持停止於 **READY FOR PHASE 19 SECOND CODE REVIEW**，等待 Lukas Chiu 進行第二次審查。
 
 ---
 
