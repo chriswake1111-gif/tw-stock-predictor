@@ -345,11 +345,12 @@ try {
     Assert-True ($enableOp.status -in @("succeeded", "partial")) "enable symbol operation failed: $($enableOp.status), error: $($enableOp.error_detail), items: $enableItemsJson"
 
     # 3. Assert BC-2: Authoritative Phase 14 EOD context proof
-    $eodRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/market-context/eod-close/as-of/2330.TW" -UseBasicParsing -TimeoutSec 15
+    $cutoff = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $eodRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/market-context/eod-close/as-of/2330.TW?knowledge_cutoff_at=$cutoff" -UseBasicParsing -TimeoutSec 15
     Assert-True ($null -ne $eodRes) "BC-2: EOD market context not returned"
 
     # 4. Assert BC-3: General V2 analysis regression
-    $analysisRes = Invoke-WebRequest -Uri "$($descriptor.origin)/api/v2/analysis/2330.TW" -UseBasicParsing -TimeoutSec 15
+    $analysisRes = Invoke-WebRequest -Uri "$($descriptor.origin)/api/v2/analysis/2330.TW?knowledge_cutoff_at=$cutoff" -UseBasicParsing -TimeoutSec 15
     Assert-True ($analysisRes.StatusCode -eq 200) "BC-3: GET /api/v2/analysis/2330.TW did not return HTTP 200"
 
     $second = New-ProductProcess -FilePath $launcher
