@@ -729,7 +729,7 @@ class InstalledDataSyncService:
             with self.operation_repo._get_connection() as conn:
                 try:
                     rows = conn.execute(
-                        "SELECT DISTINCT symbol FROM research_workflow_items ORDER BY symbol LIMIT 10"
+                        "SELECT DISTINCT symbol FROM research_watchlist_items WHERE membership_state = 'active' ORDER BY symbol LIMIT 10"
                     ).fetchall()
                     symbols = [str(r[0]) for r in rows]
                 except Exception:
@@ -1585,6 +1585,34 @@ class InstalledDataSyncService:
             identity_by_code={code: identity_context},
             classification_by_code={code: classification_context},
         )
+
+        # Promote any pre-existing unclassified observation for this symbol to available & eligible
+        if (
+            classification_context.get("classification_state") == "accepted"
+            and identity_context.get("instrument_revision_id")
+        ):
+            with self.operation_repo._get_connection() as conn:
+                conn.execute(
+                    """
+                    UPDATE eod_close_observations
+                    SET classification_evidence_id = ?,
+                        instrument_id = ?,
+                        instrument_revision_id = ?,
+                        product_scope = 'supported_stock',
+                        observation_status = 'available',
+                        public_eligibility_status = 'eligible',
+                        quality_status = 'fresh'
+                    WHERE official_code = ? AND trade_date = ?
+                      AND observation_status <> 'available'
+                    """,
+                    (
+                        classification_context.get("classification_evidence_id"),
+                        identity_context.get("instrument_id"),
+                        identity_context.get("instrument_revision_id"),
+                        code,
+                        trade_date,
+                    ),
+                )
 
         # 6. Verify requested symbol became publicly eligible before marking accepted
         with self.operation_repo._get_connection() as conn:
