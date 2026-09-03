@@ -167,7 +167,7 @@ def test_deadline_exceeding_90s_rejected(
     res = client.post(
         "/api/v2/data-operations/sync",
         headers=headers,
-        json={"deadline_seconds": 120.0},
+        json={"deadline_seconds": 200.0},
     )
     assert res.status_code == 422
 

@@ -35,7 +35,7 @@ router = APIRouter(prefix="/api/v2/data-operations", tags=["Data Operations"])
 
 class SyncRequestBody(BaseModel):
     target_symbols: list[str] | None = None
-    deadline_seconds: float = Field(default=90.0, ge=1.0, le=90.0)
+    deadline_seconds: float = Field(default=180.0, ge=1.0, le=180.0)
 
 
 class BootstrapRequestBody(BaseModel):

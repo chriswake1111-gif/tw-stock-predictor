@@ -75,7 +75,7 @@ from src.repositories.universe_repository import (
 from src.services.installed_readiness_evaluator import evaluate_installed_readiness
 from src.services.universe_write_guard import UniverseOperatorContext, UniverseWriteGuard
 
-GLOBAL_OPERATION_DEADLINE_SECONDS = 90.0
+GLOBAL_OPERATION_DEADLINE_SECONDS = 180.0
 
 CAPABILITY_TO_STORAGE_RESOURCE = {
     "twse.t187ap03_L": "twse-universe-master",

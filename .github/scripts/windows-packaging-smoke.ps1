@@ -144,7 +144,7 @@ function Wait-ForDataOperation {
     param(
         [string]$Origin,
         [string]$OperationId,
-        [int]$TimeoutSeconds = 120,
+        [int]$TimeoutSeconds = 180,
         [Microsoft.PowerShell.Commands.WebRequestSession]$WebSession = $null
     )
 
@@ -339,7 +339,7 @@ try {
     # 1. Trigger sync and poll to terminal completed state
     $syncRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/sync" -Method POST -Headers $syncHeaders -Body "{}" -WebSession $smokeSession -TimeoutSec 15
     Assert-True ($syncRes.status -in @("running", "succeeded")) "sync did not start"
-    $syncOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $syncRes.operation_id -TimeoutSeconds 120 -WebSession $smokeSession
+    $syncOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $syncRes.operation_id -TimeoutSeconds 180 -WebSession $smokeSession
     $syncItemsJson = if ($syncOp.items) { ($syncOp.items | ConvertTo-Json -Compress) } else { "none" }
     Assert-True ($syncOp.status -in @("succeeded", "partial")) "sync operation failed: $($syncOp.status), error: $($syncOp.error_detail), items: $syncItemsJson"
 
@@ -410,7 +410,7 @@ try {
     }
     $syncResB = Invoke-RestMethod -Uri "$($upgradeDesc.origin)/api/v2/data-operations/sync" -Method POST -Headers $syncHeadersB -Body "{}" -WebSession $smokeSessionB -TimeoutSec 15
     Assert-True ($syncResB.status -in @("running", "succeeded")) "Scenario B: sync did not start"
-    $syncOpB = Wait-ForDataOperation -Origin $upgradeDesc.origin -OperationId $syncResB.operation_id -TimeoutSeconds 120 -WebSession $smokeSessionB
+    $syncOpB = Wait-ForDataOperation -Origin $upgradeDesc.origin -OperationId $syncResB.operation_id -TimeoutSeconds 180 -WebSession $smokeSessionB
     Assert-True ($syncOpB.status -in @("succeeded", "partial")) "Scenario B: sync operation failed: $($syncOpB.status)"
 
     $enableResB = Invoke-RestMethod -Uri "$($upgradeDesc.origin)/api/v2/data-operations/symbols/2330.TW/enable" -Method POST -Headers $syncHeadersB -Body "{}" -WebSession $smokeSessionB -TimeoutSec 15
