@@ -207,11 +207,29 @@ class InstalledDataSyncService:
             resource_id=resource_id,
         )
         try:
-            status_code, body, _ = self.egress_client.fetch(
-                "https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule",
-                deadline_monotonic=deadline_monotonic,
-            )
-            payload = json.loads(body.decode("utf-8")) if body else []
+            payload = []
+            last_exc: Exception | None = None
+            for attempt in range(1, 4):
+                try:
+                    status_code, body, _ = self.egress_client.fetch(
+                        "https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule",
+                        deadline_monotonic=deadline_monotonic,
+                    )
+                    text = body.decode("utf-8", errors="replace").strip() if body else ""
+                    if text:
+                        candidate = json.loads(text)
+                        if isinstance(candidate, list) and candidate:
+                            payload = candidate
+                            break
+                except Exception as exc:
+                    last_exc = exc
+                time.sleep(0.5 * attempt)
+            else:
+                if last_exc:
+                    raise last_exc
+                if not payload:
+                    raise ValueError("TWSE holiday schedule returned empty payload")
+
             prod_svc = self._production_service or ProductionIngestionService(self.db_path)
             run = prod_svc.ingest_twse_calendar(
                 payload=payload,
