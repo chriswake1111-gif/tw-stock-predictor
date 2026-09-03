@@ -33,9 +33,23 @@ export const DataOperationsModal: React.FC<DataOperationsModalProps> = ({
   };
 
   useEffect(() => {
-    if (isOpen) {
-      refresh();
-    }
+    if (!isOpen) return;
+    let active = true;
+    getDataOperationsStatus()
+      .then((data) => {
+        if (active) {
+          setStatusData(data);
+          setError(null);
+        }
+      })
+      .catch((err: unknown) => {
+        if (active) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      });
+    return () => {
+      active = false;
+    };
   }, [isOpen]);
 
   if (!isOpen) {

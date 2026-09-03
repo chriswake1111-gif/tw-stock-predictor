@@ -1,4 +1,4 @@
-﻿import type {
+import type {
   DataOperationsStatusResponse,
   SyncTriggerResponse,
   EnableSymbolResponse,
@@ -57,6 +57,7 @@ export async function triggerSync(
   deadlineSeconds?: number
 ): Promise<SyncTriggerResponse> {
   const token = await getCsrfToken();
+  const effectiveDeadline = Math.min(deadlineSeconds || 90.0, 90.0);
   const res = await fetch("/api/v2/data-operations/sync", {
     method: "POST",
     headers: {
@@ -65,7 +66,7 @@ export async function triggerSync(
     },
     body: JSON.stringify({
       target_symbols: targetSymbols || null,
-      deadline_seconds: deadlineSeconds || 300.0,
+      deadline_seconds: effectiveDeadline,
     }),
   });
   if (res.status === 403) {
@@ -79,7 +80,7 @@ export async function triggerSync(
       },
       body: JSON.stringify({
         target_symbols: targetSymbols || null,
-        deadline_seconds: deadlineSeconds || 300.0,
+        deadline_seconds: effectiveDeadline,
       }),
     });
     if (!retryRes.ok) {
@@ -126,12 +127,9 @@ export async function enableSymbol(symbol: string): Promise<EnableSymbolResponse
   return res.json();
 }
 
-export async function cancelOperation(operationId?: string): Promise<{ operation_id: string; status: string }> {
+export async function cancelOperation(): Promise<{ operation_id: string; status: string }> {
   const token = await getCsrfToken();
-  const url = operationId
-    ? `/api/v2/data-operations/operations/${encodeURIComponent(operationId)}/cancel`
-    : "/api/v2/data-operations/cancel";
-  const res = await fetch(url, {
+  const res = await fetch("/api/v2/data-operations/cancel", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

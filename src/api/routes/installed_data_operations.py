@@ -1,4 +1,4 @@
-﻿"""Phase 19 Installed Data Synchronization and Local Data Operations API endpoints."""
+"""Phase 19 Installed Data Synchronization and Local Data Operations API endpoints."""
 
 from __future__ import annotations
 
@@ -26,15 +26,11 @@ router = APIRouter(prefix="/api/v2/data-operations", tags=["Data Operations"])
 
 class SyncRequestBody(BaseModel):
     target_symbols: list[str] | None = None
-    deadline_seconds: float = Field(default=300.0, ge=10.0, le=3600.0)
+    deadline_seconds: float = Field(default=90.0, ge=1.0, le=90.0)
 
 
 class BootstrapRequestBody(BaseModel):
     target_symbols: list[str] | None = None
-
-
-class EnableSymbolRequestBody(BaseModel):
-    symbol: str | None = None
 
 
 def _get_db_path(request: Request) -> str:
@@ -48,10 +44,13 @@ def _get_instance_id(request: Request) -> str:
     handshake = getattr(request.app.state, "launch_handshake", None)
     if handshake and isinstance(handshake, dict) and handshake.get("launch_id"):
         return str(handshake["launch_id"])
-    settings = getattr(request.app.state, "runtime_settings", None)
-    if settings and getattr(settings, "expected_launch_id", None):
-        return str(settings.expected_launch_id)
-    return "installed_app_instance"
+    test_instance = getattr(request.app.state, "test_instance_id", None)
+    if test_instance:
+        return str(test_instance)
+    raise HTTPException(
+        status_code=503,
+        detail="launch_handshake_missing_or_unvalidated",
+    )
 
 
 @router.get("/csrf-token")
@@ -236,27 +235,6 @@ def cancel_active_operation(request: Request) -> dict[str, Any]:
     }
 
 
-@router.post("/operations/{operation_id}/cancel")
-def cancel_operation_by_id(operation_id: str, request: Request) -> dict[str, Any]:
-    db_path = _get_db_path(request)
-    repo = InstalledDataOperationsRepository(db_path)
-    op = repo.get_operation_by_id(operation_id)
-    if op is None:
-        raise HTTPException(status_code=404, detail=f"Operation {operation_id} not found")
-
-    if op.status != InstalledOperationStatus.RUNNING.value:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot cancel operation with status '{op.status}'",
-        )
-
-    repo.request_cancel(operation_id)
-    return {
-        "operation_id": operation_id,
-        "status": "cancelling",
-    }
-
-
 @router.post("/symbols/{symbol}/enable")
 def enable_symbol(
     symbol: str,
@@ -278,8 +256,7 @@ def enable_symbol(
 
     def _run_bg():
         try:
-            sync_svc.run_stage_classification(op_id, auth, [clean_sym])
-            sync_svc.run_stage_projection(op_id, auth)
+            sync_svc.run_symbol_enablement_pipeline(op_id, auth, clean_sym)
         except Exception as exc:
             auth.revoke()
             sync_svc.operation_repo.finalize_operation(
@@ -293,14 +270,3 @@ def enable_symbol(
         "status": InstalledOperationStatus.RUNNING.value,
         "current_stage": "classification",
     }
-
-
-@router.post("/enable-symbol")
-def enable_symbol_legacy(
-    body: EnableSymbolRequestBody,
-    request: Request,
-    background_tasks: BackgroundTasks,
-) -> dict[str, Any]:
-    if not body.symbol:
-        raise HTTPException(status_code=422, detail="symbol is required")
-    return enable_symbol(body.symbol, request, background_tasks)

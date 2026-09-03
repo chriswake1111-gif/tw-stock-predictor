@@ -140,6 +140,24 @@ function Wait-ForPath {
     }
 }
 
+function Wait-ForDataOperation {
+    param(
+        [string]$Origin,
+        [string]$OperationId,
+        [int]$TimeoutSeconds = 90
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $op = Invoke-RestMethod -Uri "$Origin/api/v2/data-operations/operations/$OperationId" -UseBasicParsing -TimeoutSec 10
+        if ($op.status -in @("succeeded", "failed", "partial", "cancelled", "interrupted")) {
+            return $op
+        }
+        Start-Sleep -Milliseconds 1000
+    }
+    Assert-True $false "operation $OperationId did not reach terminal state within $TimeoutSeconds seconds"
+}
+
 function New-ProductProcess {
     param(
         [string]$FilePath,
@@ -299,11 +317,25 @@ try {
         "X-CSRF-Token" = $csrfRes.csrf_token
         "Content-Type" = "application/json"
     }
+    # 1. Trigger sync and poll to terminal completed state
     $syncRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/sync" -Method POST -Headers $syncHeaders -Body "{}" -WebSession $smokeSession -TimeoutSec 15
-    Assert-True ($syncRes.status -eq "running") "sync did not start"
+    Assert-True ($syncRes.status -in @("running", "succeeded")) "sync did not start"
+    $syncOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $syncRes.operation_id -TimeoutSeconds 90
+    Assert-True ($syncOp.status -in @("succeeded", "partial")) "sync operation failed: $($syncOp.status)"
 
+    # 2. Trigger on-demand symbol enablement and poll to terminal completed state
     $enableRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/symbols/2330.TW/enable" -Method POST -Headers $syncHeaders -Body "{}" -WebSession $smokeSession -TimeoutSec 15
-    Assert-True ($enableRes.status -eq "running") "enable symbol did not start"
+    Assert-True ($enableRes.status -in @("running", "succeeded")) "enable symbol did not start"
+    $enableOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $enableRes.operation_id -TimeoutSeconds 90
+    Assert-True ($enableOp.status -in @("succeeded", "partial")) "enable symbol operation failed: $($enableOp.status)"
+
+    # 3. Assert BC-2: Authoritative Phase 14 EOD context proof
+    $eodRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/market-context/eod-close/as-of/2330.TW" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($null -ne $eodRes) "BC-2: EOD market context not returned"
+
+    # 4. Assert BC-3: General V2 analysis regression
+    $analysisRes = Invoke-WebRequest -Uri "$($descriptor.origin)/api/v2/analysis/2330.TW" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($analysisRes.StatusCode -eq 200) "BC-3: GET /api/v2/analysis/2330.TW did not return HTTP 200"
 
     $second = New-ProductProcess -FilePath $launcher
     Write-Host "Smoke scenario: single-instance rejection"

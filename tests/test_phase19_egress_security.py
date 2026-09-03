@@ -1,4 +1,4 @@
-﻿"""Tests for Phase 19 centralized egress transport and security client."""
+"""Tests for Phase 19 centralized egress transport and security client."""
 
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ import pytest
 import requests
 
 from src.collectors.installed_egress_client import (
-    APPROVED_ENDPOINT_PREFIXES,
+    APPROVED_STATIC_ENDPOINTS,
+    CBC_M1B_EXACT_URL,
     DeadlineExhaustedError,
     EgressHttpError,
     EgressSecurityError,
@@ -22,16 +23,21 @@ from src.collectors.installed_egress_client import (
 
 
 def test_approved_urls_pass_validation() -> None:
-    for prefix in APPROVED_ENDPOINT_PREFIXES:
-        validated = validate_egress_url(prefix)
-        assert validated == prefix
+    for endpoint in APPROVED_STATIC_ENDPOINTS:
+        validated = validate_egress_url(endpoint)
+        assert validated == endpoint
+    assert validate_egress_url(CBC_M1B_EXACT_URL) == CBC_M1B_EXACT_URL
+    assert (
+        validate_egress_url("https://isin.twse.com.tw/isin/single_main.jsp?owncode=2330")
+        == "https://isin.twse.com.tw/isin/single_main.jsp?owncode=2330"
+    )
 
 
 def test_unapproved_domain_rejected() -> None:
-    with pytest.raises(EndpointNotAllowlistedError, match="Host not in egress allowlist"):
+    with pytest.raises(EndpointNotAllowlistedError):
         validate_egress_url("https://malicious.com/api/data")
 
-    with pytest.raises(EndpointNotAllowlistedError, match="Host not in egress allowlist"):
+    with pytest.raises(EndpointNotAllowlistedError):
         validate_egress_url("https://yahoo.com/finance")
 
 
@@ -40,9 +46,22 @@ def test_insecure_scheme_rejected() -> None:
         validate_egress_url("http://www.twse.com.tw/rwd/zh/holidaySchedule/holidaySchedule")
 
 
-def test_unapproved_path_on_approved_domain_rejected() -> None:
-    with pytest.raises(EndpointNotAllowlistedError, match="Endpoint prefix not in allowlist"):
+def test_unapproved_path_or_param_rejected() -> None:
+    # Alternate path rejected
+    with pytest.raises(EndpointNotAllowlistedError):
         validate_egress_url("https://www.twse.com.tw/unapproved/secret/endpoint")
+
+    # Extra parameters on static endpoint rejected
+    with pytest.raises(EndpointNotAllowlistedError):
+        validate_egress_url("https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule?extra=1")
+
+    # Extra parameters on CBC rejected
+    with pytest.raises(EndpointNotAllowlistedError):
+        validate_egress_url("https://cpx.cbc.gov.tw/API/DataAPI/Get?FileName=EF15M01&other=bad")
+
+    # Non-owncode parameter on ISIN rejected
+    with pytest.raises(EndpointNotAllowlistedError):
+        validate_egress_url("https://isin.twse.com.tw/isin/single_main.jsp?foo=bar")
 
 
 def test_redact_proxy_credentials() -> None:

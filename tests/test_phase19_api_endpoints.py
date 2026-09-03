@@ -1,4 +1,4 @@
-﻿"""Tests for Phase 19 Data Operations API endpoints under /api/v2/data-operations."""
+"""Tests for Phase 19 Data Operations API endpoints under /api/v2/data-operations."""
 
 from __future__ import annotations
 
@@ -42,6 +42,7 @@ def api_client(
         apply_valuation_migration(str(db_file))
 
         app = create_app(settings=settings)
+        app.state.launch_handshake = {"launch_id": "test-launch-1"}
         client = TestClient(
             app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000)
         )
@@ -143,3 +144,49 @@ def test_enable_symbol_endpoint(
     assert "operation_id" in data
     assert data["status"] == "running"
     assert data["current_stage"] == "classification"
+
+
+def test_missing_handshake_fails_closed(
+    api_client: tuple[TestClient, InstalledDataOperationsRepository, str]
+) -> None:
+    client, _, _ = api_client
+    client.app.state.launch_handshake = None
+    _, headers = _csrf(client)
+    res = client.post(
+        "/api/v2/data-operations/symbols/2330.TW/enable", headers=headers, json={}
+    )
+    assert res.status_code == 503
+    assert "launch_handshake_missing" in res.json()["detail"]
+
+
+def test_deadline_exceeding_90s_rejected(
+    api_client: tuple[TestClient, InstalledDataOperationsRepository, str]
+) -> None:
+    client, _, _ = api_client
+    _, headers = _csrf(client)
+    res = client.post(
+        "/api/v2/data-operations/sync",
+        headers=headers,
+        json={"deadline_seconds": 120.0},
+    )
+    assert res.status_code == 422
+
+
+def test_unapproved_write_aliases_return_404(
+    api_client: tuple[TestClient, InstalledDataOperationsRepository, str]
+) -> None:
+    client, _, _ = api_client
+    _, headers = _csrf(client)
+    res_enable_alias = client.post(
+        "/api/v2/data-operations/enable-symbol",
+        headers=headers,
+        json={"symbol": "2330.TW"},
+    )
+    assert res_enable_alias.status_code in (404, 405)
+
+    res_cancel_alias = client.post(
+        "/api/v2/data-operations/operations/op_123/cancel",
+        headers=headers,
+        json={},
+    )
+    assert res_cancel_alias.status_code in (404, 405)

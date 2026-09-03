@@ -674,6 +674,8 @@ class EodCloseIngestionService:
                     reason=item_spec.get("reason"),
                 )
                 self.foundation.add_run_item(item, connection=conn)
+                result["run_id"] = run.ingestion_run_id
+                result["item_id"] = item.ingestion_run_item_id
                 self.foundation.complete_run(IngestionRun(
                     ingestion_run_id=run.ingestion_run_id,
                     started_at=run.started_at,

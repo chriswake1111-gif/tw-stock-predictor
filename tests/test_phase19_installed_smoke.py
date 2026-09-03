@@ -121,11 +121,18 @@ def test_scenario_a_clean_machine_bootstrap(monkeypatch: pytest.MonkeyPatch) -> 
         eod_json = (FIXTURES / "eod_twse_stock_day_all.json").read_bytes()
         isin_html = (FIXTURES / "eod_isin_supported.html").read_bytes()
 
+        calendar_json = json.dumps([
+            {"Name": "國曆新年開始交易日", "Date": "1150102", "Weekday": "五", "Description": "國曆新年開始交易"},
+            {"Name": "農曆春節最後交易日", "Date": "1150211", "Weekday": "三", "Description": "最後交易日"},
+        ], ensure_ascii=False).encode("utf-8")
+
         def custom_fetch(url: str, **kwargs):
             if "isin" in url:
                 return 200, isin_html, {}
             if "STOCK_DAY_ALL" in url:
                 return 200, eod_json, {}
+            if "holidaySchedule" in url or "holiday" in url:
+                return 200, calendar_json, {}
             return 200, b"[]", {}
 
         mock_egress.fetch.side_effect = custom_fetch

@@ -1,4 +1,4 @@
-﻿"""Tests for Phase 19 crash/startup recovery lifecycle."""
+"""Tests for Phase 19 crash/startup recovery lifecycle."""
 
 from __future__ import annotations
 
@@ -20,31 +20,31 @@ from src.runtime.startup_coordinator import StartupCoordinator
 
 
 def test_recover_interrupted_operations_reconciles_active_only() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
         db_path = str(Path(temp_dir) / "test.db")
         apply_valuation_migration(db_path)
         repo = InstalledDataOperationsRepository(db_path)
 
-        # Create running, cancelling, and succeeded operations
+        # 1. Running operation is recovered to interrupted
         repo.create_operation("op-run", InstalledOperationType.SYNC.value, "launch-1")
+        assert repo.recover_interrupted_operations() == 1
+        assert repo.get_operation_by_id("op-run").status == InstalledOperationStatus.INTERRUPTED.value
+
+        # 2. Cancelling operation is recovered to interrupted
         repo.create_operation("op-cancel", InstalledOperationType.SYNC.value, "launch-1")
         assert repo.request_cancel("op-cancel") is True
+        assert repo.recover_interrupted_operations() == 1
+        assert repo.get_operation_by_id("op-cancel").status == InstalledOperationStatus.INTERRUPTED.value
 
+        # 3. Terminal operations (succeeded) are untouched
         repo.create_operation("op-succ", InstalledOperationType.SYNC.value, "launch-1")
         repo.finalize_operation("op-succ", InstalledOperationStatus.SUCCEEDED.value)
-
-        # Run recovery
-        recovered_count = repo.recover_interrupted_operations()
-        assert recovered_count == 2
-
-        # Check states
-        assert repo.get_operation_by_id("op-run").status == InstalledOperationStatus.INTERRUPTED.value
-        assert repo.get_operation_by_id("op-cancel").status == InstalledOperationStatus.INTERRUPTED.value
+        assert repo.recover_interrupted_operations() == 0
         assert repo.get_operation_by_id("op-succ").status == InstalledOperationStatus.SUCCEEDED.value
 
 
 def test_startup_coordinator_prepare_runs_recovery() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
         app_dir = Path(temp_dir)
         db_file = app_dir / "data" / "isolated.db"
         environ = {

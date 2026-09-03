@@ -1,8 +1,9 @@
-﻿"""Tests for Phase 19 multi-stage pipeline orchestrator and worker service."""
+"""Tests for Phase 19 multi-stage pipeline orchestrator and worker service."""
 
 from __future__ import annotations
 
 import gc
+import json
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -28,7 +29,7 @@ FIXTURES = ROOT / "tests" / "fixtures"
 
 @pytest.fixture
 def sync_env() -> tuple[InstalledDataSyncService, InstalledDataOperationsRepository, str]:
-    with tempfile.TemporaryDirectory() as temp_dir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
         db_path = str(Path(temp_dir) / "test.db")
         apply_valuation_migration(db_path)
         repo = InstalledDataOperationsRepository(db_path)
@@ -97,11 +98,18 @@ def test_end_to_end_sync_pipeline(
     eod_json = (FIXTURES / "eod_twse_stock_day_all.json").read_bytes()
     isin_html = (FIXTURES / "eod_isin_supported.html").read_bytes()
 
+    calendar_json = json.dumps([
+        {"Name": "國曆新年開始交易日", "Date": "1150102", "Weekday": "五", "Description": "國曆新年開始交易"},
+        {"Name": "農曆春節最後交易日", "Date": "1150211", "Weekday": "三", "Description": "最後交易日"},
+    ], ensure_ascii=False).encode("utf-8")
+
     def custom_fetch(url: str, **kwargs):
         if "isin" in url:
             return 200, isin_html, {}
         if "STOCK_DAY_ALL" in url:
             return 200, eod_json, {}
+        if "holidaySchedule" in url or "holiday" in url:
+            return 200, calendar_json, {}
         return 200, b"[]", {}
 
     service.egress_client.fetch.side_effect = custom_fetch

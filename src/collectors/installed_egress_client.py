@@ -1,4 +1,4 @@
-﻿"""Centralized egress transport and security client for Phase 19 installed operations.
+"""Centralized egress transport and security client for Phase 19 installed operations.
 
 Enforces:
 1. Strict 9-endpoint / approved domain allowlist.
@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 import time
 from typing import Any, Mapping
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import requests
 
@@ -27,37 +27,18 @@ DEFAULT_MAX_RETRIES = 2
 ISIN_MAX_RETRIES = 1
 MIN_REMAINING_BUDGET_SECONDS = 5.0
 
-APPROVED_DOMAINS = frozenset({
-    "twse.com.tw",
-    "www.twse.com.tw",
-    "openapi.twse.com.tw",
-    "isin.twse.com.tw",
-    "tpex.org.tw",
-    "www.tpex.org.tw",
-    "cbc.gov.tw",
-    "www.cbc.gov.tw",
-    "cpx.cbc.gov.tw",
+APPROVED_STATIC_ENDPOINTS = frozenset({
+    "https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule",
+    "https://openapi.twse.com.tw/v1/opendata/t187ap03_L",
+    "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O",
+    "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
+    "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes",
+    "https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK",
+    "https://www.tpex.org.tw/openapi/v1/tpex_daily_trading_index",
 })
 
-APPROVED_ENDPOINT_PREFIXES = (
-    "https://www.twse.com.tw/rwd/zh/holidaySchedule/",
-    "https://openapi.twse.com.tw/v1/holidaySchedule",
-    "https://openapi.twse.com.tw/v1/opendata/t187ap03_L",
-    "https://www.twse.com.tw/rwd/zh/companyInfo/t187ap03_L",
-    "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O",
-    "https://www.tpex.org.tw/web/regular_emerging/corporateInfo/regular/mopsfin_t187ap03_O.php",
-    "https://isin.twse.com.tw/isin/single_main.jsp",
-    "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
-    "https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY_ALL",
-    "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes",
-    "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php",
-    "https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK",
-    "https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK",
-    "https://www.tpex.org.tw/openapi/v1/tpex_daily_trading_index",
-    "https://www.tpex.org.tw/web/stock/aftertrading/daily_trading_index/st41_result.php",
-    "https://cpx.cbc.gov.tw/API/DataAPI/Get",
-    "https://www.cbc.gov.tw/public/data/OpenData/M1B.csv",
-)
+CBC_M1B_EXACT_URL = "https://cpx.cbc.gov.tw/API/DataAPI/Get?FileName=EF15M01"
+ISIN_BASE_URL = "https://isin.twse.com.tw/isin/single_main.jsp"
 
 _CREDENTIAL_PATTERN = re.compile(r"(?<=://)[^/]+:[^/]+(?=@)")
 
@@ -88,20 +69,32 @@ def redact_text(value: str) -> str:
 
 
 def validate_egress_url(url: str) -> str:
-    """Validate that the URL strictly matches the approved domain and endpoint allowlist."""
+    """Validate that the URL strictly matches the approved 9 endpoints without alternate paths/parameters."""
     cleaned = str(url).strip()
     parsed = urlparse(cleaned)
     if parsed.scheme.lower() != "https":
         raise EndpointNotAllowlistedError(f"Insecure scheme not allowed: {parsed.scheme}")
-    
-    host = (parsed.hostname or "").lower()
-    if host not in APPROVED_DOMAINS:
-        raise EndpointNotAllowlistedError(f"Host not in egress allowlist: {host}")
-    
-    if not any(cleaned.startswith(prefix) for prefix in APPROVED_ENDPOINT_PREFIXES):
-        raise EndpointNotAllowlistedError(f"Endpoint prefix not in allowlist: {cleaned}")
-    
-    return cleaned
+
+    if cleaned in APPROVED_STATIC_ENDPOINTS:
+        return cleaned
+
+    if cleaned == CBC_M1B_EXACT_URL:
+        return cleaned
+
+    # ISIN validation: must match exact host and path, and contain ONLY owncode parameter
+    if (
+        parsed.netloc.lower() == "isin.twse.com.tw"
+        and parsed.path == "/isin/single_main.jsp"
+    ):
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        # Only owncode parameter is authorized
+        allowed_params = {"owncode"}
+        if set(params.keys()) == allowed_params:
+            owncode = params["owncode"][0].strip()
+            if owncode and owncode.isalnum() and len(owncode) <= 10:
+                return cleaned
+
+    raise EndpointNotAllowlistedError(f"Endpoint not in exact approved 9-endpoint allowlist: {cleaned}")
 
 
 class InstalledEgressClient:

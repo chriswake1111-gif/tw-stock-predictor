@@ -1,4 +1,4 @@
-﻿"""Repository for durable Phase 19 installed data operations and item lineage."""
+"""Repository for durable Phase 19 installed data operations and item lineage."""
 
 from __future__ import annotations
 
@@ -12,6 +12,11 @@ from src.domain.installed_data_operations import (
     InstalledItemRow,
     InstalledOperationRow,
     InstalledOperationStatus,
+    OperationActiveConflict,
+    OperationAuthorizationRevoked,
+    OperationCancelled,
+    OperationNotFound,
+    OperationStateInvalid,
 )
 from src.domain.valuation import utc_now_timestamp
 
@@ -45,26 +50,41 @@ class InstalledDataOperationsRepository:
         symbols_json = json.dumps(list(target_symbols or []), ensure_ascii=False)
 
         with self._get_connection() as conn:
-            conn.execute(
+            conn.execute("BEGIN IMMEDIATE")
+            active = conn.execute(
                 """
-                INSERT INTO installed_data_operations (
-                    operation_id, operation_type, status, current_stage,
-                    lease_owner_id, lease_expires_at, target_symbols_json,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    operation_id,
-                    operation_type,
-                    InstalledOperationStatus.RUNNING.value,
-                    "prerequisites_calendar",
-                    lease_owner_id,
-                    lease_expires_at,
-                    symbols_json,
-                    now,
-                    now,
-                ),
-            )
+                SELECT * FROM installed_data_operations
+                WHERE status IN ('pending', 'running', 'cancelling')
+                LIMIT 1
+                """
+            ).fetchone()
+            if active:
+                raise OperationActiveConflict(
+                    f"Another operation {active['operation_id']} is currently {active['status']}"
+                )
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO installed_data_operations (
+                        operation_id, operation_type, status, current_stage,
+                        lease_owner_id, lease_expires_at, target_symbols_json,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        operation_id,
+                        operation_type,
+                        InstalledOperationStatus.RUNNING.value,
+                        "prerequisites_calendar",
+                        lease_owner_id,
+                        lease_expires_at,
+                        symbols_json,
+                        now,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise OperationActiveConflict("Another operation is currently active") from exc
 
         return InstalledOperationRow(
             operation_id=operation_id,
@@ -125,25 +145,11 @@ class InstalledDataOperationsRepository:
                 error_detail=row["error_detail"],
             )
 
-    def extend_lease(self, operation_id: str, lease_duration_seconds: int = 60) -> str:
-        now = utc_now_timestamp()
-        lease_expires_at = (
-            datetime.now(timezone.utc) + timedelta(seconds=lease_duration_seconds)
-        ).isoformat().replace("+00:00", "Z")
-
-        with self._get_connection() as conn:
-            conn.execute(
-                """
-                UPDATE installed_data_operations
-                SET lease_expires_at = ?, updated_at = ?
-                WHERE operation_id = ?
-                """,
-                (lease_expires_at, now, operation_id),
-            )
-        return lease_expires_at
-
-    def transition_stage(
-        self, operation_id: str, stage: str, lease_duration_seconds: int = 60
+    def extend_lease(
+        self,
+        operation_id: str,
+        lease_duration_seconds: int = 60,
+        expected_owner_id: str | None = None,
     ) -> str:
         now = utc_now_timestamp()
         lease_expires_at = (
@@ -151,14 +157,81 @@ class InstalledDataOperationsRepository:
         ).isoformat().replace("+00:00", "Z")
 
         with self._get_connection() as conn:
-            conn.execute(
-                """
-                UPDATE installed_data_operations
-                SET current_stage = ?, lease_expires_at = ?, updated_at = ?
-                WHERE operation_id = ?
-                """,
-                (stage, lease_expires_at, now, operation_id),
-            )
+            if expected_owner_id:
+                res = conn.execute(
+                    """
+                    UPDATE installed_data_operations
+                    SET lease_expires_at = ?, updated_at = ?
+                    WHERE operation_id = ? AND status = 'running' AND lease_owner_id = ?
+                    """,
+                    (lease_expires_at, now, operation_id, expected_owner_id),
+                )
+                if res.rowcount == 0:
+                    row = conn.execute(
+                        "SELECT * FROM installed_data_operations WHERE operation_id = ?",
+                        (operation_id,),
+                    ).fetchone()
+                    if not row:
+                        raise OperationNotFound(f"Operation {operation_id} not found")
+                    if row["status"] in ("cancelling", "cancelled"):
+                        raise OperationCancelled(f"Operation {operation_id} cancelled")
+                    if row["lease_owner_id"] != expected_owner_id:
+                        raise OperationAuthorizationRevoked("lease_owner_mismatch")
+                    raise OperationStateInvalid(f"Operation status is {row['status']}")
+            else:
+                conn.execute(
+                    """
+                    UPDATE installed_data_operations
+                    SET lease_expires_at = ?, updated_at = ?
+                    WHERE operation_id = ? AND status = 'running'
+                    """,
+                    (lease_expires_at, now, operation_id),
+                )
+        return lease_expires_at
+
+    def transition_stage(
+        self,
+        operation_id: str,
+        stage: str,
+        lease_duration_seconds: int = 60,
+        expected_owner_id: str | None = None,
+    ) -> str:
+        now = utc_now_timestamp()
+        lease_expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=lease_duration_seconds)
+        ).isoformat().replace("+00:00", "Z")
+
+        with self._get_connection() as conn:
+            if expected_owner_id:
+                res = conn.execute(
+                    """
+                    UPDATE installed_data_operations
+                    SET current_stage = ?, lease_expires_at = ?, updated_at = ?
+                    WHERE operation_id = ? AND status = 'running' AND lease_owner_id = ?
+                    """,
+                    (stage, lease_expires_at, now, operation_id, expected_owner_id),
+                )
+                if res.rowcount == 0:
+                    row = conn.execute(
+                        "SELECT * FROM installed_data_operations WHERE operation_id = ?",
+                        (operation_id,),
+                    ).fetchone()
+                    if not row:
+                        raise OperationNotFound(f"Operation {operation_id} not found")
+                    if row["status"] in ("cancelling", "cancelled"):
+                        raise OperationCancelled(f"Operation {operation_id} cancelled")
+                    if row["lease_owner_id"] != expected_owner_id:
+                        raise OperationAuthorizationRevoked("lease_owner_mismatch")
+                    raise OperationStateInvalid(f"Operation status is {row['status']}")
+            else:
+                conn.execute(
+                    """
+                    UPDATE installed_data_operations
+                    SET current_stage = ?, lease_expires_at = ?, updated_at = ?
+                    WHERE operation_id = ? AND status = 'running'
+                    """,
+                    (stage, lease_expires_at, now, operation_id),
+                )
         return lease_expires_at
 
     def finalize_operation(

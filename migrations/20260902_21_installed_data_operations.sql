@@ -1,4 +1,4 @@
-﻿-- Phase 19: Installed Data Synchronization / Local Data Operations V1
+-- Phase 19: Installed Data Synchronization / Local Data Operations V1
 -- Additive tables for parent data operation lifecycle and child item tracking.
 
 CREATE TABLE installed_data_operations (
@@ -46,6 +46,9 @@ ON installed_data_operations(status, created_at);
 
 CREATE INDEX idx_installed_data_operations_lease
 ON installed_data_operations(lease_owner_id, lease_expires_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_installed_data_operations_single_active
+ON installed_data_operations ((1)) WHERE status IN ('pending', 'running', 'cancelling');
 
 CREATE INDEX idx_installed_data_operation_items_op
 ON installed_data_operation_items(operation_id, stage, item_id);
