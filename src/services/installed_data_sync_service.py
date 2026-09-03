@@ -1586,34 +1586,6 @@ class InstalledDataSyncService:
             classification_by_code={code: classification_context},
         )
 
-        # Promote any pre-existing unclassified observation for this symbol to available & eligible
-        if (
-            classification_context.get("classification_state") == "accepted"
-            and identity_context.get("instrument_revision_id")
-        ):
-            with self.operation_repo._get_connection() as conn:
-                conn.execute(
-                    """
-                    UPDATE eod_close_observations
-                    SET classification_evidence_id = ?,
-                        instrument_id = ?,
-                        instrument_revision_id = ?,
-                        product_scope = 'supported_stock',
-                        observation_status = 'available',
-                        public_eligibility_status = 'eligible',
-                        quality_status = 'fresh'
-                    WHERE official_code = ? AND trade_date = ?
-                      AND observation_status <> 'available'
-                    """,
-                    (
-                        classification_context.get("classification_evidence_id"),
-                        identity_context.get("instrument_id"),
-                        identity_context.get("instrument_revision_id"),
-                        code,
-                        trade_date,
-                    ),
-                )
-
         # 6. Verify requested symbol became publicly eligible before marking accepted
         with self.operation_repo._get_connection() as conn:
             obs_row = conn.execute(
