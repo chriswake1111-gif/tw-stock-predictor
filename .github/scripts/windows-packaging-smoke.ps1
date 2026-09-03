@@ -333,14 +333,15 @@ try {
     # 1. Trigger sync and poll to terminal completed state
     $syncRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/sync" -Method POST -Headers $syncHeaders -Body "{}" -WebSession $smokeSession -TimeoutSec 15
     Assert-True ($syncRes.status -in @("running", "succeeded")) "sync did not start"
-    $syncOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $syncRes.operation_id -TimeoutSeconds 120 -WebSession $smokeSession
-    Assert-True ($syncOp.status -in @("succeeded", "partial")) "sync operation failed: $($syncOp.status)"
+    $syncItemsJson = if ($syncOp.items) { ($syncOp.items | ConvertTo-Json -Compress) } else { "none" }
+    Assert-True ($syncOp.status -in @("succeeded", "partial")) "sync operation failed: $($syncOp.status), error: $($syncOp.error_detail), items: $syncItemsJson"
 
     # 2. Trigger on-demand symbol enablement and poll to terminal completed state
     $enableRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/symbols/2330.TW/enable" -Method POST -Headers $syncHeaders -Body "{}" -WebSession $smokeSession -TimeoutSec 15
     Assert-True ($enableRes.status -in @("running", "succeeded")) "enable symbol did not start"
     $enableOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $enableRes.operation_id -TimeoutSeconds 120 -WebSession $smokeSession
-    Assert-True ($enableOp.status -in @("succeeded", "partial")) "enable symbol operation failed: $($enableOp.status)"
+    $enableItemsJson = if ($enableOp.items) { ($enableOp.items | ConvertTo-Json -Compress) } else { "none" }
+    Assert-True ($enableOp.status -in @("succeeded", "partial")) "enable symbol operation failed: $($enableOp.status), error: $($enableOp.error_detail), items: $enableItemsJson"
 
     # 3. Assert BC-2: Authoritative Phase 14 EOD context proof
     $eodRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/market-context/eod-close/as-of/2330.TW" -UseBasicParsing -TimeoutSec 15

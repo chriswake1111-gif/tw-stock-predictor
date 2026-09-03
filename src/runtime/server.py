@@ -94,6 +94,18 @@ def prepare_server_app(settings: RuntimeSettings):
 
 def run_server(settings: RuntimeSettings | None = None) -> int:
     runtime_settings = settings or RuntimeSettings.from_environment()
+    if runtime_settings.packaged:
+        try:
+            import logging
+            log_file = runtime_settings.paths.logs_dir / "server.log"
+            logging.basicConfig(
+                filename=str(log_file),
+                level=logging.INFO,
+                format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                force=True,
+            )
+        except Exception:
+            pass
     app = prepare_server_app(runtime_settings)
     descriptor_path = getattr(app.state, "runtime_descriptor_path", None)
     try:

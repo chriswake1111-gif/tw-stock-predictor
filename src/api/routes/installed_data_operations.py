@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -214,6 +217,7 @@ def trigger_sync_operation(
             sync_svc.run_stage_turnover_and_cbc(op_id, auth, deadline_monotonic)
             sync_svc.run_stage_projection(op_id, auth, deadline_monotonic)
         except Exception as exc:
+            logger.exception("Background sync operation %s failed: %s", op_id, exc)
             try:
                 auth.revoke()
                 sync_svc.operation_repo.finalize_operation(
