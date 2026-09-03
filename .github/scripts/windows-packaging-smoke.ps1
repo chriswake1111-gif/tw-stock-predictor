@@ -389,14 +389,48 @@ try {
     Assert-True $orphan.WaitForExit(15000) "orphan launcher did not exit after forced termination"
     Assert-ProcessGone -ProcessId $orphanServerPid
 
-    # Installed known-v2-upgradeable startup must create pre-upgrade evidence.
+    # Installed known-v2-upgradeable startup must create pre-upgrade evidence and execute Scenario B regression.
     $upgradeRoot = Join-Path $env:RUNNER_TEMP "tw-stock-predictor-upgradeable"
     $upgradeDb = Join-Path $upgradeRoot "data\cache.db"
     New-Item -ItemType Directory -Path (Split-Path -Parent $upgradeDb) -Force | Out-Null
-    Invoke-Fixture -FixtureArguments @("upgradeable", $upgradeDb)
+    Invoke-Fixture -FixtureArguments @("upgradeable", $upgradeDb, "--symbol", "2330.TW")
     $upgradeDescriptor = Join-Path $upgradeRoot "runtime\instance.json"
     $upgradeProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $upgradeRoot -RedirectOutput $false
     Wait-ForPath -Path $upgradeDescriptor -Process $upgradeProcess -DiagnosticRoot $upgradeRoot
+    $upgradeDesc = Get-Content -LiteralPath $upgradeDescriptor -Raw | ConvertFrom-Json
+
+    # Scenario B: Run sync & symbol enablement in upgraded instance
+    $csrfResB = Invoke-RestMethod -Uri "$($upgradeDesc.origin)/api/v2/data-operations/csrf-token" -UseBasicParsing -TimeoutSec 15 -SessionVariable "smokeSessionB"
+    Assert-True ($null -ne $csrfResB.csrf_token) "Scenario B: csrf token missing"
+
+    $syncHeadersB = @{
+        "Origin" = "$($upgradeDesc.origin)"
+        "X-CSRF-Token" = $csrfResB.csrf_token
+        "Content-Type" = "application/json"
+    }
+    $syncResB = Invoke-RestMethod -Uri "$($upgradeDesc.origin)/api/v2/data-operations/sync" -Method POST -Headers $syncHeadersB -Body "{}" -WebSession $smokeSessionB -TimeoutSec 15
+    Assert-True ($syncResB.status -in @("running", "succeeded")) "Scenario B: sync did not start"
+    $syncOpB = Wait-ForDataOperation -Origin $upgradeDesc.origin -OperationId $syncResB.operation_id -TimeoutSeconds 120 -WebSession $smokeSessionB
+    Assert-True ($syncOpB.status -in @("succeeded", "partial")) "Scenario B: sync operation failed: $($syncOpB.status)"
+
+    $enableResB = Invoke-RestMethod -Uri "$($upgradeDesc.origin)/api/v2/data-operations/symbols/2330.TW/enable" -Method POST -Headers $syncHeadersB -Body "{}" -WebSession $smokeSessionB -TimeoutSec 15
+    Assert-True ($enableResB.status -in @("running", "succeeded")) "Scenario B: enable symbol did not start"
+    $enableOpB = Wait-ForDataOperation -Origin $upgradeDesc.origin -OperationId $enableResB.operation_id -TimeoutSeconds 120 -WebSession $smokeSessionB
+    Assert-True ($enableOpB.status -in @("succeeded", "partial")) "Scenario B: enable symbol operation failed: $($enableOpB.status)"
+
+    # Verify Phase 17 Queue consumption via GET /api/v2/research/daily-context?market_date=<D>&knowledge_cutoff_at=<K>
+    $statusB = Invoke-RestMethod -Uri "$($upgradeDesc.origin)/api/v2/data-operations/status" -UseBasicParsing -TimeoutSec 15
+    $marketDateB = $statusB.market_context_summary.latest_eod_date
+    if (-not $marketDateB) {
+        $marketDateB = [DateTime]::UtcNow.ToString("yyyy-MM-dd")
+    }
+    $dailyContextRes = Invoke-RestMethod -Uri "$($upgradeDesc.origin)/api/v2/research/daily-context?market_date=$marketDateB&knowledge_cutoff_at=$cutoff" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($null -ne $dailyContextRes) "Scenario B: GET /api/v2/research/daily-context did not return data"
+
+    # Verify /research/daily UI bookmarkable route
+    $dailyUiRes = Invoke-WebRequest -Uri "$($upgradeDesc.origin)/research/daily" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($dailyUiRes.StatusCode -eq 200) "Scenario B: GET /research/daily UI did not return HTTP 200"
+
     Stop-Scenario -LauncherProcess $upgradeProcess -ScenarioRoot $upgradeRoot
     $preUpgradeMetadata = Get-ChildItem -LiteralPath (Join-Path $upgradeRoot "backup") -Recurse -Filter "*.meta.json" -File |
         Where-Object { (Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json).reason -eq "pre_upgrade" }

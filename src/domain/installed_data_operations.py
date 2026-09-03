@@ -17,11 +17,7 @@ from src.domain.valuation import utc_now_timestamp
 INSTALLED_OPERATIONS_ALLOWED_RESOURCES = frozenset({
     "twse.trading-calendar",
     "twse.t187ap03_L",
-    "twse.t187ap03_l",
-    "twse-universe-master",
     "tpex.mopsfin_t187ap03_O",
-    "tpex.mopsfin_t187ap03_o",
-    "tpex-universe-master",
     "twse.isin.security_classification",
     "twse.eod.stock_day_all",
     "tpex.eod.daily_close_quotes",

@@ -37,6 +37,12 @@ class UniverseOperatorContext:
     audit_id: str | None = None
 
 
+_STORAGE_TO_CAPABILITY_RESOURCE = {
+    "twse-universe-master": "twse.t187ap03_L",
+    "tpex-universe-master": "tpex.mopsfin_t187ap03_O",
+}
+
+
 class UniverseWriteGuard:
     ENV_NAME = "UNIVERSE_INGESTION_WRITES_ENABLED"
 
@@ -58,13 +64,26 @@ class UniverseWriteGuard:
         resource_id: str | None = None,
         current_instance_id: str | None = None,
     ) -> UniverseOperatorContext:
-        authorized_via_capability = (
-            self.authorization is not None
-            and self.authorization.is_valid(
-                current_instance_id or self.active_instance_id,
-                resource_id,
+        effective_resource = _STORAGE_TO_CAPABILITY_RESOURCE.get(resource_id, resource_id) if resource_id else None
+        if effective_resource is not None:
+            authorized_via_capability = (
+                self.authorization is not None
+                and self.authorization.is_valid(
+                    current_instance_id or self.active_instance_id,
+                    effective_resource,
+                )
             )
-        )
+        else:
+            authorized_via_capability = (
+                self.authorization is not None
+                and any(
+                    self.authorization.is_valid(
+                        current_instance_id or self.active_instance_id,
+                        res,
+                    )
+                    for res in ("twse.t187ap03_L", "tpex.mopsfin_t187ap03_O")
+                )
+            )
         if not self.enabled and not authorized_via_capability:
             raise UniverseIngestionWritesDisabled()
         if context is None:

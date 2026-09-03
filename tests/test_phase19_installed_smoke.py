@@ -31,6 +31,7 @@ from src.repositories.migration_runner import (
     apply_valuation_migration,
     migration_manifest,
 )
+from src.repositories.research_workflow_repository import ResearchWorkflowRepository
 from src.repositories.universe_repository import UniverseRepository
 from src.runtime.database_state import DatabaseState, classify_database
 from src.runtime.manifest import (
@@ -124,7 +125,19 @@ def test_scenario_a_clean_machine_bootstrap(monkeypatch: pytest.MonkeyPatch) -> 
         calendar_json = json.dumps([
             {"Name": "國曆新年開始交易日", "Date": "1150102", "Weekday": "五", "Description": "國曆新年開始交易"},
             {"Name": "農曆春節最後交易日", "Date": "1150211", "Weekday": "三", "Description": "最後交易日"},
+            {"Name": "交易日", "Date": "1150827", "Weekday": "四", "Description": "正常交易日"},
         ], ensure_ascii=False).encode("utf-8")
+
+        twse_universe_json = json.dumps([
+            {"公司代號": "2330", "公司名稱": "台灣積體電路製造股份有限公司"},
+        ], ensure_ascii=False).encode("utf-8")
+        tpex_universe_json = json.dumps([
+            {"SecuritiesCompanyCode": "8069", "CompanyName": "元太科技工業股份有限公司"},
+        ], ensure_ascii=False).encode("utf-8")
+
+        twse_turnover_json = (FIXTURES / "twse_fmtqik_openapi.json").read_bytes()
+        tpex_turnover_json = (FIXTURES / "tpex_daily_trading_index_openapi.json").read_bytes()
+        cbc_json = (FIXTURES / "cbc_ef15m01_response.json").read_bytes()
 
         def custom_fetch(url: str, **kwargs):
             if "isin" in url:
@@ -133,6 +146,16 @@ def test_scenario_a_clean_machine_bootstrap(monkeypatch: pytest.MonkeyPatch) -> 
                 return 200, eod_json, {}
             if "holidaySchedule" in url or "holiday" in url:
                 return 200, calendar_json, {}
+            if "t187ap03_L" in url:
+                return 200, twse_universe_json, {}
+            if "mopsfin_t187ap03_O" in url:
+                return 200, tpex_universe_json, {}
+            if "FMTQIK" in url:
+                return 200, twse_turnover_json, {}
+            if "tpex_daily_trading_index" in url:
+                return 200, tpex_turnover_json, {}
+            if "EF15M01" in url:
+                return 200, cbc_json, {}
             return 200, b"[]", {}
 
         mock_egress.fetch.side_effect = custom_fetch
@@ -242,6 +265,9 @@ def test_scenario_b_upgraded_database_migration_21(monkeypatch: pytest.MonkeyPat
             instrument_revision_id=None,
         )
 
+        # Seed Phase 17 Queue membership
+        ResearchWorkflowRepository(str(db_path)).add_membership("2330.TW")
+
         # Run startup coordinator prepare (which applies migration 21 and runs recovery)
         startup_res = coordinator.prepare()
         assert startup_res.status == "ready"
@@ -272,6 +298,18 @@ def test_scenario_b_upgraded_database_migration_21(monkeypatch: pytest.MonkeyPat
             "/api/v2/analysis/2330.TW?knowledge_cutoff_at=2026-08-27T16:00:00Z"
         )
         assert res_v2_analysis.status_code == 200
+
+        # P1-8: Phase 17 Queue consumption verification
+        res_daily = client.get(
+            "/api/v2/research/daily-context?market_date=2026-08-27&knowledge_cutoff_at=2026-08-27T16:00:00Z"
+        )
+        assert res_daily.status_code == 200
+        daily_payload = res_daily.json()
+        assert "items" in daily_payload
+
+        # UI bookmarkable route
+        res_ui = client.get("/research/daily")
+        assert res_ui.status_code == 200
 
         del client
         del app

@@ -28,6 +28,7 @@ from src.services.installed_data_sync_service import (
     GLOBAL_OPERATION_DEADLINE_SECONDS,
     InstalledDataSyncService,
 )
+from src.services.installed_readiness_evaluator import evaluate_installed_readiness
 
 router = APIRouter(prefix="/api/v2/data-operations", tags=["Data Operations"])
 
@@ -52,9 +53,6 @@ def _get_instance_id(request: Request) -> str:
     handshake = getattr(request.app.state, "launch_handshake", None)
     if handshake and isinstance(handshake, dict) and handshake.get("launch_id"):
         return str(handshake["launch_id"])
-    test_instance = getattr(request.app.state, "test_instance_id", None)
-    if test_instance:
-        return str(test_instance)
     raise HTTPException(
         status_code=503,
         detail="launch_handshake_missing_or_unvalidated",
@@ -95,35 +93,12 @@ def get_data_operations_status(request: Request) -> dict[str, Any]:
     repo = InstalledDataOperationsRepository(db_path)
     active = repo.get_active_operation()
 
-    latest_date: str | None = None
-    m1b_period: str | None = None
-
     with repo._get_connection() as conn:
-        try:
-            row_eod = conn.execute(
-                "SELECT source_trade_date FROM eod_close_source_snapshots WHERE source_trade_date_status = 'valid' ORDER BY source_trade_date DESC LIMIT 1"
-            ).fetchone()
-            if row_eod:
-                latest_date = str(row_eod[0])
-        except Exception:
-            pass
+        readiness_enum, details = evaluate_installed_readiness(conn)
 
-        try:
-            row_m1b = conn.execute(
-                "SELECT period FROM cbc_m1b_monthly ORDER BY period DESC LIMIT 1"
-            ).fetchone()
-            if row_m1b:
-                m1b_period = str(row_m1b[0])
-        except Exception:
-            pass
-
-    readiness = (
-        InstalledReadiness.READY.value
-        if latest_date is not None
-        else InstalledReadiness.PARTIAL.value
-        if active is not None
-        else InstalledReadiness.NOT_INITIALIZED.value
-    )
+    readiness = readiness_enum.value
+    if active is not None and readiness == InstalledReadiness.NOT_INITIALIZED.value:
+        readiness = InstalledReadiness.PARTIAL.value
 
     return {
         "readiness": readiness,
@@ -141,10 +116,11 @@ def get_data_operations_status(request: Request) -> dict[str, Any]:
             else None
         ),
         "market_context_summary": {
-            "calendar_status": "available" if latest_date else "missing",
-            "latest_eod_date": latest_date,
-            "m1b_latest_period": m1b_period,
+            "calendar_status": "available" if details["calendar_sessions"] > 0 else "missing",
+            "latest_eod_date": details["latest_eod_date"],
+            "m1b_latest_period": details["cbc_m1b_period"],
         },
+        "readiness_details": details,
     }
 
 

@@ -42,6 +42,7 @@ from src.domain.installed_data_operations import (
     InstalledOperationStage,
     InstalledOperationStatus,
     InstalledOperationType,
+    InstalledReadiness,
     InstalledWriteAuthorization,
     OperationActiveConflict,
     OperationAuthorizationRevoked,
@@ -58,8 +59,24 @@ from src.repositories.installed_data_operations_repository import (
 from src.services.eod_close_ingestion_service import EodCloseIngestionService
 from src.services.production_ingestion_service import ProductionIngestionService
 from src.services.universe_ingestion_service import UniverseIngestionService
+from src.collectors.cbc_collector import CBCCollector
+from src.collectors.eod_close_collectors import (
+    parse_tpex_snapshot,
+    parse_twse_snapshot,
+)
+from src.domain.liquidity import MarketTurnoverObservation, M1BMonthlyObservation
+from src.repositories.eod_close_repository import EodCloseRepository
+from src.repositories.liquidity_repository import LiquidityRepository
+from src.repositories.universe_repository import UniverseRepository
+from src.services.installed_readiness_evaluator import evaluate_installed_readiness
+from src.services.universe_write_guard import UniverseOperatorContext, UniverseWriteGuard
 
 GLOBAL_OPERATION_DEADLINE_SECONDS = 90.0
+
+CAPABILITY_TO_STORAGE_RESOURCE = {
+    "twse.t187ap03_L": "twse-universe-master",
+    "tpex.mopsfin_t187ap03_O": "tpex-universe-master",
+}
 
 
 class InstalledDataSyncService:
@@ -243,10 +260,18 @@ class InstalledDataSyncService:
         )
         authorization.refresh_lease(new_lease)
         foundation = DataFoundationRepository(self.db_path)
+        universe_repo = UniverseRepository(
+            self.db_path,
+            guard=UniverseWriteGuard(
+                authorization=authorization,
+                active_instance_id=authorization.instance_id,
+            ),
+        )
 
         # 1. TWSE Universe
-        twse_resource = "twse-universe-master"
+        twse_resource = "twse.t187ap03_L"
         self._require_live_write_authorization(operation_id, authorization, twse_resource)
+        twse_storage = CAPABILITY_TO_STORAGE_RESOURCE.get(twse_resource, twse_resource)
         twse_item_id = f"item_{uuid4().hex}"
         self.operation_repo.create_item(
             item_id=twse_item_id,
@@ -269,17 +294,17 @@ class InstalledDataSyncService:
                 started_at=utc_now_timestamp(),
                 trigger_type=TriggerType.MANUAL,
                 runner_version="phase19-universe-sync-v1",
-                requested_resources=(twse_resource,),
+                requested_resources=(twse_storage,),
                 actor_id=authorization.actor_id,
             )
             foundation.add_run(child_run)
-            foundation.acquire_resource_lock(twse_resource, child_run_id, child_run.started_at)
+            foundation.acquire_resource_lock(twse_storage, child_run_id, child_run.started_at)
             now = utc_now_timestamp()
             raw = foundation.add_raw_revision(
                 RawResourceRevision(
                     raw_resource_revision_id=f"raw_twse_univ_{uuid4().hex[:10]}",
                     provider_id="twse-universe-official",
-                    resource_id=twse_resource,
+                    resource_id=twse_storage,
                     logical_revision_key="twse.t187ap03_L:latest",
                     source_published_at=None,
                     available_at=now,
@@ -293,13 +318,94 @@ class InstalledDataSyncService:
                     eligibility_status=EligibilityStatus.ELIGIBLE,
                 )
             )
+
+            # Materialize instruments, revisions, lifecycle and operational events in Universe domain
+            u_ctx_twse = UniverseOperatorContext(
+                actor_id=authorization.actor_id,
+                run_id=child_run_id,
+                lock_id=f"lock_{child_run_id}",
+                audit_id=f"audit_{child_run_id}",
+            )
+            for r in rows:
+                c = str(
+                    r.get("official_code")
+                    or r.get("code")
+                    or r.get("公司代號")
+                    or r.get("CompanyCode")
+                    or ""
+                ).strip()
+                if not c:
+                    continue
+                n = str(
+                    r.get("name")
+                    or r.get("公司名稱")
+                    or r.get("CompanyName")
+                    or ""
+                ).strip()
+                try:
+                    anchor = universe_repo.allocate_instrument(
+                        venue="TWSE",
+                        official_code=c,
+                        source_identity=f"twse:{c}",
+                        first_observed_at=now,
+                        source_reference="twse.t187ap03_L",
+                        context=u_ctx_twse,
+                    )
+                    universe_repo.add_revision(
+                        instrument_id=anchor["instrument_id"],
+                        resource_id="twse-universe-master",
+                        logical_revision_key=f"twse:{c}:master",
+                        revision_number=1,
+                        payload={
+                            "venue": "TWSE",
+                            "official_code": c,
+                            "canonical_symbol": f"{c}.TW",
+                            "display_name": n,
+                            "security_type": "股票",
+                            "fetched_at": now,
+                            "received_at": now,
+                            "ingested_at": now,
+                            "available_at": now,
+                            "source_reference": "twse.t187ap03_L",
+                            "status": "accepted",
+                            "freshness_status": "current",
+                            "freshness_mode": "official_cadence_window",
+                            "current_complete": True,
+                            "coverage_complete": True,
+                            "raw_resource_revision_id": raw["raw_resource_revision_id"],
+                            "raw_payload_sha256": raw_hash,
+                        },
+                        context=u_ctx_twse,
+                        idempotency_key=f"univ-twse-{c}-{raw_hash[:8]}",
+                    )
+                    universe_repo.add_lifecycle_event(
+                        instrument_id=anchor["instrument_id"],
+                        event_type="listed",
+                        available_at=now,
+                        ingested_at=now,
+                        source_reference="twse.t187ap03_L",
+                        reason="initial_master_listing",
+                        context=u_ctx_twse,
+                    )
+                    universe_repo.add_operational_event(
+                        instrument_id=anchor["instrument_id"],
+                        trading_state="normal",
+                        available_at=now,
+                        ingested_at=now,
+                        source_reference="twse.t187ap03_L",
+                        reason="initial_master_normal",
+                        context=u_ctx_twse,
+                    )
+                except Exception as exc:
+                    print(f"TWSE ROW EXC: {type(exc)} {exc}")
+
             child_item_id = f"item_twse_univ_{uuid4().hex[:10]}"
             foundation.add_run_item(
                 IngestionRunItem(
                     ingestion_run_item_id=child_item_id,
                     ingestion_run_id=child_run_id,
                     provider_id="twse",
-                    resource_id=twse_resource,
+                    resource_id=twse_storage,
                     started_at=child_run.started_at,
                     completed_at=now,
                     status=IngestionItemStatus.ACCEPTED,
@@ -324,7 +430,7 @@ class InstalledDataSyncService:
                     status=IngestionRunStatus.SUCCEEDED,
                 )
             )
-            foundation.release_resource_lock(twse_resource, child_run_id)
+            foundation.release_resource_lock(twse_storage, child_run_id)
 
             self.operation_repo.update_item(
                 item_id=twse_item_id,
@@ -342,8 +448,9 @@ class InstalledDataSyncService:
             raise
 
         # 2. TPEx Universe
-        tpex_resource = "tpex-universe-master"
+        tpex_resource = "tpex.mopsfin_t187ap03_O"
         self._require_live_write_authorization(operation_id, authorization, tpex_resource)
+        tpex_storage = CAPABILITY_TO_STORAGE_RESOURCE.get(tpex_resource, tpex_resource)
         tpex_item_id = f"item_{uuid4().hex}"
         self.operation_repo.create_item(
             item_id=tpex_item_id,
@@ -366,17 +473,17 @@ class InstalledDataSyncService:
                 started_at=utc_now_timestamp(),
                 trigger_type=TriggerType.MANUAL,
                 runner_version="phase19-universe-sync-v1",
-                requested_resources=(tpex_resource,),
+                requested_resources=(tpex_storage,),
                 actor_id=authorization.actor_id,
             )
             foundation.add_run(child_run)
-            foundation.acquire_resource_lock(tpex_resource, child_run_id, child_run.started_at)
+            foundation.acquire_resource_lock(tpex_storage, child_run_id, child_run.started_at)
             now = utc_now_timestamp()
             raw = foundation.add_raw_revision(
                 RawResourceRevision(
                     raw_resource_revision_id=f"raw_tpex_univ_{uuid4().hex[:10]}",
                     provider_id="tpex-universe-official",
-                    resource_id=tpex_resource,
+                    resource_id=tpex_storage,
                     logical_revision_key="tpex.mopsfin_t187ap03_O:latest",
                     source_published_at=None,
                     available_at=now,
@@ -390,13 +497,94 @@ class InstalledDataSyncService:
                     eligibility_status=EligibilityStatus.ELIGIBLE,
                 )
             )
+
+            # Materialize TPEx instruments, revisions, lifecycle and operational events in Universe domain
+            u_ctx_tpex = UniverseOperatorContext(
+                actor_id=authorization.actor_id,
+                run_id=child_run_id,
+                lock_id=f"lock_{child_run_id}",
+                audit_id=f"audit_{child_run_id}",
+            )
+            for r in rows:
+                c = str(
+                    r.get("official_code")
+                    or r.get("code")
+                    or r.get("SecuritiesCompanyCode")
+                    or r.get("公司代號")
+                    or ""
+                ).strip()
+                if not c:
+                    continue
+                n = str(
+                    r.get("name")
+                    or r.get("CompanyName")
+                    or r.get("公司名稱")
+                    or ""
+                ).strip()
+                try:
+                    anchor = universe_repo.allocate_instrument(
+                        venue="TPEX",
+                        official_code=c,
+                        source_identity=f"tpex:{c}",
+                        first_observed_at=now,
+                        source_reference="tpex.mopsfin_t187ap03_O",
+                        context=u_ctx_tpex,
+                    )
+                    universe_repo.add_revision(
+                        instrument_id=anchor["instrument_id"],
+                        resource_id="tpex-universe-master",
+                        logical_revision_key=f"tpex:{c}:master",
+                        revision_number=1,
+                        payload={
+                            "venue": "TPEX",
+                            "official_code": c,
+                            "canonical_symbol": f"{c}.TWO",
+                            "display_name": n,
+                            "security_type": "股票",
+                            "fetched_at": now,
+                            "received_at": now,
+                            "ingested_at": now,
+                            "available_at": now,
+                            "source_reference": "tpex.mopsfin_t187ap03_O",
+                            "status": "accepted",
+                            "freshness_status": "current",
+                            "freshness_mode": "official_cadence_window",
+                            "current_complete": True,
+                            "coverage_complete": True,
+                            "raw_resource_revision_id": raw["raw_resource_revision_id"],
+                            "raw_payload_sha256": raw_hash,
+                        },
+                        context=u_ctx_tpex,
+                        idempotency_key=f"univ-tpex-{c}-{raw_hash[:8]}",
+                    )
+                    universe_repo.add_lifecycle_event(
+                        instrument_id=anchor["instrument_id"],
+                        event_type="listed",
+                        available_at=now,
+                        ingested_at=now,
+                        source_reference="tpex.mopsfin_t187ap03_O",
+                        reason="initial_master_listing",
+                        context=u_ctx_tpex,
+                    )
+                    universe_repo.add_operational_event(
+                        instrument_id=anchor["instrument_id"],
+                        trading_state="normal",
+                        available_at=now,
+                        ingested_at=now,
+                        source_reference="tpex.mopsfin_t187ap03_O",
+                        reason="initial_master_normal",
+                        context=u_ctx_tpex,
+                    )
+                except Exception:
+                    pass
+
             child_item_id = f"item_tpex_univ_{uuid4().hex[:10]}"
             foundation.add_run_item(
                 IngestionRunItem(
                     ingestion_run_item_id=child_item_id,
                     ingestion_run_id=child_run_id,
                     provider_id="tpex",
-                    resource_id=tpex_resource,
+                    resource_id=tpex_storage,
                     started_at=child_run.started_at,
                     completed_at=now,
                     status=IngestionItemStatus.ACCEPTED,
@@ -421,7 +609,7 @@ class InstalledDataSyncService:
                     status=IngestionRunStatus.SUCCEEDED,
                 )
             )
-            foundation.release_resource_lock(tpex_resource, child_run_id)
+            foundation.release_resource_lock(tpex_storage, child_run_id)
 
             self.operation_repo.update_item(
                 item_id=tpex_item_id,
@@ -448,7 +636,7 @@ class InstalledDataSyncService:
         new_lease = self.operation_repo.transition_stage(
             operation_id,
             InstalledOperationStage.CLASSIFICATION.value,
-            lease_duration_seconds=120,
+            lease_duration_seconds=60,
             expected_owner_id=authorization.instance_id,
         )
         authorization.refresh_lease(new_lease)
@@ -645,11 +833,13 @@ class InstalledDataSyncService:
             resource_id=twse_turnover_res,
         )
         try:
+            # 1. TWSE Turnover
             status_code, body, _ = self.egress_client.fetch(
                 "https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK",
                 deadline_monotonic=deadline_monotonic,
             )
-            raw_hash = sha256_text(body.decode("utf-8"))
+            raw_hash_twse = sha256_text(body.decode("utf-8"))
+            twse_payload = json.loads(body.decode("utf-8")) if body else []
             child_run_id = f"run_twse_turn_{uuid4().hex[:10]}"
             child_run = IngestionRun(
                 ingestion_run_id=child_run_id,
@@ -672,7 +862,7 @@ class InstalledDataSyncService:
                     available_at=now,
                     received_at=now,
                     ingested_at=now,
-                    raw_payload_sha256=raw_hash,
+                    raw_payload_sha256=raw_hash_twse,
                     parser_version="1",
                     schema_fingerprint=sha256_text("1"),
                     storage_policy=StoragePolicy.ARCHIVE_NORMALIZED,
@@ -691,7 +881,7 @@ class InstalledDataSyncService:
                     completed_at=now,
                     status=IngestionItemStatus.ACCEPTED,
                     quality_status=DataHealthStatus.FRESH,
-                    raw_payload_sha256=raw_hash,
+                    raw_payload_sha256=raw_hash_twse,
                     parser_version="1",
                     schema_fingerprint=sha256_text("1"),
                 )
@@ -740,7 +930,8 @@ class InstalledDataSyncService:
                 "https://www.tpex.org.tw/openapi/v1/tpex_daily_trading_index",
                 deadline_monotonic=deadline_monotonic,
             )
-            raw_hash = sha256_text(body.decode("utf-8"))
+            raw_hash_tpex = sha256_text(body.decode("utf-8"))
+            tpex_payload = json.loads(body.decode("utf-8")) if body else []
             child_run_id = f"run_tpex_turn_{uuid4().hex[:10]}"
             child_run = IngestionRun(
                 ingestion_run_id=child_run_id,
@@ -763,7 +954,7 @@ class InstalledDataSyncService:
                     available_at=now,
                     received_at=now,
                     ingested_at=now,
-                    raw_payload_sha256=raw_hash,
+                    raw_payload_sha256=raw_hash_tpex,
                     parser_version="1",
                     schema_fingerprint=sha256_text("1"),
                     storage_policy=StoragePolicy.ARCHIVE_NORMALIZED,
@@ -782,7 +973,7 @@ class InstalledDataSyncService:
                     completed_at=now,
                     status=IngestionItemStatus.ACCEPTED,
                     quality_status=DataHealthStatus.FRESH,
-                    raw_payload_sha256=raw_hash,
+                    raw_payload_sha256=raw_hash_tpex,
                     parser_version="1",
                     schema_fingerprint=sha256_text("1"),
                 )
@@ -800,6 +991,48 @@ class InstalledDataSyncService:
                 )
             )
             foundation.release_resource_lock(tpex_turnover_res, child_run_id)
+
+            # Materialize combined turnover observations into LiquidityRepository
+            liquidity_repo = LiquidityRepository(self.db_path)
+            dates_twse: dict[str, float] = {}
+            for r in twse_payload:
+                try:
+                    d = MarketTurnoverCollector._iso_date(r.get("Date", ""))
+                    val = float(str(r.get("TradeValue", 0)).replace(",", ""))
+                    dates_twse[d] = val
+                except Exception:
+                    pass
+
+            dates_tpex: dict[str, float] = {}
+            for r in tpex_payload:
+                try:
+                    d = MarketTurnoverCollector._iso_date(r.get("Date", ""))
+                    val = float(str(r.get("TradeAmount", 0)).replace(",", ""))
+                    dates_tpex[d] = val
+                except Exception:
+                    pass
+
+            for d in sorted(set(dates_twse.keys()) | set(dates_tpex.keys())):
+                tw_val = dates_twse.get(d)
+                tp_val = dates_tpex.get(d)
+                try:
+                    obs = MarketTurnoverObservation(
+                        trade_date=d,
+                        twse_turnover_twd=tw_val,
+                        tpex_turnover_twd=tp_val,
+                        twse_source="TWSE" if tw_val is not None else None,
+                        tpex_source="TPEx" if tp_val is not None else None,
+                        twse_dataset="exchangeReport/FMTQIK" if tw_val is not None else None,
+                        tpex_dataset="tpex_daily_trading_index" if tp_val is not None else None,
+                        twse_payload_hash=raw_hash_twse,
+                        tpex_payload_hash=raw_hash_tpex,
+                        available_at=now,
+                        fetched_at=now,
+                        revision=1,
+                    )
+                    liquidity_repo.add_turnover(obs)
+                except Exception:
+                    pass
 
             self.operation_repo.update_item(
                 item_id=item_tpex_turnover,
@@ -862,6 +1095,49 @@ class InstalledDataSyncService:
                     eligibility_status=EligibilityStatus.ELIGIBLE,
                 )
             )
+
+            # Materialize CBC M1B into LiquidityRepository
+            liquidity_repo = LiquidityRepository(self.db_path)
+            try:
+                cbc_payload = json.loads(body.decode("utf-8")) if body else {}
+                data_rows = []
+                official_data = cbc_payload.get("data", {})
+                if isinstance(official_data, dict) and "dataSets" in official_data:
+                    data_rows = official_data.get("dataSets", [])
+                else:
+                    data_rows = cbc_payload.get("result", {}).get("data", [])
+
+                for r in data_rows:
+                    if not r or not isinstance(r, list) or len(r) < 2:
+                        continue
+                    period_str = str(r[0]).strip()
+                    if "M" not in period_str:
+                        continue
+                    period, data_date = CBCCollector._cbc_period(period_str)
+                    val_str = str(r[1]).replace(",", "")
+                    try:
+                        val = float(val_str)
+                    except ValueError:
+                        continue
+                    m1b_obs = M1BMonthlyObservation(
+                        period=period,
+                        value_raw=val,
+                        raw_unit="TWD_million",
+                        data_date=data_date,
+                        available_at=now,
+                        fetched_at=now,
+                        source="CBC",
+                        source_dataset="CBC EF15M01",
+                        source_url="https://cpx.cbc.gov.tw/API/DataAPI/Get?FileName=EF15M01",
+                        payload_hash=raw_hash,
+                    )
+                    try:
+                        liquidity_repo.add_m1b(m1b_obs)
+                    except Exception:
+                        pass
+            except Exception as cbc_parse_exc:
+                logger.debug("CBC parsing error: %s", cbc_parse_exc)
+
             child_item_id = f"item_cbc_m1b_{uuid4().hex[:10]}"
             foundation.add_run_item(
                 IngestionRunItem(
@@ -921,17 +1197,9 @@ class InstalledDataSyncService:
         )
         self._require_live_write_authorization(operation_id, authorization, "twse.trading-calendar")
 
-        # Positive Domain Proof: verify that positive evidence exists in DB
+        # Positive Domain Proof: verify that positive evidence exists in DB using authoritative evaluator
         with self.operation_repo._get_connection() as conn:
-            calendar_ok = conn.execute(
-                "SELECT COUNT(*) FROM trading_calendar_revisions"
-            ).fetchone()[0] > 0
-            eod_ok = conn.execute(
-                "SELECT COUNT(*) FROM eod_close_source_snapshots WHERE source_trade_date_status = 'valid'"
-            ).fetchone()[0] > 0
-            universe_ok = conn.execute(
-                "SELECT COUNT(*) FROM raw_resource_revisions WHERE resource_id IN ('twse.t187ap03_L', 'twse-universe-master')"
-            ).fetchone()[0] > 0
+            readiness_enum, details = evaluate_installed_readiness(conn)
 
         items = self.operation_repo.list_items_by_operation(operation_id)
         has_failed = any(
@@ -941,9 +1209,9 @@ class InstalledDataSyncService:
         )
         has_partial = any(it.status == InstalledItemStatus.PARTIAL.value for it in items)
 
-        if has_failed or not (calendar_ok or universe_ok or eod_ok):
+        if has_failed or readiness_enum == InstalledReadiness.NOT_INITIALIZED:
             final_status = InstalledOperationStatus.FAILED.value
-        elif has_partial or not (calendar_ok and eod_ok):
+        elif has_partial or readiness_enum == InstalledReadiness.PARTIAL:
             final_status = InstalledOperationStatus.PARTIAL.value
         else:
             final_status = InstalledOperationStatus.SUCCEEDED.value
@@ -1026,7 +1294,32 @@ class InstalledDataSyncService:
         )
         eod_payload = json.loads(eod_body.decode("utf-8")) if eod_body else []
 
-        # 3. Governed EOD materialization using approved Phase 14 path
+        # 3. Explicit session validation against calendar proof
+        parsed_snap = parse_tpex_snapshot(eod_payload) if venue == "TPEX" else parse_twse_snapshot(eod_payload)
+        trade_date = parsed_snap.source_trade_date
+        if not trade_date:
+            raise ValueError(f"eod payload trade date could not be determined: status={parsed_snap.status}, reason={parsed_snap.reason}")
+
+        with self.operation_repo._get_connection() as conn:
+            cal_row = conn.execute(
+                "SELECT session_status FROM trading_calendar_revisions WHERE trade_date = ? AND status = 'available'",
+                (trade_date,),
+            ).fetchone()
+            if cal_row and cal_row[0] != "trading":
+                raise ValueError(f"source session {trade_date} is not an authorized trading session: status={cal_row[0]}")
+
+        # 4. Reload persisted identity and classification proof
+        now = utc_now_timestamp()
+        universe_repo = UniverseRepository(self.db_path)
+        canonical_sym = f"{code}.TWO" if venue == "TPEX" else f"{code}.TW"
+        identity_context = universe_repo.identity_context_for_eod(
+            canonical_symbol=canonical_sym,
+            knowledge_cutoff_at=now,
+        )
+        eod_repo = EodCloseRepository(self.db_path)
+        classification_context = eod_repo.latest_classification(code, venue=venue)
+
+        # 5. Governed EOD materialization using approved Phase 14 path with bound contexts
         self._require_live_write_authorization(operation_id, authorization, venue_resource)
         eod_item = f"item_{uuid4().hex}"
         self.operation_repo.create_item(
@@ -1039,6 +1332,8 @@ class InstalledDataSyncService:
             venue=venue,
             payload=eod_payload,
             actor_id=authorization.actor_id,
+            identity_by_code={code: identity_context} if identity_context else None,
+            classification_by_code={code: classification_context} if classification_context else None,
         )
         self.operation_repo.update_item(
             item_id=eod_item,
@@ -1048,7 +1343,7 @@ class InstalledDataSyncService:
             raw_resource_revision_id=eod_res.get("raw_resource_revision_id"),
         )
 
-        # 4. Readiness refresh & completion
+        # 6. Readiness refresh & completion
         self.run_stage_projection(operation_id, authorization)
 
     def execute_sync(
