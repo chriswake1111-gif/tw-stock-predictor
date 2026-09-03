@@ -818,15 +818,21 @@ class InstalledDataSyncService:
             identity_by_code = {}
             classification_by_code = {}
             for code in codes:
-                ident = universe_repo.identity_context_for_eod(
-                    canonical_symbol=f"{code}.TW",
-                    knowledge_cutoff_at=now,
-                )
-                if ident:
-                    identity_by_code[code] = ident
-                classif = eod_repo.latest_classification_for_code(code)
-                if classif:
-                    classification_by_code[code] = classif
+                try:
+                    ident = universe_repo.identity_context_for_eod(
+                        canonical_symbol=f"{code}.TW",
+                        knowledge_cutoff_at=now,
+                    )
+                    if ident:
+                        identity_by_code[code] = ident
+                except ValueError:
+                    pass
+                try:
+                    classif = eod_repo.latest_classification_for_code(code)
+                    if classif:
+                        classification_by_code[code] = classif
+                except ValueError:
+                    pass
 
             eod_res = eod_svc.ingest_price_payload(
                 venue="TWSE",
@@ -870,15 +876,21 @@ class InstalledDataSyncService:
             identity_by_code_tpex = {}
             classification_by_code_tpex = {}
             for code in codes:
-                ident = universe_repo.identity_context_for_eod(
-                    canonical_symbol=f"{code}.TWO",
-                    knowledge_cutoff_at=now,
-                )
-                if ident:
-                    identity_by_code_tpex[code] = ident
-                classif = eod_repo.latest_classification_for_code(code)
-                if classif:
-                    classification_by_code_tpex[code] = classif
+                try:
+                    ident = universe_repo.identity_context_for_eod(
+                        canonical_symbol=f"{code}.TWO",
+                        knowledge_cutoff_at=now,
+                    )
+                    if ident:
+                        identity_by_code_tpex[code] = ident
+                except ValueError:
+                    pass
+                try:
+                    classif = eod_repo.latest_classification_for_code(code)
+                    if classif:
+                        classification_by_code_tpex[code] = classif
+                except ValueError:
+                    pass
 
             eod_res = eod_svc.ingest_price_payload(
                 venue="TPEX",
