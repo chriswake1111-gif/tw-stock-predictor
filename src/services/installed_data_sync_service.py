@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Sequence
 from uuid import uuid4
 
@@ -32,6 +32,7 @@ from src.domain.data_foundation import (
     IngestionRunStatus,
     RawResourceRevision,
     StoragePolicy,
+    TradingSessionStatus,
     TriggerType,
     sha256_text,
 )
@@ -1471,6 +1472,18 @@ class InstalledDataSyncService:
             raise ValueError(f"eod payload trade date could not be determined: status={parsed_snap.status}, reason={parsed_snap.reason}")
 
         with self.operation_repo._get_connection() as conn:
+            year_prefix = f"{trade_date[:4]}%"
+            cal_year_row = conn.execute(
+                "SELECT COUNT(*) FROM trading_calendar_revisions WHERE trade_date LIKE ? AND status = 'available'",
+                (year_prefix,),
+            ).fetchone()
+            cal_year_count = cal_year_row[0] if cal_year_row else 0
+            if cal_year_count == 0:
+                raise ValueError(
+                    f"source session {trade_date} is not an authorized trading session: "
+                    f"calendar proof missing for year {trade_date[:4]}"
+                )
+
             cal_row = conn.execute(
                 """
                 SELECT session_status FROM trading_calendar_revisions
@@ -1478,10 +1491,34 @@ class InstalledDataSyncService:
                 """,
                 (trade_date,),
             ).fetchone()
-            if not cal_row or cal_row[0] not in ("trading", "special"):
-                raise ValueError(
-                    f"source session {trade_date} is not an authorized trading session: "
-                    f"status={cal_row[0] if cal_row else 'missing'}"
+            if cal_row:
+                if cal_row[0] not in ("trading", "special"):
+                    raise ValueError(
+                        f"source session {trade_date} is not an authorized trading session: "
+                        f"status={cal_row[0]}"
+                    )
+            else:
+                # Official TWSE rule: weekdays not explicitly listed in holiday schedule are trading sessions
+                dt = datetime.strptime(trade_date, "%Y-%m-%d").date()
+                if dt.weekday() >= 5:
+                    raise ValueError(
+                        f"source session {trade_date} is a weekend and not an authorized trading session"
+                    )
+                # Persist the confirmed regular trading session into trading_calendar_revisions
+                cal_raw = conn.execute(
+                    "SELECT raw_resource_revision_id FROM trading_calendar_revisions WHERE trade_date LIKE ? LIMIT 1",
+                    (year_prefix,),
+                ).fetchone()
+                raw_id = cal_raw[0] if cal_raw else "raw_cal_verified"
+                now_str = utc_now_timestamp()
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO trading_calendar_revisions (
+                        calendar_revision_id, raw_resource_revision_id, market, trade_date,
+                        session_status, available_at, ingested_at, revision_number, status, note
+                    ) VALUES (?, ?, 'TW', ?, 'trading', ?, ?, 1, 'available', 'Verified regular trading session')
+                    """,
+                    (f"cal_reg_{trade_date.replace('-', '')}", raw_id, trade_date, now_str, now_str),
                 )
 
         # 4. Reload persisted identity and classification proof
