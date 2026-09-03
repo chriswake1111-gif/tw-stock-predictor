@@ -414,6 +414,7 @@ def apply_valuation_migration(
     applied_ids: list[str] = []
     with _closed_sqlite_connection(db_path) as conn:
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode = WAL")
         # Rebuild migrations run with FK enforcement paused, then fail closed on
         # explicit checks of the rebuilt table and its dependants before commit.
         # This prevents ALTER TABLE from rewriting child references to a

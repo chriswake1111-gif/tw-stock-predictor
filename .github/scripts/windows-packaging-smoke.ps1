@@ -526,6 +526,13 @@ try {
     $summary | ConvertTo-Json -Depth 4
 }
 finally {
+    if ($Error.Count -gt 0) {
+        Write-Host "Diagnostic: Dumping logs on failure from UserRoot ($UserRoot)..."
+        Get-ChildItem -Path $UserRoot -Recurse -Filter "*.log*" -File -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "=== LOG: $($_.FullName) ==="
+            Get-Content -LiteralPath $_.FullName -Tail 50 -ErrorAction SilentlyContinue
+        }
+    }
     foreach ($process in @($first, $second, $stop, $orphan, $upgradeProcess, $legacyProcess, $corruptProcess, $recoveryProcess, $rejectedRecoveryProcess, $writerRejectedProcess, $logProcess)) {
         if ($null -ne $process -and -not $process.HasExited) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
