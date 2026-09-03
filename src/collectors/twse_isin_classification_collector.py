@@ -255,6 +255,9 @@ def parse_twse_isin_classification(
 
     market = candidate.get("market")
     security_type = candidate.get("security_type")
+    currency = candidate.get("currency")
+    if currency is None and expected_market in {"上市", "上櫃"} and security_type == "股票":
+        currency = "新台幣"
     if expected_market:
         decision = classify_product(
             official_code=candidate.get("official_code"),
@@ -264,7 +267,7 @@ def parse_twse_isin_classification(
             security_type=security_type,
             listing_date=listing_date,
             trade_date=trade_date,
-            currency=candidate.get("currency"),
+            currency=currency,
             cfi=candidate.get("cfi"),
             remarks=candidate.get("remarks"),
         )
@@ -285,7 +288,7 @@ def parse_twse_isin_classification(
         listing_date=listing_date,
         isin_raw=candidate.get("isin"),
         cfi_raw=candidate.get("cfi"),
-        currency_raw=candidate.get("currency"),
+        currency_raw=currency,
         remarks_raw=candidate.get("remarks"),
         raw_cells=raw_cells,
         schema_fingerprint=schema_hash,

@@ -390,6 +390,8 @@ class InstalledDataSyncService:
                     universe_repo.add_lifecycle_event(
                         instrument_id=anchor["instrument_id"],
                         event_type="listed",
+                        event_date="1970-01-01",
+                        effective_at="1970-01-01T00:00:00Z",
                         available_at=now,
                         ingested_at=now,
                         source_reference="twse.t187ap03_L",
@@ -399,6 +401,7 @@ class InstalledDataSyncService:
                     universe_repo.add_operational_event(
                         instrument_id=anchor["instrument_id"],
                         trading_state="normal",
+                        effective_at="1970-01-01T00:00:00Z",
                         available_at=now,
                         ingested_at=now,
                         source_reference="twse.t187ap03_L",
@@ -596,6 +599,8 @@ class InstalledDataSyncService:
                     universe_repo.add_lifecycle_event(
                         instrument_id=anchor["instrument_id"],
                         event_type="listed",
+                        event_date="1970-01-01",
+                        effective_at="1970-01-01T00:00:00Z",
                         available_at=now,
                         ingested_at=now,
                         source_reference="tpex.mopsfin_t187ap03_O",
@@ -605,6 +610,7 @@ class InstalledDataSyncService:
                     universe_repo.add_operational_event(
                         instrument_id=anchor["instrument_id"],
                         trading_state="normal",
+                        effective_at="1970-01-01T00:00:00Z",
                         available_at=now,
                         ingested_at=now,
                         source_reference="tpex.mopsfin_t187ap03_O",
