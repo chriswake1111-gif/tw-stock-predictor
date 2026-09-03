@@ -75,12 +75,24 @@ from src.repositories.universe_repository import (
 from src.services.installed_readiness_evaluator import evaluate_installed_readiness
 from src.services.universe_write_guard import UniverseOperatorContext, UniverseWriteGuard
 
-GLOBAL_OPERATION_DEADLINE_SECONDS = 180.0
+GLOBAL_OPERATION_DEADLINE_SECONDS = 90.0
 
 CAPABILITY_TO_STORAGE_RESOURCE = {
     "twse.t187ap03_L": "twse-universe-master",
     "tpex.mopsfin_t187ap03_O": "tpex-universe-master",
 }
+
+
+def _parse_source_listing_date(raw_val: Any) -> str | None:
+    if not raw_val:
+        return None
+    s = str(raw_val).strip().replace("/", "").replace("-", "")
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+    if len(s) == 7 and s.isdigit():
+        roc_y = int(s[:3]) + 1911
+        return f"{roc_y:04d}-{s[3:5]}-{s[5:7]}"
+    return None
 
 
 class InstalledDataSyncService:
@@ -172,7 +184,7 @@ class InstalledDataSyncService:
         self,
         operation_type: str = InstalledOperationType.SYNC.value,
         target_symbols: Sequence[str] | None = None,
-        lease_duration_seconds: int = 180,
+        lease_duration_seconds: int = 60,
     ) -> tuple[str, InstalledWriteAuthorization]:
         operation_id = f"op_{uuid4().hex}"
         op_row = self.operation_repo.create_operation(
@@ -277,7 +289,7 @@ class InstalledDataSyncService:
         new_lease = self.operation_repo.transition_stage(
             operation_id,
             InstalledOperationStage.UNIVERSE.value,
-            lease_duration_seconds=180,
+            lease_duration_seconds=60,
             expected_owner_id=authorization.instance_id,
         )
         authorization.refresh_lease(new_lease)
@@ -405,11 +417,15 @@ class InstalledDataSyncService:
                             "raw_payload_sha256": raw_hash,
                         },
                     )
+                    listing_d = _parse_source_listing_date(
+                        r.get("上市日期") or r.get("listing_date") or r.get("DateOfListing")
+                    )
+                    eff_at = f"{listing_d}T00:00:00Z" if listing_d else None
                     universe_repo.add_lifecycle_event(
                         instrument_id=anchor["instrument_id"],
                         event_type="listed",
-                        event_date="1970-01-01",
-                        effective_at="1970-01-01T00:00:00Z",
+                        event_date=listing_d,
+                        effective_at=eff_at,
                         available_at=now,
                         ingested_at=now,
                         source_reference="twse.t187ap03_L",
@@ -419,7 +435,7 @@ class InstalledDataSyncService:
                     universe_repo.add_operational_event(
                         instrument_id=anchor["instrument_id"],
                         trading_state="normal",
-                        effective_at="1970-01-01T00:00:00Z",
+                        effective_at=None,
                         available_at=now,
                         ingested_at=now,
                         source_reference="twse.t187ap03_L",
@@ -614,11 +630,15 @@ class InstalledDataSyncService:
                             "raw_payload_sha256": raw_hash,
                         },
                     )
+                    listing_d_tpex = _parse_source_listing_date(
+                        r.get("DateOfListing") or r.get("listing_date") or r.get("上市日期")
+                    )
+                    eff_at_tpex = f"{listing_d_tpex}T00:00:00Z" if listing_d_tpex else None
                     universe_repo.add_lifecycle_event(
                         instrument_id=anchor["instrument_id"],
                         event_type="listed",
-                        event_date="1970-01-01",
-                        effective_at="1970-01-01T00:00:00Z",
+                        event_date=listing_d_tpex,
+                        effective_at=eff_at_tpex,
                         available_at=now,
                         ingested_at=now,
                         source_reference="tpex.mopsfin_t187ap03_O",
@@ -628,7 +648,7 @@ class InstalledDataSyncService:
                     universe_repo.add_operational_event(
                         instrument_id=anchor["instrument_id"],
                         trading_state="normal",
-                        effective_at="1970-01-01T00:00:00Z",
+                        effective_at=None,
                         available_at=now,
                         ingested_at=now,
                         source_reference="tpex.mopsfin_t187ap03_O",
@@ -718,7 +738,7 @@ class InstalledDataSyncService:
         new_lease = self.operation_repo.transition_stage(
             operation_id,
             InstalledOperationStage.CLASSIFICATION.value,
-            lease_duration_seconds=180,
+            lease_duration_seconds=60,
             expected_owner_id=authorization.instance_id,
         )
         authorization.refresh_lease(new_lease)
@@ -808,7 +828,7 @@ class InstalledDataSyncService:
         new_lease = self.operation_repo.transition_stage(
             operation_id,
             InstalledOperationStage.EOD.value,
-            lease_duration_seconds=180,
+            lease_duration_seconds=60,
             expected_owner_id=authorization.instance_id,
         )
         authorization.refresh_lease(new_lease)
@@ -894,7 +914,7 @@ class InstalledDataSyncService:
         # 2. TPEx EOD
         new_lease = self.operation_repo.extend_lease(
             operation_id,
-            lease_duration_seconds=180,
+            lease_duration_seconds=60,
             expected_owner_id=authorization.instance_id,
         )
         authorization.refresh_lease(new_lease)
@@ -966,7 +986,7 @@ class InstalledDataSyncService:
         new_lease = self.operation_repo.transition_stage(
             operation_id,
             InstalledOperationStage.TURNOVER_AND_CBC.value,
-            lease_duration_seconds=180,
+            lease_duration_seconds=60,
             expected_owner_id=authorization.instance_id,
         )
         authorization.refresh_lease(new_lease)
@@ -982,27 +1002,32 @@ class InstalledDataSyncService:
             stage=InstalledOperationStage.TURNOVER_AND_CBC.value,
             resource_id=twse_turnover_res,
         )
+        child_run_twse_id = f"run_twse_turn_{uuid4().hex[:10]}"
+        child_run_twse = IngestionRun(
+            ingestion_run_id=child_run_twse_id,
+            started_at=utc_now_timestamp(),
+            trigger_type=TriggerType.MANUAL,
+            runner_version="phase19-turnover-v1",
+            requested_resources=(twse_turnover_res,),
+            actor_id=authorization.actor_id,
+        )
+        raw_hash_twse = ""
+        raw_twse: dict[str, Any] | None = None
+        child_item_twse_id = f"item_twse_turn_{uuid4().hex[:10]}"
+        twse_payload: list[dict] = []
+        twse_fetch_error: str | None = None
+
         try:
-            # 1. TWSE Turnover
             status_code, body, _ = self.egress_client.fetch(
                 "https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK",
                 deadline_monotonic=deadline_monotonic,
             )
             raw_hash_twse = sha256_text(body.decode("utf-8"))
             twse_payload = json.loads(body.decode("utf-8")) if body else []
-            child_run_id = f"run_twse_turn_{uuid4().hex[:10]}"
-            child_run = IngestionRun(
-                ingestion_run_id=child_run_id,
-                started_at=utc_now_timestamp(),
-                trigger_type=TriggerType.MANUAL,
-                runner_version="phase19-turnover-v1",
-                requested_resources=(twse_turnover_res,),
-                actor_id=authorization.actor_id,
-            )
-            foundation.add_run(child_run)
-            foundation.acquire_resource_lock(twse_turnover_res, child_run_id, child_run.started_at)
+            foundation.add_run(child_run_twse)
+            foundation.acquire_resource_lock(twse_turnover_res, child_run_twse_id, child_run_twse.started_at)
             now = utc_now_timestamp()
-            raw = foundation.add_raw_revision(
+            raw_twse = foundation.add_raw_revision(
                 RawResourceRevision(
                     raw_resource_revision_id=f"raw_twse_turn_{uuid4().hex[:10]}",
                     provider_id="twse",
@@ -1020,14 +1045,13 @@ class InstalledDataSyncService:
                     eligibility_status=EligibilityStatus.ELIGIBLE,
                 )
             )
-            child_item_id = f"item_twse_turn_{uuid4().hex[:10]}"
             foundation.add_run_item(
                 IngestionRunItem(
-                    ingestion_run_item_id=child_item_id,
-                    ingestion_run_id=child_run_id,
+                    ingestion_run_item_id=child_item_twse_id,
+                    ingestion_run_id=child_run_twse_id,
                     provider_id="twse",
                     resource_id=twse_turnover_res,
-                    started_at=child_run.started_at,
+                    started_at=child_run_twse.started_at,
                     completed_at=now,
                     status=IngestionItemStatus.ACCEPTED,
                     quality_status=DataHealthStatus.FRESH,
@@ -1036,32 +1060,16 @@ class InstalledDataSyncService:
                     schema_fingerprint=sha256_text("1"),
                 )
             )
-            foundation.complete_run(
-                IngestionRun(
-                    ingestion_run_id=child_run_id,
-                    started_at=child_run.started_at,
-                    completed_at=now,
-                    trigger_type=child_run.trigger_type,
-                    runner_version=child_run.runner_version,
-                    requested_resources=child_run.requested_resources,
-                    actor_id=child_run.actor_id,
-                    status=IngestionRunStatus.SUCCEEDED,
-                )
-            )
-            foundation.release_resource_lock(twse_turnover_res, child_run_id)
-
-            self.operation_repo.update_item(
-                item_id=item_twse_turnover,
-                status=InstalledItemStatus.ACCEPTED.value,
-                ingestion_run_id=child_run_id,
-                ingestion_run_item_id=child_item_id,
-                raw_resource_revision_id=raw["raw_resource_revision_id"],
-            )
         except Exception as exc:
+            twse_fetch_error = str(exc)
+            try:
+                foundation.release_resource_lock(twse_turnover_res, child_run_twse_id)
+            except Exception:
+                pass
             self.operation_repo.update_item(
                 item_id=item_twse_turnover,
                 status=InstalledItemStatus.FAILED.value,
-                error_detail=str(exc),
+                error_detail=twse_fetch_error,
             )
             raise
 
@@ -1075,6 +1083,21 @@ class InstalledDataSyncService:
             stage=InstalledOperationStage.TURNOVER_AND_CBC.value,
             resource_id=tpex_turnover_res,
         )
+        child_run_tpex_id = f"run_tpex_turn_{uuid4().hex[:10]}"
+        child_run_tpex = IngestionRun(
+            ingestion_run_id=child_run_tpex_id,
+            started_at=utc_now_timestamp(),
+            trigger_type=TriggerType.MANUAL,
+            runner_version="phase19-turnover-v1",
+            requested_resources=(tpex_turnover_res,),
+            actor_id=authorization.actor_id,
+        )
+        raw_hash_tpex = ""
+        raw_tpex: dict[str, Any] | None = None
+        child_item_tpex_id = f"item_tpex_turn_{uuid4().hex[:10]}"
+        tpex_payload: list[dict] = []
+        tpex_fetch_error: str | None = None
+
         try:
             status_code, body, _ = self.egress_client.fetch(
                 "https://www.tpex.org.tw/openapi/v1/tpex_daily_trading_index",
@@ -1082,19 +1105,10 @@ class InstalledDataSyncService:
             )
             raw_hash_tpex = sha256_text(body.decode("utf-8"))
             tpex_payload = json.loads(body.decode("utf-8")) if body else []
-            child_run_id = f"run_tpex_turn_{uuid4().hex[:10]}"
-            child_run = IngestionRun(
-                ingestion_run_id=child_run_id,
-                started_at=utc_now_timestamp(),
-                trigger_type=TriggerType.MANUAL,
-                runner_version="phase19-turnover-v1",
-                requested_resources=(tpex_turnover_res,),
-                actor_id=authorization.actor_id,
-            )
-            foundation.add_run(child_run)
-            foundation.acquire_resource_lock(tpex_turnover_res, child_run_id, child_run.started_at)
+            foundation.add_run(child_run_tpex)
+            foundation.acquire_resource_lock(tpex_turnover_res, child_run_tpex_id, child_run_tpex.started_at)
             now = utc_now_timestamp()
-            raw = foundation.add_raw_revision(
+            raw_tpex = foundation.add_raw_revision(
                 RawResourceRevision(
                     raw_resource_revision_id=f"raw_tpex_turn_{uuid4().hex[:10]}",
                     provider_id="tpex",
@@ -1112,14 +1126,13 @@ class InstalledDataSyncService:
                     eligibility_status=EligibilityStatus.ELIGIBLE,
                 )
             )
-            child_item_id = f"item_tpex_turn_{uuid4().hex[:10]}"
             foundation.add_run_item(
                 IngestionRunItem(
-                    ingestion_run_item_id=child_item_id,
-                    ingestion_run_id=child_run_id,
+                    ingestion_run_item_id=child_item_tpex_id,
+                    ingestion_run_id=child_run_tpex_id,
                     provider_id="tpex",
                     resource_id=tpex_turnover_res,
-                    started_at=child_run.started_at,
+                    started_at=child_run_tpex.started_at,
                     completed_at=now,
                     status=IngestionItemStatus.ACCEPTED,
                     quality_status=DataHealthStatus.FRESH,
@@ -1128,21 +1141,26 @@ class InstalledDataSyncService:
                     schema_fingerprint=sha256_text("1"),
                 )
             )
-            foundation.complete_run(
-                IngestionRun(
-                    ingestion_run_id=child_run_id,
-                    started_at=child_run.started_at,
-                    completed_at=now,
-                    trigger_type=child_run.trigger_type,
-                    runner_version=child_run.runner_version,
-                    requested_resources=child_run.requested_resources,
-                    actor_id=child_run.actor_id,
-                    status=IngestionRunStatus.SUCCEEDED,
-                )
+        except Exception as exc:
+            tpex_fetch_error = str(exc)
+            try:
+                foundation.release_resource_lock(tpex_turnover_res, child_run_tpex_id)
+            except Exception:
+                pass
+            self.operation_repo.update_item(
+                item_id=item_tpex_turnover,
+                status=InstalledItemStatus.FAILED.value,
+                error_detail=tpex_fetch_error,
             )
-            foundation.release_resource_lock(tpex_turnover_res, child_run_id)
+            # Make sure TWSE lock is also cleaned up on abort
+            try:
+                foundation.release_resource_lock(twse_turnover_res, child_run_twse_id)
+            except Exception:
+                pass
+            raise
 
-            # Materialize combined turnover observations into LiquidityRepository
+        # 3. Materialize combined turnover observations into LiquidityRepository, then truthfully finalize both venues
+        try:
             liquidity_repo = LiquidityRepository(self.db_path)
             dates_twse: dict[str, float] = {}
             twse_row_errors = 0
@@ -1164,9 +1182,13 @@ class InstalledDataSyncService:
                 except Exception:
                     tpex_row_errors += 1
 
-            turnover_added = 0
-            turnover_rejected = 0
+            twse_persisted = 0
+            twse_rejected = 0
+            tpex_persisted = 0
+            tpex_rejected = 0
             all_turnover_dates = sorted(set(dates_twse.keys()) | set(dates_tpex.keys()))
+            now = utc_now_timestamp()
+
             for d in all_turnover_dates:
                 tw_val = dates_twse.get(d)
                 tp_val = dates_tpex.get(d)
@@ -1179,32 +1201,100 @@ class InstalledDataSyncService:
                         tpex_source="TPEx" if tp_val is not None else None,
                         twse_dataset="exchangeReport/FMTQIK" if tw_val is not None else None,
                         tpex_dataset="tpex_daily_trading_index" if tp_val is not None else None,
-                        twse_payload_hash=raw_hash_twse,
-                        tpex_payload_hash=raw_hash_tpex,
+                        twse_payload_hash=raw_hash_twse if tw_val is not None else None,
+                        tpex_payload_hash=raw_hash_tpex if tp_val is not None else None,
                         available_at=now,
                         fetched_at=now,
                         revision=1,
                     )
                     liquidity_repo.add_turnover(obs)
-                    turnover_added += 1
+                    if tw_val is not None:
+                        twse_persisted += 1
+                    if tp_val is not None:
+                        tpex_persisted += 1
                 except Exception:
-                    turnover_rejected += 1
+                    if tw_val is not None:
+                        twse_rejected += 1
+                    if tp_val is not None:
+                        tpex_rejected += 1
 
-            if turnover_added > 0 and turnover_rejected == 0 and twse_row_errors == 0 and tpex_row_errors == 0:
-                tpex_turn_status = InstalledItemStatus.ACCEPTED.value
-            elif turnover_added > 0:
-                tpex_turn_status = InstalledItemStatus.PARTIAL.value
+            # Finalize TWSE
+            if len(dates_twse) > 0 and twse_row_errors == 0 and twse_rejected == 0 and twse_persisted > 0:
+                twse_run_status = IngestionRunStatus.SUCCEEDED
+                twse_inst_status = InstalledItemStatus.ACCEPTED.value
+            elif twse_persisted > 0:
+                twse_run_status = IngestionRunStatus.PARTIAL
+                twse_inst_status = InstalledItemStatus.PARTIAL.value
             else:
-                tpex_turn_status = InstalledItemStatus.FAILED.value
+                twse_run_status = IngestionRunStatus.FAILED
+                twse_inst_status = InstalledItemStatus.FAILED.value
 
+            foundation.complete_run(
+                IngestionRun(
+                    ingestion_run_id=child_run_twse_id,
+                    started_at=child_run_twse.started_at,
+                    completed_at=now,
+                    trigger_type=child_run_twse.trigger_type,
+                    runner_version=child_run_twse.runner_version,
+                    requested_resources=child_run_twse.requested_resources,
+                    actor_id=child_run_twse.actor_id,
+                    status=twse_run_status,
+                )
+            )
+            foundation.release_resource_lock(twse_turnover_res, child_run_twse_id)
+            self.operation_repo.update_item(
+                item_id=item_twse_turnover,
+                status=twse_inst_status,
+                ingestion_run_id=child_run_twse_id,
+                ingestion_run_item_id=child_item_twse_id,
+                raw_resource_revision_id=raw_twse["raw_resource_revision_id"] if raw_twse else None,
+            )
+
+            # Finalize TPEx
+            if len(dates_tpex) > 0 and tpex_row_errors == 0 and tpex_rejected == 0 and tpex_persisted > 0:
+                tpex_run_status = IngestionRunStatus.SUCCEEDED
+                tpex_inst_status = InstalledItemStatus.ACCEPTED.value
+            elif tpex_persisted > 0:
+                tpex_run_status = IngestionRunStatus.PARTIAL
+                tpex_inst_status = InstalledItemStatus.PARTIAL.value
+            else:
+                tpex_run_status = IngestionRunStatus.FAILED
+                tpex_inst_status = InstalledItemStatus.FAILED.value
+
+            foundation.complete_run(
+                IngestionRun(
+                    ingestion_run_id=child_run_tpex_id,
+                    started_at=child_run_tpex.started_at,
+                    completed_at=now,
+                    trigger_type=child_run_tpex.trigger_type,
+                    runner_version=child_run_tpex.runner_version,
+                    requested_resources=child_run_tpex.requested_resources,
+                    actor_id=child_run_tpex.actor_id,
+                    status=tpex_run_status,
+                )
+            )
+            foundation.release_resource_lock(tpex_turnover_res, child_run_tpex_id)
             self.operation_repo.update_item(
                 item_id=item_tpex_turnover,
-                status=tpex_turn_status,
-                ingestion_run_id=child_run_id,
-                ingestion_run_item_id=child_item_id,
-                raw_resource_revision_id=raw["raw_resource_revision_id"],
+                status=tpex_inst_status,
+                ingestion_run_id=child_run_tpex_id,
+                ingestion_run_item_id=child_item_tpex_id,
+                raw_resource_revision_id=raw_tpex["raw_resource_revision_id"] if raw_tpex else None,
             )
         except Exception as exc:
+            try:
+                foundation.release_resource_lock(twse_turnover_res, child_run_twse_id)
+            except Exception:
+                pass
+            try:
+                foundation.release_resource_lock(tpex_turnover_res, child_run_tpex_id)
+            except Exception:
+                pass
+            self.operation_repo.update_item(
+                item_id=item_twse_turnover,
+                status=InstalledItemStatus.FAILED.value,
+                error_detail=str(exc),
+            )
             self.operation_repo.update_item(
                 item_id=item_tpex_turnover,
                 status=InstalledItemStatus.FAILED.value,
@@ -1387,7 +1477,7 @@ class InstalledDataSyncService:
         self.operation_repo.transition_stage(
             operation_id,
             InstalledOperationStage.PROJECTION.value,
-            lease_duration_seconds=180,
+            lease_duration_seconds=60,
             expected_owner_id=authorization.instance_id,
         )
         self._require_live_write_authorization(operation_id, authorization, "twse.trading-calendar")
@@ -1515,34 +1605,10 @@ class InstalledDataSyncService:
                 """,
                 (trade_date,),
             ).fetchone()
-            if cal_row:
-                if cal_row[0] not in ("trading", "special"):
-                    raise ValueError(
-                        f"source session {trade_date} is not an authorized trading session: "
-                        f"status={cal_row[0]}"
-                    )
-            else:
-                # Official TWSE rule: weekdays not explicitly listed in holiday schedule are trading sessions
-                dt = datetime.strptime(trade_date, "%Y-%m-%d").date()
-                if dt.weekday() >= 5:
-                    raise ValueError(
-                        f"source session {trade_date} is a weekend and not an authorized trading session"
-                    )
-                # Persist the confirmed regular trading session into trading_calendar_revisions
-                cal_raw = conn.execute(
-                    "SELECT raw_resource_revision_id FROM trading_calendar_revisions WHERE trade_date LIKE ? LIMIT 1",
-                    (year_prefix,),
-                ).fetchone()
-                raw_id = cal_raw[0] if cal_raw else "raw_cal_verified"
-                now_str = utc_now_timestamp()
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO trading_calendar_revisions (
-                        calendar_revision_id, raw_resource_revision_id, market, trade_date,
-                        session_status, available_at, ingested_at, revision_number, status, note
-                    ) VALUES (?, ?, 'TW', ?, 'trading', ?, ?, 1, 'available', 'Verified regular trading session')
-                    """,
-                    (f"cal_reg_{trade_date.replace('-', '')}", raw_id, trade_date, now_str, now_str),
+            if not cal_row or cal_row[0] not in ("trading", "special"):
+                raise ValueError(
+                    f"source session {trade_date} is not an authorized trading session: "
+                    f"status={cal_row[0] if cal_row else 'missing'}"
                 )
 
         # 4. Reload persisted identity and classification proof

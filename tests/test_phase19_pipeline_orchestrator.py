@@ -260,3 +260,125 @@ def test_symbol_enablement_fails_closed_on_missing_identity(
     # Without universe ingestion, persisted identity context is missing -> must fail closed
     with pytest.raises(ValueError, match="persisted identity context missing"):
         service.run_symbol_enablement_pipeline(op_id, auth, symbol="2330.TW")
+
+
+def test_symbol_enablement_never_synthesizes_calendar_revision(
+    sync_env: tuple[InstalledDataSyncService, InstalledDataOperationsRepository, str]
+) -> None:
+    service, repo, db_path = sync_env
+
+    # Only a holiday is registered in calendar
+    holiday_cal_json = json.dumps([
+        {"Name": "國定假日", "Date": "1150827", "Weekday": "四", "Description": "放假無交易"},
+    ], ensure_ascii=False).encode("utf-8")
+    eod_json = (FIXTURES / "eod_twse_stock_day_all.json").read_bytes()
+    isin_html = (FIXTURES / "eod_isin_supported.html").read_bytes()
+
+    service.egress_client.fetch.side_effect = lambda url, **kw: (
+        (200, holiday_cal_json, {}) if "holiday" in url
+        else (200, isin_html, {}) if "isin" in url
+        else (200, eod_json, {}) if "STOCK_DAY_ALL" in url
+        else (200, b"[]", {})
+    )
+
+    op_id, auth = service.create_operation_and_capability()
+    service.run_stage_prerequisites_calendar(op_id, auth)
+
+    with pytest.raises(ValueError, match="not an authorized trading session"):
+        service.run_symbol_enablement_pipeline(op_id, auth, symbol="2330.TW")
+
+    with repo._get_connection() as conn:
+        syn_count = conn.execute(
+            "SELECT COUNT(*) FROM trading_calendar_revisions WHERE note = 'Verified regular trading session'"
+        ).fetchone()[0]
+        assert syn_count == 0
+
+
+def test_deadline_and_lease_duration_frozen_to_90s_and_60s(
+    sync_env: tuple[InstalledDataSyncService, InstalledDataOperationsRepository, str]
+) -> None:
+    service, repo, _ = sync_env
+    from datetime import datetime
+    from src.services.installed_data_sync_service import GLOBAL_OPERATION_DEADLINE_SECONDS
+
+    assert GLOBAL_OPERATION_DEADLINE_SECONDS == 90.0
+
+    op_id, auth = service.create_operation_and_capability()
+    op = repo.get_operation_by_id(op_id)
+    assert op is not None
+    # Lease duration is rolling 60s
+    t_create = datetime.fromisoformat(op.created_at.replace("Z", "+00:00"))
+    t_lease = datetime.fromisoformat(op.lease_expires_at.replace("Z", "+00:00"))
+    diff = (t_lease - t_create).total_seconds()
+    assert 55 <= diff <= 65
+
+
+def test_universe_listing_date_parsed_and_no_fabricated_1970(
+    sync_env: tuple[InstalledDataSyncService, InstalledDataOperationsRepository, str]
+) -> None:
+    service, repo, db_path = sync_env
+    ProductionIngestionService(db_path)
+
+    # Use unicode escapes: 公司代號, 公司名稱, 上市日期
+    twse_universe_json = json.dumps([
+        {"\u516c\u53f8\u4ee3\u865f": "2330", "\u516c\u53f8\u540d\u7a31": "\u53f0\u7a4d\u96fb", "\u4e0a\u5e02\u65e5\u671f": "19940905"},
+    ], ensure_ascii=True).encode("utf-8")
+    tpex_universe_json = json.dumps([
+        {"SecuritiesCompanyCode": "8069", "CompanyName": "E-Ink", "DateOfListing": "20040330"},
+    ], ensure_ascii=True).encode("utf-8")
+
+    service.egress_client.fetch.side_effect = lambda url, **kw: (
+        (200, twse_universe_json, {}) if "t187ap03_L" in url
+        else (200, tpex_universe_json, {}) if "mopsfin_t187ap03_O" in url
+        else (200, b"[]", {})
+    )
+
+    op_id, auth = service.create_operation_and_capability()
+    service.run_stage_universe(op_id, auth)
+
+    with repo._get_connection() as conn:
+        events = conn.execute(
+            "SELECT event_type, event_date, effective_at FROM universe_lifecycle_events WHERE event_type = 'listed'"
+        ).fetchall()
+        assert len(events) >= 2
+        dates = {row[1] for row in events}
+        assert "1994-09-05" in dates
+        assert "2004-03-30" in dates
+        assert "1970-01-01" not in dates
+
+        op_events = conn.execute(
+            "SELECT trading_state, effective_at FROM universe_operational_state_events"
+        ).fetchall()
+        assert len(op_events) >= 2
+        for r in op_events:
+            assert r[1] is None  # Point-in-time effective date not fabricated
+
+
+def test_turnover_twse_failure_recorded_truthfully(
+    sync_env: tuple[InstalledDataSyncService, InstalledDataOperationsRepository, str]
+) -> None:
+    service, repo, db_path = sync_env
+    ProductionIngestionService(db_path)
+
+    # Malformed TWSE turnover rows (invalid date and value)
+    malformed_twse_json = json.dumps([
+        {"Date": "invalid_date", "TradeValue": "not_a_number"},
+    ]).encode("utf-8")
+    tpex_turnover_json = (FIXTURES / "tpex_daily_trading_index_openapi.json").read_bytes()
+    cbc_json = (FIXTURES / "cbc_ef15m01_response.json").read_bytes()
+
+    service.egress_client.fetch.side_effect = lambda url, **kw: (
+        (200, malformed_twse_json, {}) if "FMTQIK" in url
+        else (200, tpex_turnover_json, {}) if "tpex_daily_trading_index" in url
+        else (200, cbc_json, {}) if "EF15M01" in url
+        else (200, b"[]", {})
+    )
+
+    op_id, auth = service.create_operation_and_capability()
+    service.run_stage_turnover_and_cbc(op_id, auth)
+
+    items = repo.list_items_by_operation(op_id)
+    twse_item = next((it for it in items if it.resource_id == "twse.market-turnover"), None)
+    assert twse_item is not None
+    # Because all TWSE rows failed parsing, TWSE item must NOT be accepted!
+    assert twse_item.status in (InstalledItemStatus.FAILED.value, InstalledItemStatus.PARTIAL.value)
