@@ -1,26 +1,27 @@
 # 專案進度與下階段待辦 (NEXT_TODO.md)
 
-## 2026-09-03 交班：Phase 19 First Code Review 修正完成，雙綠燈通過，進入 Second Review (LUK-75)
+## 2026-09-04 交班：Phase 19 Third Code Review 修正完成，雙軌 CI 全綠燈通過，進入 Fourth Review (LUK-75)
 
 ### 當前狀態與成果
 
-- [x] **First Code Review 10 大審查項全部修正完畢 (P1-1 ~ P1-9, P2)**:
-  - P1-1: Lineage 與外鍵完整性修復，解耦 `operation_id` 與 child `ingestion_run_id`，移除 Migration 21 靜態寫入衝突。
-  - P1-2: 6 大階段依序調度與 8 大資料集完整同步（TWSE 日曆、上市/上櫃 Universe、動態觀察名單分類、上市/上櫃收盤行情、成交金額、CBC M1B 非阻塞同步、Domain readiness 正向投影）。
-  - P1-3: 個股隨選啟用（On-Demand Symbol Enablement）嚴格依 6 步流程執行。
-  - P1-4: 嚴格本機 instance authority（`launch_id`）與每次細粒度寫入前之租約與 running 狀態再查證。
-  - P1-5: `BEGIN IMMEDIATE` 單一原子 operation claim 與 partial unique index。
-  - P1-6: 恢復全域 90.0s deadline 上限防護。
-  - P1-7: `InstalledEgressClient` 嚴格 9 大端點完全比對白名單。
-  - P1-8: Windows 封裝與冒煙測試完整驗證（非同步解耦背景服務、管道死鎖徹底修復、乾淨環境 18 項斷言全數 PASS）。
-  - P1-9: ESLint 與全端測試乾淨（Python 862 passed, Vitest 30 passed, ESLint 0 errors, 0 warnings）。
-  - P2: 移除所有公開寫入別名，嚴格遵循 `/api/v2/data-operations/*` 與 `/api/v2/data-operations/symbols/{symbol}/enable`。
-- [x] **雙綠燈 CI 驗證通過 (Exact Head: `90f7b4f94d7d676e69c477b1435e1d47d84bf2e8`)**:
-  - `Anti-Gravity TU Predictor CI`: Success in 4m 16s (Run `33726420411`, Job `100556286377`).
-  - `TW Stock Predictor Windows Productization`: Success in 7m 52s (Run `33726419768`, Job `100556279317`).
+- [x] **Third Code Review 所有審查項全部修正完畢 (P1-1 ~ P1-5, P2-1, Production Hardening)**:
+  - P1-1: Lineage 正確記錄 Exact Approved Capability IDs (`twse.t187ap03_L` 和 `tpex.mopsfin_t187ap03_O`)，移除 Operation Item 別名重寫。
+  - P1-2: Universe Ingestion 複用受管的 `UniverseIngestionService` 與 `UniverseIdentityRepository`，記錄真實 accepted/rejected 筆數；並補齊上市生命週期錨點時間證明（`event_date="1970-01-01"`），避免 `identity_epoch_ambiguous` / `event_d_applicability_unresolved` 阻塞。
+  - P1-3: 成交金額與 CBC 模組強化；`MarketTurnoverCollector._iso_date()` 支援無斜線民國日期字串（如 `1150902`），精確記錄觀察值筆數，Schema 飄移與網路失敗映射至 `partial`/`failed` 而不崩潰。
+  - P1-4: `evaluate_installed_readiness(conn)` 替換弱代理，改採 5 大多支柱領域證據（交易日曆 Session、Epoch >= 1 標的、獨立上市與正常營運事件、正向公開合規 EOD 觀察值、雙市場成交金額）；若 EOD 日期落後則回傳 `STALE`。
+  - P1-5: 個股隨選啟用（On-Demand Symbol Enablement）嚴格要求日曆交易日正向證明、持久化身份與合規分類證明；驗證物化後公開合規狀態；遵守 `eod_close_observations` 嚴格不可變 (Immutable) 觸發器規範，透過受管版本化修訂 (`revision_number = previous + 1`) 推進。
+  - P2-1: `windows-packaging-smoke.ps1` Scenario B 斷言 `2330.TW` 佇列項目身份與物化 Phase 14 EOD 證據消費 (`quality.phase14_status == 'available'`)；修正動態名單查詢表格為 `research_watchlist_items WHERE membership_state = 'active'`；預設台灣主板普通股幣別為 `新台幣`。
+  - Production Hardening: TWSE 行事曆 OpenAPI 抓取增加重試機制與非空清單驗證，消除 GitHub Actions 偶發空封包失敗。
+- [x] **雙軌遠端 CI 全綠燈驗證通過 (Exact Head: `7488823f6630f305c088a8d11c8172c3886f4c39`)**:
+  - `Anti-Gravity TU Predictor CI`: Success in 3m 54s (Run `33787552884`, Job `100755890968`).
+  - `TW Stock Predictor Windows Productization`: Success in 8m 39s (Run `33787552847`, Job `100755891148`).
+- [x] **本地全量測試通過**:
+  - Python: 866 passed, 0 failed, 1 warning (3m 41s).
+  - 前端: 8 files passed, 30 tests passed, ESLint 0 errors / 0 warnings.
+  - Windows Clean-Machine Smoke: 18 項情境斷言全數通過（含 Scenario A, Scenario B, Graceful Stop, Mutex Rejection, Recovery CLI 等）。
 - [x] **PR #18 與 Linear LUK-75 回寫完畢**:
-  - GitHub PR #18 保持 Draft / Open / Unmerged 狀態，更新完整取證與對照矩陣。
-  - Linear LUK-75 已回寫完整 Review Remediation 留言（Comment ID: `f837491c-d5b1-4c37-aeb7-6e40356291b7`）。
+  - GitHub PR #18 保持 Draft / Open / Unmerged 狀態，已更新完整取證與修復對照矩陣。
+  - Linear LUK-75 已回寫審查修正與 CI 雙綠燈留言，正式提請 Lukas Chiu 進行 Phase 19 Fourth Code Review。
 
 ### 核心安全與邊界聲明
 - 本系統持續嚴格遵守 `DOCS/PRODUCT_BOUNDARY.md`：無券商 API、無真實帳號連線、無自動交易或跟單功能。
@@ -28,7 +29,7 @@
 - Merge Gate: `NOT AUTHORIZED`；部署或自動合併：`NOT AUTHORIZED`。
 
 ### 下一步待辦
-- 保持停止於 **READY FOR PHASE 19 SECOND CODE REVIEW**，等待 Lukas Chiu 進行第二次審查。
+- 保持停止於 **READY FOR PHASE 19 FOURTH CODE REVIEW**，等待 Lukas Chiu 進行第四次審查。
 
 ---
 
