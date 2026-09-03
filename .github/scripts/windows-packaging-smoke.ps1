@@ -216,7 +216,21 @@ function Stop-Scenario {
     $stopPayload = $stopResult.stdout | ConvertFrom-Json
     Assert-True ($stopResult.exit_code -eq 0) "scenario stop failed: status=$($stopPayload.status),reason=$($stopPayload.reason)"
     Assert-True ($stopPayload.status -eq "stopped") "scenario stop did not report stopped"
-    Assert-True $LauncherProcess.WaitForExit(15000) "scenario launcher did not exit"
+
+    try {
+        if ($LauncherProcess.StartInfo.RedirectStandardOutput) {
+            [void]$LauncherProcess.StandardOutput.ReadToEndAsync()
+        }
+        if ($LauncherProcess.StartInfo.RedirectStandardError) {
+            [void]$LauncherProcess.StandardError.ReadToEndAsync()
+        }
+    } catch {}
+
+    $exited = $LauncherProcess.WaitForExit(30000)
+    if (-not $exited -and $LauncherProcess.HasExited) {
+        $exited = $true
+    }
+    Assert-True $exited "scenario launcher did not exit: $($LauncherProcess.Id)"
 }
 
 function Wait-ProductExit {
@@ -530,8 +544,8 @@ try {
 }
 finally {
     if ($Error.Count -gt 0) {
-        Write-Host "Diagnostic: Dumping logs on failure from UserRoot ($UserRoot)..."
-        Get-ChildItem -Path $UserRoot -Recurse -Filter "*.log*" -File -ErrorAction SilentlyContinue | ForEach-Object {
+        Write-Host "Diagnostic: Dumping logs on failure from RUNNER_TEMP ($env:RUNNER_TEMP)..."
+        Get-ChildItem -Path $env:RUNNER_TEMP -Recurse -Filter "*.log*" -File -ErrorAction SilentlyContinue | ForEach-Object {
             Write-Host "=== LOG: $($_.FullName) ==="
             Get-Content -LiteralPath $_.FullName -Tail 50 -ErrorAction SilentlyContinue
         }
