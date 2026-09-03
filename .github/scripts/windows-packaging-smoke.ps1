@@ -175,7 +175,8 @@ function New-ProductProcess {
     param(
         [string]$FilePath,
         [string]$Arguments = "",
-        [string]$ScenarioRoot = $UserRoot
+        [string]$ScenarioRoot = $UserRoot,
+        [bool]$RedirectOutput = $true
     )
 
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
@@ -185,8 +186,8 @@ function New-ProductProcess {
     $startInfo.WorkingDirectory = $InstallRoot
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
+    $startInfo.RedirectStandardOutput = $RedirectOutput
+    $startInfo.RedirectStandardError = $RedirectOutput
     $startInfo.EnvironmentVariables.Clear()
     foreach ($name in @("SystemRoot", "WINDIR", "TEMP", "TMP", "COMSPEC", "PATHEXT")) {
         $value = [Environment]::GetEnvironmentVariable($name)
@@ -216,15 +217,6 @@ function Stop-Scenario {
     $stopPayload = $stopResult.stdout | ConvertFrom-Json
     Assert-True ($stopResult.exit_code -eq 0) "scenario stop failed: status=$($stopPayload.status),reason=$($stopPayload.reason)"
     Assert-True ($stopPayload.status -eq "stopped") "scenario stop did not report stopped"
-
-    try {
-        if ($LauncherProcess.StartInfo.RedirectStandardOutput) {
-            [void]$LauncherProcess.StandardOutput.ReadToEndAsync()
-        }
-        if ($LauncherProcess.StartInfo.RedirectStandardError) {
-            [void]$LauncherProcess.StandardError.ReadToEndAsync()
-        }
-    } catch {}
 
     $exited = $LauncherProcess.WaitForExit(30000)
     if (-not $exited -and $LauncherProcess.HasExited) {
@@ -318,7 +310,7 @@ $writerRejectedProcess = $null
 $logProcess = $null
 try {
     Write-Host "Smoke scenario: fresh installed startup"
-    $first = New-ProductProcess -FilePath $launcher
+    $first = New-ProductProcess -FilePath $launcher -RedirectOutput $false
     Wait-ForPath -Path $runtimeDescriptor -Process $first -DiagnosticRoot $user
     $descriptor = Get-Content -LiteralPath $runtimeDescriptor -Raw | ConvertFrom-Json
     Assert-True ($descriptor.origin -match '^http://127\.0\.0\.1:\d+$') "origin is not loopback: $($descriptor.origin)"
@@ -385,7 +377,7 @@ try {
     Assert-ProcessGone -ProcessId $serverPid
     Assert-True (-not (Test-Path -LiteralPath $runtimeDescriptor)) "runtime descriptor was not cleared"
 
-    $orphan = New-ProductProcess -FilePath $launcher
+    $orphan = New-ProductProcess -FilePath $launcher -RedirectOutput $false
     Wait-ForPath -Path $runtimeDescriptor -Process $orphan -DiagnosticRoot $user
     $orphanDescriptor = Get-Content -LiteralPath $runtimeDescriptor -Raw | ConvertFrom-Json
     $orphanServerPid = [int]$orphanDescriptor.server_pid
@@ -403,7 +395,7 @@ try {
     New-Item -ItemType Directory -Path (Split-Path -Parent $upgradeDb) -Force | Out-Null
     Invoke-Fixture -FixtureArguments @("upgradeable", $upgradeDb)
     $upgradeDescriptor = Join-Path $upgradeRoot "runtime\instance.json"
-    $upgradeProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $upgradeRoot
+    $upgradeProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $upgradeRoot -RedirectOutput $false
     Wait-ForPath -Path $upgradeDescriptor -Process $upgradeProcess -DiagnosticRoot $upgradeRoot
     Stop-Scenario -LauncherProcess $upgradeProcess -ScenarioRoot $upgradeRoot
     $preUpgradeMetadata = Get-ChildItem -LiteralPath (Join-Path $upgradeRoot "backup") -Recurse -Filter "*.meta.json" -File |
@@ -417,7 +409,7 @@ try {
     Invoke-Fixture -FixtureArguments @("legacy", $legacyDb)
     $legacyHash = (Get-FileHash -LiteralPath $legacyDb -Algorithm SHA256).Hash
     $legacyDescriptor = Join-Path $legacyRoot "runtime\instance.json"
-    $legacyProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $legacyRoot
+    $legacyProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $legacyRoot -RedirectOutput $false
     Wait-ForPath -Path $legacyDescriptor -Process $legacyProcess -DiagnosticRoot $legacyRoot
     Stop-Scenario -LauncherProcess $legacyProcess -ScenarioRoot $legacyRoot
     $legacyArchives = Get-ChildItem -LiteralPath (Join-Path $legacyRoot "backup\legacy") -Filter "legacy-source-*.db" -File
@@ -476,7 +468,7 @@ try {
         "canonical changed after rejected recovery"
 
     $recoveryDescriptor = Join-Path $recoveryRoot "runtime\instance.json"
-    $recoveryProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $recoveryRoot
+    $recoveryProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $recoveryRoot -RedirectOutput $false
     Wait-ForPath -Path $recoveryDescriptor -Process $recoveryProcess -DiagnosticRoot $recoveryRoot
     Write-Host "Smoke scenario: active-writer recovery rejection"
     $writerRejectedProcess = New-ProductProcess -FilePath $launcher -Arguments "recovery activate `"$recoveryBackup`"" -ScenarioRoot $recoveryRoot
@@ -495,7 +487,7 @@ try {
     $nonLog = Join-Path $logDir "preserve.bin"
     [IO.File]::WriteAllBytes($nonLog, [byte[]](1, 2, 3, 4))
     $logDescriptor = Join-Path $logRoot "runtime\instance.json"
-    $logProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $logRoot
+    $logProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $logRoot -RedirectOutput $false
     Wait-ForPath -Path $logDescriptor -Process $logProcess -DiagnosticRoot $logRoot
     Stop-Scenario -LauncherProcess $logProcess -ScenarioRoot $logRoot
     $logicalLogs = Get-ChildItem -LiteralPath $logDir -Filter "launcher.log*" -File
@@ -513,7 +505,8 @@ try {
         "/VERYSILENT",
         "/SUPPRESSMSGBOXES",
         "/NORESTART"
-    ) -Wait -PassThru
+    ) -PassThru
+    Assert-True $uninstallerProcess.WaitForExit(60000) "uninstaller did not finish within 60s"
     Assert-True ($uninstallerProcess.ExitCode -eq 0) "uninstaller failed with exit code $($uninstallerProcess.ExitCode)"
     Assert-True (Test-Path -LiteralPath $sentinel) "user data was removed during uninstall"
     Assert-True ((Get-Content -LiteralPath $sentinel -Raw) -eq "preserve-me") "user sentinel changed during uninstall"
