@@ -42,6 +42,8 @@ def main() -> int:
                     "DELETE FROM additive_schema_migrations WHERE version_id=?",
                     ("20260902_21_installed_data_operations",),
                 )
+                conn.execute("DROP TABLE IF EXISTS installed_data_operation_items")
+                conn.execute("DROP TABLE IF EXISTS installed_data_operations")
         result: object = {"status": "created", "state": args.command}
     elif args.command == "legacy":
         path = Path(args.database)
