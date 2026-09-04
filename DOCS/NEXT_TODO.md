@@ -4,20 +4,21 @@
 
 ### 當前狀態與成果
 
-- [x] **Fourth Code Review 所有審查項全部修正完畢 (P1-1 ~ P1-5)**:
+- [x] **Fourth Code Review 所有審查項全部修正完畢 (P1-1 ~ P1-5, Smoke Alignment)**:
   - P1-1: 嚴格鎖定 90 秒全域操作逾時 (`deadline_seconds <= 90.0`) 與 60 秒滾動租約 (`lease_duration_seconds=60`)，貫穿所有階段與同步 API。
   - P1-2: 徹底移除 `1970-01-01` 偽造時間戳；從 TWSE / TPEx 官方來源動態解析真實上市日期（支援 8 碼西元與 7 碼民國格式），並將營運狀態事件設為 `effective_at=None`。
-  - P1-3: 嚴禁負向日曆推論，移除個股隨選啟用中的合成日曆插入 (`trading_calendar_revisions`)；無授權交易日證明時真實標記為 `PARTIAL`，零合成資料。
+  - P1-3: 嚴禁負向日曆推論，移除個股隨選啟用中的合成日曆插入 (`trading_calendar_revisions`)；無授權交易日證明時真實標記為 `PARTIAL`，零合成資料；Scenario B 斷言對齊真實 partial 結果，移除無效 fixture。
   - P1-4: 實現 TWSE / TPEx 雙市場成交金額對稱真實結算；先物化兩市場數據至 `LiquidityRepository.add_turnover`，再依實際持久化與解析結果獨立評定子任務與項目狀態。
   - P1-5: `evaluate_installed_readiness` 嚴密綁定最新 EOD 觀察值與啟用中標的 (`identity_epoch >= 1`)，驗證雙市場成交金額存在性，並精準比對日曆最新交易日產出 `STALE` 狀態。
 - [x] **本地全量測試通過**:
   - Python: 871 passed, 0 failed, 1 warning (4m 09s).
   - 前端: 8 files passed, 30 tests passed, ESLint 0 errors / 0 warnings.
-- [ ] **遠端雙軌 CI 驗證中 / 準備推送**:
-  - 待推送至分支 `chriswake1111/luk-75-tw-stock-predictorphase-19-implementation-installed-data`。
-  - 待監控 `Anti-Gravity TU Predictor CI` 與 `TW Stock Predictor Windows Productization`。
-- [ ] **PR #18 與 Linear LUK-75 待同步**:
-  - 準備同步最新 commit SHA、CI 結果與審查矩陣，推進至 `READY FOR PHASE 19 FIFTH CODE REVIEW`。
+- [x] **遠端雙軌 CI 全綠燈通過 (Exact Head: `81794e9f7435f1118c894f57c2bc3585db2f4a42`)**:
+  - `Anti-Gravity TU Predictor CI`: Success in 9m 19s (Run `33822710303`, Job `100868650569`).
+  - `TW Stock Predictor Windows Productization`: Success in 12m 15s (Run `33822710381`, Job `100868650810`).
+- [x] **PR #18 與 Linear LUK-75 已同步完畢**:
+  - GitHub PR #18 保持 Draft / Open / Unmerged 狀態，內文已同步第四次審查修復對照矩陣與 CI 雙綠燈結果。
+  - Linear LUK-75 已留存第五次代碼審查提請留言 (ID `75a63ca0-d3f6-43eb-b78d-b4006f09678f`)。
 
 ### 核心安全與邊界聲明
 - 本系統持續嚴格遵守 `DOCS/PRODUCT_BOUNDARY.md`：無券商 API、無真實帳號連線、無自動交易或跟單功能。
@@ -25,7 +26,7 @@
 - Merge Gate: `NOT AUTHORIZED`；部署或自動合併：`NOT AUTHORIZED`。
 
 ### 下一步待辦
-- 提交並推送最新變更，監控遠端 CI 雙綠燈，更新 PR #18 與 Linear LUK-75，保持停止於 **READY FOR PHASE 19 FIFTH CODE REVIEW**。
+- 保持停止於 **READY FOR PHASE 19 FIFTH CODE REVIEW**，等待 Lukas Chiu 進行第五次審查。
 
 ---
 
