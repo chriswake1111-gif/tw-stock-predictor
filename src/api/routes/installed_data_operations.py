@@ -255,8 +255,19 @@ def enable_symbol(
         except Exception as exc:
             try:
                 auth.revoke()
+                err_msg = str(exc)
+                is_partial = (
+                    "not an authorized trading session" in err_msg
+                    or "calendar proof missing" in err_msg
+                    or "proof missing" in err_msg
+                )
+                status = (
+                    InstalledOperationStatus.PARTIAL.value
+                    if is_partial
+                    else InstalledOperationStatus.FAILED.value
+                )
                 sync_svc.operation_repo.finalize_operation(
-                    op_id, status=InstalledOperationStatus.FAILED.value, error_detail=str(exc)
+                    op_id, status=status, error_detail=err_msg
                 )
             except Exception:
                 pass

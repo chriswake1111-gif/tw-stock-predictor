@@ -234,6 +234,11 @@ def test_symbol_enablement_fails_closed_on_missing_session(
     with pytest.raises(ValueError, match="not an authorized trading session"):
         service.run_symbol_enablement_pipeline(op_id, auth, symbol="2330.TW")
 
+    items = repo.list_items_by_operation(op_id)
+    eod_item = next((it for it in items if it.resource_id == "twse.eod.stock_day_all"), None)
+    assert eod_item is not None
+    assert eod_item.status == InstalledItemStatus.PARTIAL.value
+
 
 def test_symbol_enablement_fails_closed_on_missing_identity(
     sync_env: tuple[InstalledDataSyncService, InstalledDataOperationsRepository, str]

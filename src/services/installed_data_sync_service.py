@@ -1593,6 +1593,18 @@ class InstalledDataSyncService:
             ).fetchone()
             cal_year_count = cal_year_row[0] if cal_year_row else 0
             if cal_year_count == 0:
+                eod_item = f"item_{uuid4().hex}"
+                self.operation_repo.create_item(
+                    item_id=eod_item,
+                    operation_id=operation_id,
+                    stage=InstalledOperationStage.EOD.value,
+                    resource_id=venue_resource,
+                )
+                self.operation_repo.update_item(
+                    item_id=eod_item,
+                    status=InstalledItemStatus.PARTIAL.value,
+                    error_detail=f"source session {trade_date} is not an authorized trading session: calendar proof missing for year {trade_date[:4]}",
+                )
                 raise ValueError(
                     f"source session {trade_date} is not an authorized trading session: "
                     f"calendar proof missing for year {trade_date[:4]}"
@@ -1606,6 +1618,18 @@ class InstalledDataSyncService:
                 (trade_date,),
             ).fetchone()
             if not cal_row or cal_row[0] not in ("trading", "special"):
+                eod_item = f"item_{uuid4().hex}"
+                self.operation_repo.create_item(
+                    item_id=eod_item,
+                    operation_id=operation_id,
+                    stage=InstalledOperationStage.EOD.value,
+                    resource_id=venue_resource,
+                )
+                self.operation_repo.update_item(
+                    item_id=eod_item,
+                    status=InstalledItemStatus.PARTIAL.value,
+                    error_detail=f"source session {trade_date} is not an authorized trading session: status={cal_row[0] if cal_row else 'missing'}",
+                )
                 raise ValueError(
                     f"source session {trade_date} is not an authorized trading session: "
                     f"status={cal_row[0] if cal_row else 'missing'}"
