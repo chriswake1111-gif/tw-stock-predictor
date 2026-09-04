@@ -135,8 +135,8 @@ def test_scenario_a_clean_machine_bootstrap(monkeypatch: pytest.MonkeyPatch) -> 
             {"SecuritiesCompanyCode": "8069", "CompanyName": "元太科技工業股份有限公司"},
         ], ensure_ascii=False).encode("utf-8")
 
-        twse_turnover_json = (FIXTURES / "twse_fmtqik_openapi.json").read_bytes()
-        tpex_turnover_json = (FIXTURES / "tpex_daily_trading_index_openapi.json").read_bytes()
+        twse_turnover_json = (FIXTURES / "twse_fmtqik_openapi.json").read_bytes().replace(b"115/07/30", b"115/08/27")
+        tpex_turnover_json = (FIXTURES / "tpex_daily_trading_index_openapi.json").read_bytes().replace(b"115/07/30", b"115/08/27")
         cbc_json = (FIXTURES / "cbc_ef15m01_response.json").read_bytes()
 
         def custom_fetch(url: str, **kwargs):

@@ -277,7 +277,7 @@ def test_readiness_evaluator_coherent_layer1_proof() -> None:
             readiness, details = evaluate_installed_readiness(conn)
             assert readiness == InstalledReadiness.PARTIAL
 
-            # Bind observation by registering inst-unbound into universe_instruments with identity_epoch = 1
+            # Register inst-unbound into universe_instruments with identity_epoch = 1, listed lifecycle, and normal operational state
             conn.execute(
                 """
                 INSERT INTO universe_instruments (
@@ -286,7 +286,25 @@ def test_readiness_evaluator_coherent_layer1_proof() -> None:
                 ) VALUES ('inst-unbound', 'TWSE', '2317', 1, 'fp-2', '2026-08-27', 'twse', 'twse:2317', 'HonHai', '2026-08-27')
                 """
             )
-            # All pillars coherent and calendar matches EOD date -> READY!
+            # Instrument registered but still missing lifecycle/operational state -> PARTIAL
+            readiness, details = evaluate_installed_readiness(conn)
+            assert readiness == InstalledReadiness.PARTIAL
+
+            conn.execute(
+                """
+                INSERT INTO universe_lifecycle_events (
+                    lifecycle_event_id, instrument_id, event_type, available_at, ingested_at, source_reference, status, reason
+                ) VALUES ('l2', 'inst-unbound', 'listed', '2026-08-27', '2026-08-27', 'twse', 'accepted', 'test')
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO universe_operational_state_events (
+                    operational_event_id, instrument_id, trading_state, available_at, ingested_at, source_reference, status, reason
+                ) VALUES ('o2', 'inst-unbound', 'normal', '2026-08-27', '2026-08-27', 'twse', 'accepted', 'test')
+                """
+            )
+            # All pillars coherent on 2026-08-27 for the same instrument + dual-venue turnover -> READY!
             readiness, details = evaluate_installed_readiness(conn)
             assert readiness == InstalledReadiness.READY
 

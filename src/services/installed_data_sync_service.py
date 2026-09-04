@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Sequence
@@ -73,7 +74,11 @@ from src.repositories.universe_repository import (
     UniverseRepository,
 )
 from src.services.installed_readiness_evaluator import evaluate_installed_readiness
-from src.services.universe_write_guard import UniverseOperatorContext, UniverseWriteGuard
+from src.services.universe_write_guard import (
+    UniverseIngestionWritesDisabled,
+    UniverseOperatorContext,
+    UniverseWriteGuard,
+)
 
 GLOBAL_OPERATION_DEADLINE_SECONDS = 90.0
 
@@ -90,13 +95,13 @@ def _parse_source_listing_date(raw_val: Any) -> str | None:
     if len(s) == 8 and s.isdigit():
         return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
     if len(s) == 7 and s.isdigit():
-        roc_y = int(s[:3]) + 1911
-        return f"{roc_y:04d}-{s[3:5]}-{s[5:7]}"
+        year = int(s[:3]) + 1911
+        return f"{year}-{s[3:5]}-{s[5:7]}"
     return None
 
 
 class InstalledDataSyncService:
-    """Orchestrator for multi-stage Layer 1 local data operations."""
+    """Orchestrates the approved Phase 19 six-stage installed synchronization pipeline."""
 
     def __init__(
         self,
@@ -179,6 +184,31 @@ class InstalledDataSyncService:
     ) -> None:
         """Backward-compatible alias for _require_live_write_authorization."""
         self._require_live_write_authorization(operation_id, authorization, "twse.trading-calendar")
+
+    def _extend_lease_if_needed(
+        self,
+        operation_id: str,
+        authorization: InstalledWriteAuthorization,
+        min_remaining_seconds: float = 30.0,
+        lease_duration_seconds: int = 60,
+    ) -> None:
+        """Extends the durable lease if remaining time is below threshold."""
+        if authorization is None or authorization.revoked:
+            return
+        try:
+            expiry = datetime.fromisoformat(authorization.lease_expires_at.replace("Z", "+00:00"))
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            remaining = (expiry - datetime.now(timezone.utc)).total_seconds()
+            if remaining < min_remaining_seconds:
+                new_lease = self.operation_repo.extend_lease(
+                    operation_id,
+                    lease_duration_seconds=lease_duration_seconds,
+                    expected_owner_id=authorization.instance_id,
+                )
+                authorization.refresh_lease(new_lease)
+        except Exception:
+            pass
 
     def create_operation_and_capability(
         self,
@@ -363,7 +393,9 @@ class InstalledDataSyncService:
             twse_accepted = 0
             twse_rejected = 0
             twse_errors: list[str] = []
-            for r in rows:
+            for idx, r in enumerate(rows):
+                if idx % 50 == 0:
+                    self._extend_lease_if_needed(operation_id, authorization)
                 c = str(
                     r.get("official_code")
                     or r.get("code")
@@ -443,6 +475,13 @@ class InstalledDataSyncService:
                         context=u_ctx_twse,
                     )
                     twse_accepted += 1
+                except (
+                    UniverseIngestionWritesDisabled,
+                    OperationCancelled,
+                    OperationDeadlineExhausted,
+                    OperationAuthorizationRevoked,
+                ):
+                    raise
                 except Exception as exc:
                     twse_rejected += 1
                     twse_errors.append(f"{c}: {exc}")
@@ -516,6 +555,13 @@ class InstalledDataSyncService:
             raise
 
         # 2. TPEx Universe
+        new_lease = self.operation_repo.extend_lease(
+            operation_id,
+            lease_duration_seconds=60,
+            expected_owner_id=authorization.instance_id,
+        )
+        authorization.refresh_lease(new_lease)
+
         tpex_resource = "tpex.mopsfin_t187ap03_O"
         self._require_live_write_authorization(operation_id, authorization, tpex_resource)
         tpex_storage = CAPABILITY_TO_STORAGE_RESOURCE.get(tpex_resource, tpex_resource)
@@ -576,7 +622,9 @@ class InstalledDataSyncService:
             tpex_accepted = 0
             tpex_rejected = 0
             tpex_errors: list[str] = []
-            for r in rows:
+            for idx, r in enumerate(rows):
+                if idx % 50 == 0:
+                    self._extend_lease_if_needed(operation_id, authorization)
                 c = str(
                     r.get("official_code")
                     or r.get("code")
@@ -656,6 +704,13 @@ class InstalledDataSyncService:
                         context=u_ctx_tpex,
                     )
                     tpex_accepted += 1
+                except (
+                    UniverseIngestionWritesDisabled,
+                    OperationCancelled,
+                    OperationDeadlineExhausted,
+                    OperationAuthorizationRevoked,
+                ):
+                    raise
                 except Exception as exc:
                     tpex_rejected += 1
                     tpex_errors.append(f"{c}: {exc}")
@@ -896,12 +951,68 @@ class InstalledDataSyncService:
                 identity_by_code=identity_by_code,
                 classification_by_code=classification_by_code,
             )
+            twse_raw_id = eod_res.get("raw_resource_revision_id")
+            with sqlite3.connect(self.db_path) as conn:
+                row_obs = conn.execute(
+                    """
+                    SELECT
+                        COUNT(*),
+                        SUM(CASE WHEN observation_status = 'available' AND public_eligibility_status = 'eligible' AND close_value IS NOT NULL THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN observation_status != 'available' OR public_eligibility_status != 'eligible' OR close_value IS NULL THEN 1 ELSE 0 END)
+                    FROM eod_close_observations
+                    WHERE raw_resource_revision_id = ?
+                    """,
+                    (twse_raw_id,),
+                ).fetchone()
+                total_obs = int(row_obs[0]) if row_obs and row_obs[0] else 0
+                eligible_obs = int(row_obs[1]) if row_obs and row_obs[1] else 0
+                unproven_obs = int(row_obs[2]) if row_obs and row_obs[2] else 0
+
+                if target_codes:
+                    placeholders = ",".join("?" for _ in target_codes)
+                    row_t = conn.execute(
+                        f"""
+                        SELECT COUNT(DISTINCT official_code)
+                        FROM eod_close_observations
+                        WHERE raw_resource_revision_id = ?
+                          AND observation_status = 'available'
+                          AND public_eligibility_status = 'eligible'
+                          AND close_value IS NOT NULL
+                          AND official_code IN ({placeholders})
+                        """,
+                        (twse_raw_id, *target_codes),
+                    ).fetchone()
+                    target_eligible = int(row_t[0]) if row_t and row_t[0] else 0
+                    if target_eligible == len(target_codes):
+                        twse_status = InstalledItemStatus.ACCEPTED.value
+                        twse_err = None
+                    elif target_eligible > 0:
+                        twse_status = InstalledItemStatus.PARTIAL.value
+                        twse_err = f"target_eligible={target_eligible}/{len(target_codes)}"
+                    else:
+                        twse_status = InstalledItemStatus.FAILED.value
+                        twse_err = f"target_eligible=0/{len(target_codes)}"
+                else:
+                    if eligible_obs > 0 and unproven_obs == 0:
+                        twse_status = InstalledItemStatus.ACCEPTED.value
+                        twse_err = None
+                    elif eligible_obs > 0:
+                        twse_status = InstalledItemStatus.PARTIAL.value
+                        twse_err = f"eligible={eligible_obs}, unproven={unproven_obs}"
+                    elif total_obs > 0:
+                        twse_status = InstalledItemStatus.FAILED.value
+                        twse_err = f"eligible=0, total={total_obs}"
+                    else:
+                        twse_status = InstalledItemStatus.ACCEPTED.value
+                        twse_err = None
+
             self.operation_repo.update_item(
                 item_id=twse_item,
-                status=InstalledItemStatus.ACCEPTED.value,
+                status=twse_status,
                 ingestion_run_id=eod_res.get("run_id"),
                 ingestion_run_item_id=eod_res.get("item_id"),
-                raw_resource_revision_id=eod_res.get("raw_resource_revision_id"),
+                raw_resource_revision_id=twse_raw_id,
+                error_detail=twse_err,
             )
         except Exception as exc:
             self.operation_repo.update_item(
@@ -962,12 +1073,68 @@ class InstalledDataSyncService:
                 identity_by_code=identity_by_code_tpex,
                 classification_by_code=classification_by_code_tpex,
             )
+            tpex_raw_id = eod_res.get("raw_resource_revision_id")
+            with sqlite3.connect(self.db_path) as conn:
+                row_obs = conn.execute(
+                    """
+                    SELECT
+                        COUNT(*),
+                        SUM(CASE WHEN observation_status = 'available' AND public_eligibility_status = 'eligible' AND close_value IS NOT NULL THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN observation_status != 'available' OR public_eligibility_status != 'eligible' OR close_value IS NULL THEN 1 ELSE 0 END)
+                    FROM eod_close_observations
+                    WHERE raw_resource_revision_id = ?
+                    """,
+                    (tpex_raw_id,),
+                ).fetchone()
+                total_obs = int(row_obs[0]) if row_obs and row_obs[0] else 0
+                eligible_obs = int(row_obs[1]) if row_obs and row_obs[1] else 0
+                unproven_obs = int(row_obs[2]) if row_obs and row_obs[2] else 0
+
+                if target_codes_tpex:
+                    placeholders = ",".join("?" for _ in target_codes_tpex)
+                    row_t = conn.execute(
+                        f"""
+                        SELECT COUNT(DISTINCT official_code)
+                        FROM eod_close_observations
+                        WHERE raw_resource_revision_id = ?
+                          AND observation_status = 'available'
+                          AND public_eligibility_status = 'eligible'
+                          AND close_value IS NOT NULL
+                          AND official_code IN ({placeholders})
+                        """,
+                        (tpex_raw_id, *target_codes_tpex),
+                    ).fetchone()
+                    target_eligible = int(row_t[0]) if row_t and row_t[0] else 0
+                    if target_eligible == len(target_codes_tpex):
+                        tpex_status = InstalledItemStatus.ACCEPTED.value
+                        tpex_err = None
+                    elif target_eligible > 0:
+                        tpex_status = InstalledItemStatus.PARTIAL.value
+                        tpex_err = f"target_eligible={target_eligible}/{len(target_codes_tpex)}"
+                    else:
+                        tpex_status = InstalledItemStatus.FAILED.value
+                        tpex_err = f"target_eligible=0/{len(target_codes_tpex)}"
+                else:
+                    if eligible_obs > 0 and unproven_obs == 0:
+                        tpex_status = InstalledItemStatus.ACCEPTED.value
+                        tpex_err = None
+                    elif eligible_obs > 0:
+                        tpex_status = InstalledItemStatus.PARTIAL.value
+                        tpex_err = f"eligible={eligible_obs}, unproven={unproven_obs}"
+                    elif total_obs > 0:
+                        tpex_status = InstalledItemStatus.FAILED.value
+                        tpex_err = f"eligible=0, total={total_obs}"
+                    else:
+                        tpex_status = InstalledItemStatus.ACCEPTED.value
+                        tpex_err = None
+
             self.operation_repo.update_item(
                 item_id=tpex_item,
-                status=InstalledItemStatus.ACCEPTED.value,
+                status=tpex_status,
                 ingestion_run_id=eod_res.get("run_id"),
                 ingestion_run_item_id=eod_res.get("item_id"),
-                raw_resource_revision_id=eod_res.get("raw_resource_revision_id"),
+                raw_resource_revision_id=tpex_raw_id,
+                error_detail=tpex_err,
             )
         except Exception as exc:
             self.operation_repo.update_item(
@@ -1045,23 +1212,43 @@ class InstalledDataSyncService:
                     eligibility_status=EligibilityStatus.ELIGIBLE,
                 )
             )
-            foundation.add_run_item(
-                IngestionRunItem(
-                    ingestion_run_item_id=child_item_twse_id,
-                    ingestion_run_id=child_run_twse_id,
-                    provider_id="twse",
-                    resource_id=twse_turnover_res,
-                    started_at=child_run_twse.started_at,
-                    completed_at=now,
-                    status=IngestionItemStatus.ACCEPTED,
-                    quality_status=DataHealthStatus.FRESH,
-                    raw_payload_sha256=raw_hash_twse,
-                    parser_version="1",
-                    schema_fingerprint=sha256_text("1"),
-                )
-            )
         except Exception as exc:
             twse_fetch_error = str(exc)
+            try:
+                now = utc_now_timestamp()
+                foundation.add_run_item(
+                    IngestionRunItem(
+                        ingestion_run_item_id=child_item_twse_id,
+                        ingestion_run_id=child_run_twse_id,
+                        provider_id="twse",
+                        resource_id=twse_turnover_res,
+                        started_at=child_run_twse.started_at,
+                        completed_at=now,
+                        status=IngestionItemStatus.REJECTED,
+                        quality_status=DataHealthStatus.CORRUPT,
+                        raw_payload_sha256=raw_hash_twse or sha256_text(""),
+                        parser_version="1",
+                        schema_fingerprint=sha256_text("1"),
+                        record_count=0,
+                        accepted_count=0,
+                        rejected_count=0,
+                        reason=twse_fetch_error,
+                    )
+                )
+                foundation.complete_run(
+                    IngestionRun(
+                        ingestion_run_id=child_run_twse_id,
+                        started_at=child_run_twse.started_at,
+                        completed_at=now,
+                        trigger_type=child_run_twse.trigger_type,
+                        runner_version=child_run_twse.runner_version,
+                        requested_resources=child_run_twse.requested_resources,
+                        actor_id=child_run_twse.actor_id,
+                        status=IngestionRunStatus.FAILED,
+                    )
+                )
+            except Exception:
+                pass
             try:
                 foundation.release_resource_lock(twse_turnover_res, child_run_twse_id)
             except Exception:
@@ -1074,6 +1261,13 @@ class InstalledDataSyncService:
             raise
 
         # 2. TPEx Turnover
+        new_lease = self.operation_repo.extend_lease(
+            operation_id,
+            lease_duration_seconds=60,
+            expected_owner_id=authorization.instance_id,
+        )
+        authorization.refresh_lease(new_lease)
+
         tpex_turnover_res = "tpex.market-turnover"
         self._require_live_write_authorization(operation_id, authorization, tpex_turnover_res)
         item_tpex_turnover = f"item_{uuid4().hex}"
@@ -1126,23 +1320,43 @@ class InstalledDataSyncService:
                     eligibility_status=EligibilityStatus.ELIGIBLE,
                 )
             )
-            foundation.add_run_item(
-                IngestionRunItem(
-                    ingestion_run_item_id=child_item_tpex_id,
-                    ingestion_run_id=child_run_tpex_id,
-                    provider_id="tpex",
-                    resource_id=tpex_turnover_res,
-                    started_at=child_run_tpex.started_at,
-                    completed_at=now,
-                    status=IngestionItemStatus.ACCEPTED,
-                    quality_status=DataHealthStatus.FRESH,
-                    raw_payload_sha256=raw_hash_tpex,
-                    parser_version="1",
-                    schema_fingerprint=sha256_text("1"),
-                )
-            )
         except Exception as exc:
             tpex_fetch_error = str(exc)
+            try:
+                now = utc_now_timestamp()
+                foundation.add_run_item(
+                    IngestionRunItem(
+                        ingestion_run_item_id=child_item_tpex_id,
+                        ingestion_run_id=child_run_tpex_id,
+                        provider_id="tpex",
+                        resource_id=tpex_turnover_res,
+                        started_at=child_run_tpex.started_at,
+                        completed_at=now,
+                        status=IngestionItemStatus.REJECTED,
+                        quality_status=DataHealthStatus.CORRUPT,
+                        raw_payload_sha256=raw_hash_tpex or sha256_text(""),
+                        parser_version="1",
+                        schema_fingerprint=sha256_text("1"),
+                        record_count=0,
+                        accepted_count=0,
+                        rejected_count=0,
+                        reason=tpex_fetch_error,
+                    )
+                )
+                foundation.complete_run(
+                    IngestionRun(
+                        ingestion_run_id=child_run_tpex_id,
+                        started_at=child_run_tpex.started_at,
+                        completed_at=now,
+                        trigger_type=child_run_tpex.trigger_type,
+                        runner_version=child_run_tpex.runner_version,
+                        requested_resources=child_run_tpex.requested_resources,
+                        actor_id=child_run_tpex.actor_id,
+                        status=IngestionRunStatus.FAILED,
+                    )
+                )
+            except Exception:
+                pass
             try:
                 foundation.release_resource_lock(tpex_turnover_res, child_run_tpex_id)
             except Exception:
@@ -1222,12 +1436,44 @@ class InstalledDataSyncService:
             if len(dates_twse) > 0 and twse_row_errors == 0 and twse_rejected == 0 and twse_persisted > 0:
                 twse_run_status = IngestionRunStatus.SUCCEEDED
                 twse_inst_status = InstalledItemStatus.ACCEPTED.value
+                twse_item_status = IngestionItemStatus.ACCEPTED
+                twse_quality = DataHealthStatus.FRESH
             elif twse_persisted > 0:
                 twse_run_status = IngestionRunStatus.PARTIAL
                 twse_inst_status = InstalledItemStatus.PARTIAL.value
+                twse_item_status = IngestionItemStatus.PARTIAL
+                twse_quality = DataHealthStatus.PARTIAL
             else:
                 twse_run_status = IngestionRunStatus.FAILED
                 twse_inst_status = InstalledItemStatus.FAILED.value
+                twse_item_status = IngestionItemStatus.REJECTED
+                twse_quality = DataHealthStatus.PARTIAL
+
+            twse_reason = (
+                f"persisted={twse_persisted}, rejected={twse_rejected}, row_errors={twse_row_errors}"
+                if (twse_rejected > 0 or twse_row_errors > 0 or twse_persisted == 0)
+                else None
+            )
+
+            foundation.add_run_item(
+                IngestionRunItem(
+                    ingestion_run_item_id=child_item_twse_id,
+                    ingestion_run_id=child_run_twse_id,
+                    provider_id="twse",
+                    resource_id=twse_turnover_res,
+                    started_at=child_run_twse.started_at,
+                    completed_at=now,
+                    status=twse_item_status,
+                    quality_status=twse_quality,
+                    raw_payload_sha256=raw_hash_twse,
+                    parser_version="1",
+                    schema_fingerprint=sha256_text("1"),
+                    record_count=len(twse_payload),
+                    accepted_count=twse_persisted,
+                    rejected_count=twse_rejected + twse_row_errors,
+                    reason=twse_reason,
+                )
+            )
 
             foundation.complete_run(
                 IngestionRun(
@@ -1248,18 +1494,51 @@ class InstalledDataSyncService:
                 ingestion_run_id=child_run_twse_id,
                 ingestion_run_item_id=child_item_twse_id,
                 raw_resource_revision_id=raw_twse["raw_resource_revision_id"] if raw_twse else None,
+                error_detail=twse_reason,
             )
 
             # Finalize TPEx
             if len(dates_tpex) > 0 and tpex_row_errors == 0 and tpex_rejected == 0 and tpex_persisted > 0:
                 tpex_run_status = IngestionRunStatus.SUCCEEDED
                 tpex_inst_status = InstalledItemStatus.ACCEPTED.value
+                tpex_item_status = IngestionItemStatus.ACCEPTED
+                tpex_quality = DataHealthStatus.FRESH
             elif tpex_persisted > 0:
                 tpex_run_status = IngestionRunStatus.PARTIAL
                 tpex_inst_status = InstalledItemStatus.PARTIAL.value
+                tpex_item_status = IngestionItemStatus.PARTIAL
+                tpex_quality = DataHealthStatus.PARTIAL
             else:
                 tpex_run_status = IngestionRunStatus.FAILED
                 tpex_inst_status = InstalledItemStatus.FAILED.value
+                tpex_item_status = IngestionItemStatus.REJECTED
+                tpex_quality = DataHealthStatus.PARTIAL
+
+            tpex_reason = (
+                f"persisted={tpex_persisted}, rejected={tpex_rejected}, row_errors={tpex_row_errors}"
+                if (tpex_rejected > 0 or tpex_row_errors > 0 or tpex_persisted == 0)
+                else None
+            )
+
+            foundation.add_run_item(
+                IngestionRunItem(
+                    ingestion_run_item_id=child_item_tpex_id,
+                    ingestion_run_id=child_run_tpex_id,
+                    provider_id="tpex",
+                    resource_id=tpex_turnover_res,
+                    started_at=child_run_tpex.started_at,
+                    completed_at=now,
+                    status=tpex_item_status,
+                    quality_status=tpex_quality,
+                    raw_payload_sha256=raw_hash_tpex,
+                    parser_version="1",
+                    schema_fingerprint=sha256_text("1"),
+                    record_count=len(tpex_payload),
+                    accepted_count=tpex_persisted,
+                    rejected_count=tpex_rejected + tpex_row_errors,
+                    reason=tpex_reason,
+                )
+            )
 
             foundation.complete_run(
                 IngestionRun(
@@ -1280,6 +1559,7 @@ class InstalledDataSyncService:
                 ingestion_run_id=child_run_tpex_id,
                 ingestion_run_item_id=child_item_tpex_id,
                 raw_resource_revision_id=raw_tpex["raw_resource_revision_id"] if raw_tpex else None,
+                error_detail=tpex_reason,
             )
         except Exception as exc:
             try:
@@ -1303,6 +1583,13 @@ class InstalledDataSyncService:
             raise
 
         # 3. CBC M1B (Supplementary / Non-blocking)
+        new_lease = self.operation_repo.extend_lease(
+            operation_id,
+            lease_duration_seconds=60,
+            expected_owner_id=authorization.instance_id,
+        )
+        authorization.refresh_lease(new_lease)
+
         cbc_resource = "cbc.m1b"
         self._require_live_write_authorization(operation_id, authorization, cbc_resource)
         item_cbc = f"item_{uuid4().hex}"

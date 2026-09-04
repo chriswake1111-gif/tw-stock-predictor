@@ -103,19 +103,28 @@ def evaluate_installed_readiness(
             latest_eod_date = str(row_obs[1]) if row_obs[1] else None
 
         # Coherent binding: verify that eligible observations on latest_eod_date bind to active instruments
+        # with accepted listing lifecycle and normal operational state proof for those SAME instruments
         if latest_eod_date:
             row_coherent = conn.execute(
                 """
                 SELECT COUNT(DISTINCT o.official_code)
                 FROM eod_close_observations o
                 JOIN universe_instruments u ON u.instrument_id = o.instrument_id
+                JOIN universe_lifecycle_events life ON life.instrument_id = u.instrument_id
+                JOIN universe_operational_state_events op ON op.instrument_id = u.instrument_id
                 WHERE o.trade_date = ?
                   AND o.observation_status = 'available'
                   AND o.public_eligibility_status = 'eligible'
                   AND o.close_value IS NOT NULL
                   AND u.identity_epoch >= 1
+                  AND life.event_type = 'listed'
+                  AND life.status = 'accepted'
+                  AND (life.event_date IS NULL OR life.event_date <= ?)
+                  AND op.trading_state = 'normal'
+                  AND op.status = 'accepted'
+                  AND (op.effective_at IS NULL OR op.effective_at <= ? || 'T23:59:59Z')
                 """,
-                (latest_eod_date,),
+                (latest_eod_date, latest_eod_date, latest_eod_date),
             ).fetchone()
             if row_coherent and row_coherent[0]:
                 coherent_eod_universe_count = int(row_coherent[0])
@@ -124,6 +133,7 @@ def evaluate_installed_readiness(
 
     turnover_count = 0
     latest_turnover_date: str | None = None
+    target_turnover_count = 0
     try:
         if as_of_date:
             row_turn = conn.execute(
@@ -144,6 +154,18 @@ def evaluate_installed_readiness(
         if row_turn and row_turn[0]:
             turnover_count = int(row_turn[0])
             latest_turnover_date = str(row_turn[1]) if row_turn[1] else None
+
+        if latest_eod_date:
+            row_target_turn = conn.execute(
+                """
+                SELECT COUNT(*) FROM market_turnover_daily
+                WHERE trade_date = ?
+                  AND twse_turnover_twd IS NOT NULL AND tpex_turnover_twd IS NOT NULL
+                """,
+                (latest_eod_date,),
+            ).fetchone()
+            if row_target_turn and row_target_turn[0]:
+                target_turnover_count = int(row_target_turn[0])
     except sqlite3.Error:
         pass
 
@@ -169,6 +191,7 @@ def evaluate_installed_readiness(
         "coherent_eod_universe_count": coherent_eod_universe_count,
         "turnover_records": turnover_count,
         "latest_turnover_date": latest_turnover_date,
+        "target_turnover_count": target_turnover_count,
         "cbc_m1b_period": cbc_period,
     }
 
@@ -183,26 +206,28 @@ def evaluate_installed_readiness(
     if all_zero:
         return InstalledReadiness.NOT_INITIALIZED, details
 
-    all_pillars_proven = (
-        calendar_count > 0
-        and identity_count > 0
-        and listing_count > 0
-        and operational_count > 0
-        and eod_count > 0
-        and coherent_eod_universe_count > 0
-        and turnover_count > 0
-    )
-
-    if not all_pillars_proven:
+    if (
+        calendar_count == 0
+        or eod_count == 0
+        or latest_eod_date is None
+        or turnover_count == 0
+        or coherent_eod_universe_count == 0
+    ):
         return InstalledReadiness.PARTIAL, details
 
     # Coherent current-vs-stale evaluation:
-    # If the latest closed calendar trading date is newer than our latest EOD date, state is STALE.
+    # 1. If the latest closed calendar trading date is newer than our latest EOD date, state is STALE.
     if (
         latest_calendar_trading_date is not None
-        and latest_eod_date is not None
         and latest_eod_date < latest_calendar_trading_date
     ):
         return InstalledReadiness.STALE, details
+
+    # 2. If venue turnover proof for the latest EOD session is missing:
+    # An older LKG turnover session yields STALE, never false current READY.
+    if target_turnover_count == 0:
+        if latest_turnover_date is not None and latest_turnover_date < latest_eod_date:
+            return InstalledReadiness.STALE, details
+        return InstalledReadiness.PARTIAL, details
 
     return InstalledReadiness.READY, details
