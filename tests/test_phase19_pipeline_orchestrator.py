@@ -111,18 +111,23 @@ def test_end_to_end_sync_pipeline(
         {"公司代號": "2330", "公司名稱": "台灣積體電路製造股份有限公司"},
     ], ensure_ascii=False).encode("utf-8")
     tpex_universe_json = json.dumps([
-        {"SecuritiesCompanyCode": "8069", "CompanyName": "元太科技工業股份有限公司"},
+        {"SecuritiesCompanyCode": "6488", "CompanyName": "環球晶圓股份有限公司"},
     ], ensure_ascii=False).encode("utf-8")
 
     twse_turnover_json = (FIXTURES / "twse_fmtqik_openapi.json").read_bytes()
     tpex_turnover_json = (FIXTURES / "tpex_daily_trading_index_openapi.json").read_bytes()
     cbc_json = (FIXTURES / "cbc_ef15m01_response.json").read_bytes()
+    tpex_eod_json = (FIXTURES / "eod_tpex_daily_close_quotes.json").read_bytes()
 
     def custom_fetch(url: str, **kwargs):
         if "isin" in url:
+            if "owncode=6488" in url:
+                return 200, isin_html.replace(b"2330", b"6488").replace("上市".encode("utf-8"), "上櫃".encode("utf-8")), {}
             return 200, isin_html, {}
         if "STOCK_DAY_ALL" in url:
             return 200, eod_json, {}
+        if "tpex_mainboard_daily_close_quotes" in url:
+            return 200, tpex_eod_json, {}
         if "holidaySchedule" in url or "holiday" in url:
             return 200, calendar_json, {}
         if "t187ap03_L" in url:
@@ -141,7 +146,7 @@ def test_end_to_end_sync_pipeline(
 
     op_id = service.execute_sync(
         operation_type=InstalledOperationType.SYNC.value,
-        target_symbols=["2330.TW"],
+        target_symbols=["2330.TW", "6488.TWO"],
     )
 
     op_row = repo.get_operation_by_id(op_id)
@@ -387,3 +392,102 @@ def test_turnover_twse_failure_recorded_truthfully(
     assert twse_item is not None
     # Because all TWSE rows failed parsing, TWSE item must NOT be accepted!
     assert twse_item.status in (InstalledItemStatus.FAILED.value, InstalledItemStatus.PARTIAL.value)
+
+
+def test_eod_stage_zero_observations_fails_twse(
+    sync_env: tuple[InstalledDataSyncService, InstalledDataOperationsRepository, str]
+) -> None:
+    service, repo, _ = sync_env
+
+    # Mock TWSE to return empty list (0 observations persisted)
+    tpex_eod_json = (FIXTURES / "eod_tpex_daily_close_quotes.json").read_bytes()
+    service.egress_client.fetch.side_effect = lambda url, **kw: (
+        (200, b"[]", {}) if "STOCK_DAY_ALL" in url
+        else (200, tpex_eod_json, {}) if "tpex_mainboard_daily_close_quotes" in url
+        else (200, b"[]", {})
+    )
+
+    op_id, auth = service.create_operation_and_capability()
+    service.run_stage_eod(op_id, auth)
+
+    items = repo.list_items_by_operation(op_id)
+    twse_item = next((it for it in items if it.resource_id == "twse.eod.stock_day_all"), None)
+    assert twse_item is not None
+    assert twse_item.status == InstalledItemStatus.FAILED.value
+    assert twse_item.error_detail == "no observations persisted"
+
+
+def test_eod_stage_zero_observations_fails_tpex(
+    sync_env: tuple[InstalledDataSyncService, InstalledDataOperationsRepository, str]
+) -> None:
+    service, repo, _ = sync_env
+
+    twse_eod_json = (FIXTURES / "eod_twse_stock_day_all.json").read_bytes()
+    # Mock TPEx to return empty list (0 observations persisted)
+    service.egress_client.fetch.side_effect = lambda url, **kw: (
+        (200, twse_eod_json, {}) if "STOCK_DAY_ALL" in url
+        else (200, b"[]", {}) if "tpex_mainboard_daily_close_quotes" in url
+        else (200, b"[]", {})
+    )
+
+    op_id, auth = service.create_operation_and_capability()
+    service.run_stage_eod(op_id, auth)
+
+    items = repo.list_items_by_operation(op_id)
+    tpex_item = next((it for it in items if it.resource_id == "tpex.eod.daily_close_quotes"), None)
+    assert tpex_item is not None
+    assert tpex_item.status == InstalledItemStatus.FAILED.value
+    assert tpex_item.error_detail == "no observations persisted"
+
+
+def test_calendar_stage_retry_budget_bounded_to_three_attempts(
+    sync_env: tuple[InstalledDataSyncService, InstalledDataOperationsRepository, str]
+) -> None:
+    service, repo, _ = sync_env
+    real_client = InstalledEgressClient()
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {}
+    mock_response.iter_content.return_value = [b"<!DOCTYPE html><html>Challenge</html>"]
+    mock_session.get.return_value = mock_response
+    real_client._session = mock_session
+    service.egress_client = real_client
+
+    op_id, auth = service.create_operation_and_capability()
+    with pytest.raises(Exception):
+        service.run_stage_prerequisites_calendar(op_id, auth)
+
+    # Must be strictly bounded to max 2 retries = 3 total attempts across the operation
+    assert mock_session.get.call_count == 3
+
+
+def test_calendar_stage_retries_html_and_succeeds_within_budget(
+    sync_env: tuple[InstalledDataSyncService, InstalledDataOperationsRepository, str]
+) -> None:
+    service, repo, _ = sync_env
+    real_client = InstalledEgressClient()
+    mock_session = MagicMock()
+
+    resp_html = MagicMock()
+    resp_html.status_code = 200
+    resp_html.headers = {}
+    resp_html.iter_content.return_value = [b"<!DOCTYPE html><html>Challenge</html>"]
+
+    resp_ok = MagicMock()
+    resp_ok.status_code = 200
+    resp_ok.headers = {}
+    valid_cal = json.dumps([
+        {"Name": "國曆新年開始交易日", "Date": "1150102", "Weekday": "五", "Description": "國曆新年開始交易"}
+    ]).encode("utf-8")
+    resp_ok.iter_content.return_value = [valid_cal]
+
+    mock_session.get.side_effect = [resp_html, resp_ok]
+    real_client._session = mock_session
+    service.egress_client = real_client
+
+    op_id, auth = service.create_operation_and_capability()
+    service.run_stage_prerequisites_calendar(op_id, auth)
+
+    # Succeeded on attempt 2, exactly 2 outbound requests
+    assert mock_session.get.call_count == 2

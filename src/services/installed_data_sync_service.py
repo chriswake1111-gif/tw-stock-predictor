@@ -248,39 +248,25 @@ class InstalledDataSyncService:
             stage=InstalledOperationStage.PREREQUISITES_CALENDAR.value,
             resource_id=resource_id,
         )
+        def _validate_calendar_payload(status: int, body: bytes, headers: dict[str, str]) -> None:
+            text = body.decode("utf-8-sig", errors="replace").strip() if body else ""
+            if not text or text.startswith("<"):
+                preview = text[:60] if text else "empty"
+                raise ValueError(f"TWSE holiday schedule returned non-JSON/HTML payload: {preview}")
+            try:
+                candidate = json.loads(text)
+            except Exception as exc:
+                raise ValueError(f"TWSE holiday schedule invalid JSON: {exc}") from exc
+            if not isinstance(candidate, list) or not candidate:
+                raise ValueError(f"TWSE holiday schedule returned non-list or empty list: {type(candidate)}")
+
         try:
-            payload = []
-            last_exc: Exception | None = None
-            for attempt in range(1, 6):
-                try:
-                    status_code, body, _ = self.egress_client.fetch(
-                        "https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule",
-                        deadline_monotonic=deadline_monotonic,
-                    )
-                    text = body.decode("utf-8-sig", errors="replace").strip() if body else ""
-                    if text and not text.startswith("<"):
-                        candidate = json.loads(text)
-                        if isinstance(candidate, list) and candidate:
-                            payload = candidate
-                            break
-                        else:
-                            last_exc = ValueError(
-                                f"TWSE holiday schedule returned non-list or empty list: {type(candidate)}"
-                            )
-                    else:
-                        preview = text[:60] if text else "empty"
-                        last_exc = ValueError(
-                            f"TWSE holiday schedule returned non-JSON payload: {preview}"
-                        )
-                except Exception as exc:
-                    last_exc = exc
-                if attempt < 5:
-                    time.sleep(1.0 * attempt)
-            else:
-                if last_exc:
-                    raise last_exc
-                if not payload:
-                    raise ValueError("TWSE holiday schedule returned empty payload")
+            status_code, body, _ = self.egress_client.fetch(
+                "https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule",
+                deadline_monotonic=deadline_monotonic,
+                response_validator=_validate_calendar_payload,
+            )
+            payload = json.loads(body.decode("utf-8-sig", errors="replace").strip())
 
             prod_svc = self._production_service or ProductionIngestionService(self.db_path)
             run = prod_svc.ingest_twse_calendar(
@@ -978,7 +964,10 @@ class InstalledDataSyncService:
                 eligible_obs = int(row_obs[1]) if row_obs and row_obs[1] else 0
                 unproven_obs = int(row_obs[2]) if row_obs and row_obs[2] else 0
 
-                if target_codes:
+                if total_obs == 0:
+                    twse_status = InstalledItemStatus.FAILED.value
+                    twse_err = "no observations persisted"
+                elif target_codes:
                     placeholders = ",".join("?" for _ in target_codes)
                     row_t = conn.execute(
                         f"""
@@ -1009,12 +998,9 @@ class InstalledDataSyncService:
                     elif eligible_obs > 0:
                         twse_status = InstalledItemStatus.PARTIAL.value
                         twse_err = f"eligible={eligible_obs}, unproven={unproven_obs}"
-                    elif total_obs > 0:
+                    else:
                         twse_status = InstalledItemStatus.PARTIAL.value
                         twse_err = f"eligible=0, unproven={total_obs}"
-                    else:
-                        twse_status = InstalledItemStatus.ACCEPTED.value
-                        twse_err = None
 
             self.operation_repo.update_item(
                 item_id=twse_item,
@@ -1100,7 +1086,10 @@ class InstalledDataSyncService:
                 eligible_obs = int(row_obs[1]) if row_obs and row_obs[1] else 0
                 unproven_obs = int(row_obs[2]) if row_obs and row_obs[2] else 0
 
-                if target_codes_tpex:
+                if total_obs == 0:
+                    tpex_status = InstalledItemStatus.FAILED.value
+                    tpex_err = "no observations persisted"
+                elif target_codes_tpex:
                     placeholders = ",".join("?" for _ in target_codes_tpex)
                     row_t = conn.execute(
                         f"""
@@ -1131,12 +1120,9 @@ class InstalledDataSyncService:
                     elif eligible_obs > 0:
                         tpex_status = InstalledItemStatus.PARTIAL.value
                         tpex_err = f"eligible={eligible_obs}, unproven={unproven_obs}"
-                    elif total_obs > 0:
+                    else:
                         tpex_status = InstalledItemStatus.PARTIAL.value
                         tpex_err = f"eligible=0, unproven={total_obs}"
-                    else:
-                        tpex_status = InstalledItemStatus.ACCEPTED.value
-                        tpex_err = None
 
             self.operation_repo.update_item(
                 item_id=tpex_item,

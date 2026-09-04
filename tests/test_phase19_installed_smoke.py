@@ -138,12 +138,15 @@ def test_scenario_a_clean_machine_bootstrap(monkeypatch: pytest.MonkeyPatch) -> 
         twse_turnover_json = (FIXTURES / "twse_fmtqik_openapi.json").read_bytes().replace(b"115/07/30", b"115/08/27")
         tpex_turnover_json = (FIXTURES / "tpex_daily_trading_index_openapi.json").read_bytes().replace(b"115/07/30", b"115/08/27")
         cbc_json = (FIXTURES / "cbc_ef15m01_response.json").read_bytes()
+        tpex_eod_json = (FIXTURES / "eod_tpex_daily_close_quotes.json").read_bytes()
 
         def custom_fetch(url: str, **kwargs):
             if "isin" in url:
                 return 200, isin_html, {}
             if "STOCK_DAY_ALL" in url:
                 return 200, eod_json, {}
+            if "tpex_mainboard_daily_close_quotes" in url:
+                return 200, tpex_eod_json, {}
             if "holidaySchedule" in url or "holiday" in url:
                 return 200, calendar_json, {}
             if "t187ap03_L" in url:

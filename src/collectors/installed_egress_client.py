@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -121,6 +121,7 @@ class InstalledEgressClient:
         headers: Mapping[str, str] | None = None,
         deadline_monotonic: float | None = None,
         max_retries: int | None = None,
+        response_validator: Callable[[int, bytes, dict[str, str]], None] | None = None,
     ) -> tuple[int, bytes, dict[str, str]]:
         """Fetch URL with allowlist validation, timeout, chunked size check, and retries.
 
@@ -176,6 +177,8 @@ class InstalledEgressClient:
 
                 body = b"".join(content_chunks)
                 res_headers = {k: v for k, v in response.headers.items()}
+                if response_validator is not None:
+                    response_validator(response.status_code, body, res_headers)
                 return response.status_code, body, res_headers
 
             except (PayloadTooLargeError, EndpointNotAllowlistedError, EgressSecurityError, DeadlineExhaustedError):

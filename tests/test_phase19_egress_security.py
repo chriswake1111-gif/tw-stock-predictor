@@ -136,3 +136,27 @@ def test_general_endpoint_max_retries_is_two() -> None:
 
     # 1 initial + 2 retries = 3 attempts total
     assert mock_session.get.call_count == 3
+
+
+def test_calendar_fetch_retry_budget_bounded_to_three_attempts_with_validator() -> None:
+    client = InstalledEgressClient()
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {}
+    mock_response.iter_content.return_value = [b"<!DOCTYPE html><html>Challenge</html>"]
+    mock_session.get.return_value = mock_response
+    client._session = mock_session
+
+    def validator(status: int, body: bytes, headers: dict[str, str]) -> None:
+        if body.strip().startswith(b"<"):
+            raise ValueError("HTML payload rejected")
+
+    with pytest.raises(EgressHttpError, match="failed after 3 attempts"):
+        client.fetch(
+            "https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule",
+            response_validator=validator,
+        )
+
+    # Must be strictly bounded to max 2 retries = 3 total attempts
+    assert mock_session.get.call_count == 3
