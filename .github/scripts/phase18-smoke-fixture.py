@@ -44,6 +44,29 @@ def main() -> int:
                 )
                 conn.execute("DROP TABLE IF EXISTS installed_data_operation_items")
                 conn.execute("DROP TABLE IF EXISTS installed_data_operations")
+                from datetime import date, timedelta
+                cur = date(2026, 1, 1)
+                end = date(2026, 12, 31)
+                holidays = {
+                    "2026-01-01", "2026-02-12", "2026-02-13", "2026-02-16",
+                    "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20",
+                    "2026-02-27", "2026-04-03", "2026-04-06", "2026-05-01",
+                    "2026-06-19", "2026-09-25", "2026-09-28", "2026-10-09",
+                    "2026-12-25",
+                }
+                while cur <= end:
+                    d_str = cur.strftime("%Y-%m-%d")
+                    if cur.weekday() < 5 and d_str not in holidays:
+                        conn.execute(
+                            """
+                            INSERT OR IGNORE INTO trading_calendar_revisions (
+                                calendar_revision_id, raw_resource_revision_id, market, trade_date,
+                                session_status, available_at, ingested_at, revision_number, status, note
+                            ) VALUES (?, 'raw_cal_fixture_2026', 'TW', ?, 'trading', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1, 'available', 'Upgraded database verified calendar session')
+                            """,
+                            (f"cal_fix_{d_str.replace('-', '')}", d_str),
+                        )
+                    cur += timedelta(days=1)
         result: object = {"status": "created", "state": args.command}
     elif args.command == "legacy":
         path = Path(args.database)
