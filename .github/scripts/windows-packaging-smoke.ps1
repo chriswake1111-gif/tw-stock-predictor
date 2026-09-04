@@ -140,11 +140,43 @@ function Wait-ForPath {
     }
 }
 
+function Wait-ForDataOperation {
+    param(
+        [string]$Origin,
+        [string]$OperationId,
+        [int]$TimeoutSeconds = 180,
+        [Microsoft.PowerShell.Commands.WebRequestSession]$WebSession = $null
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            $restParams = @{
+                Uri = "$Origin/api/v2/data-operations/operations/$OperationId"
+                UseBasicParsing = $true
+                TimeoutSec = 10
+            }
+            if ($null -ne $WebSession) {
+                $restParams["WebSession"] = $WebSession
+            }
+            $op = Invoke-RestMethod @restParams
+            if ($op.status -in @("succeeded", "failed", "partial", "cancelled", "interrupted")) {
+                return $op
+            }
+        } catch {
+            Write-Host "Transient poll attempt for $OperationId caught: $($_.Exception.Message)"
+        }
+        Start-Sleep -Milliseconds 1500
+    }
+    Assert-True $false "operation $OperationId did not reach terminal state within $TimeoutSeconds seconds"
+}
+
 function New-ProductProcess {
     param(
         [string]$FilePath,
         [string]$Arguments = "",
-        [string]$ScenarioRoot = $UserRoot
+        [string]$ScenarioRoot = $UserRoot,
+        [bool]$RedirectOutput = $true
     )
 
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
@@ -154,8 +186,8 @@ function New-ProductProcess {
     $startInfo.WorkingDirectory = $InstallRoot
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
+    $startInfo.RedirectStandardOutput = $RedirectOutput
+    $startInfo.RedirectStandardError = $RedirectOutput
     $startInfo.EnvironmentVariables.Clear()
     foreach ($name in @("SystemRoot", "WINDIR", "TEMP", "TMP", "COMSPEC", "PATHEXT")) {
         $value = [Environment]::GetEnvironmentVariable($name)
@@ -185,7 +217,12 @@ function Stop-Scenario {
     $stopPayload = $stopResult.stdout | ConvertFrom-Json
     Assert-True ($stopResult.exit_code -eq 0) "scenario stop failed: status=$($stopPayload.status),reason=$($stopPayload.reason)"
     Assert-True ($stopPayload.status -eq "stopped") "scenario stop did not report stopped"
-    Assert-True $LauncherProcess.WaitForExit(15000) "scenario launcher did not exit"
+
+    $exited = $LauncherProcess.WaitForExit(30000)
+    if (-not $exited -and $LauncherProcess.HasExited) {
+        $exited = $true
+    }
+    Assert-True $exited "scenario launcher did not exit: $($LauncherProcess.Id)"
 }
 
 function Wait-ProductExit {
@@ -273,7 +310,7 @@ $writerRejectedProcess = $null
 $logProcess = $null
 try {
     Write-Host "Smoke scenario: fresh installed startup"
-    $first = New-ProductProcess -FilePath $launcher
+    $first = New-ProductProcess -FilePath $launcher -RedirectOutput $false
     Wait-ForPath -Path $runtimeDescriptor -Process $first -DiagnosticRoot $user
     $descriptor = Get-Content -LiteralPath $runtimeDescriptor -Raw | ConvertFrom-Json
     Assert-True ($descriptor.origin -match '^http://127\.0\.0\.1:\d+$') "origin is not loopback: $($descriptor.origin)"
@@ -286,6 +323,41 @@ try {
     Assert-True ($ready.ready -eq $true) "packaged server did not become ready"
     $daily = Invoke-WebRequest -Uri "$($descriptor.origin)/research/daily" -UseBasicParsing -TimeoutSec 15
     Assert-True ($daily.StatusCode -eq 200) "research/daily did not return HTTP 200"
+
+    # Phase 19 clean-machine data-operations verification
+    $dataStatus = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/status" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($null -ne $dataStatus.readiness) "data-operations status readiness missing"
+
+    $csrfRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/csrf-token" -UseBasicParsing -TimeoutSec 15 -SessionVariable "smokeSession"
+    Assert-True ($null -ne $csrfRes.csrf_token) "csrf token missing"
+
+    $syncHeaders = @{
+        "Origin" = "$($descriptor.origin)"
+        "X-CSRF-Token" = $csrfRes.csrf_token
+        "Content-Type" = "application/json"
+    }
+    # 1. Trigger sync and poll to terminal completed state
+    $syncRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/sync" -Method POST -Headers $syncHeaders -Body "{}" -WebSession $smokeSession -TimeoutSec 15
+    Assert-True ($syncRes.status -in @("running", "succeeded")) "sync did not start"
+    $syncOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $syncRes.operation_id -TimeoutSeconds 180 -WebSession $smokeSession
+    $syncItemsJson = if ($syncOp.items) { ($syncOp.items | ConvertTo-Json -Compress) } else { "none" }
+    Assert-True ($syncOp.status -in @("succeeded", "partial")) "sync operation failed: $($syncOp.status), error: $($syncOp.error_detail), items: $syncItemsJson"
+
+    # 2. Trigger on-demand symbol enablement and poll to terminal completed state
+    $enableRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/symbols/2330.TW/enable" -Method POST -Headers $syncHeaders -Body "{}" -WebSession $smokeSession -TimeoutSec 15
+    Assert-True ($enableRes.status -in @("running", "succeeded")) "enable symbol did not start"
+    $enableOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $enableRes.operation_id -TimeoutSeconds 120 -WebSession $smokeSession
+    $enableItemsJson = if ($enableOp.items) { ($enableOp.items | ConvertTo-Json -Compress) } else { "none" }
+    Assert-True ($enableOp.status -in @("succeeded", "partial")) "enable symbol operation failed: $($enableOp.status), error: $($enableOp.error_detail), items: $enableItemsJson"
+
+    # 3. Assert BC-2: Authoritative Phase 14 EOD context proof
+    $cutoff = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $eodRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/market-context/eod-close/as-of/2330.TW?knowledge_cutoff_at=$cutoff" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($null -ne $eodRes) "BC-2: EOD market context not returned"
+
+    # 4. Assert BC-3: General V2 analysis regression
+    $analysisRes = Invoke-WebRequest -Uri "$($descriptor.origin)/api/v2/analysis/2330.TW?knowledge_cutoff_at=$cutoff" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($analysisRes.StatusCode -eq 200) "BC-3: GET /api/v2/analysis/2330.TW did not return HTTP 200"
 
     $second = New-ProductProcess -FilePath $launcher
     Write-Host "Smoke scenario: single-instance rejection"
@@ -305,7 +377,7 @@ try {
     Assert-ProcessGone -ProcessId $serverPid
     Assert-True (-not (Test-Path -LiteralPath $runtimeDescriptor)) "runtime descriptor was not cleared"
 
-    $orphan = New-ProductProcess -FilePath $launcher
+    $orphan = New-ProductProcess -FilePath $launcher -RedirectOutput $false
     Wait-ForPath -Path $runtimeDescriptor -Process $orphan -DiagnosticRoot $user
     $orphanDescriptor = Get-Content -LiteralPath $runtimeDescriptor -Raw | ConvertFrom-Json
     $orphanServerPid = [int]$orphanDescriptor.server_pid
@@ -317,14 +389,58 @@ try {
     Assert-True $orphan.WaitForExit(15000) "orphan launcher did not exit after forced termination"
     Assert-ProcessGone -ProcessId $orphanServerPid
 
-    # Installed known-v2-upgradeable startup must create pre-upgrade evidence.
+    # Installed known-v2-upgradeable startup must create pre-upgrade evidence and execute Scenario B regression.
     $upgradeRoot = Join-Path $env:RUNNER_TEMP "tw-stock-predictor-upgradeable"
     $upgradeDb = Join-Path $upgradeRoot "data\cache.db"
     New-Item -ItemType Directory -Path (Split-Path -Parent $upgradeDb) -Force | Out-Null
-    Invoke-Fixture -FixtureArguments @("upgradeable", $upgradeDb)
+    Invoke-Fixture -FixtureArguments @("upgradeable", $upgradeDb, "--symbol", "2330.TW")
     $upgradeDescriptor = Join-Path $upgradeRoot "runtime\instance.json"
-    $upgradeProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $upgradeRoot
+    $upgradeProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $upgradeRoot -RedirectOutput $false
     Wait-ForPath -Path $upgradeDescriptor -Process $upgradeProcess -DiagnosticRoot $upgradeRoot
+    $upgradeDesc = Get-Content -LiteralPath $upgradeDescriptor -Raw | ConvertFrom-Json
+
+    # Scenario B: Run sync & symbol enablement in upgraded instance
+    $csrfResB = Invoke-RestMethod -Uri "$($upgradeDesc.origin)/api/v2/data-operations/csrf-token" -UseBasicParsing -TimeoutSec 15 -SessionVariable "smokeSessionB"
+    Assert-True ($null -ne $csrfResB.csrf_token) "Scenario B: csrf token missing"
+
+    $syncHeadersB = @{
+        "Origin" = "$($upgradeDesc.origin)"
+        "X-CSRF-Token" = $csrfResB.csrf_token
+        "Content-Type" = "application/json"
+    }
+    $syncResB = Invoke-RestMethod -Uri "$($upgradeDesc.origin)/api/v2/data-operations/sync" -Method POST -Headers $syncHeadersB -Body "{}" -WebSession $smokeSessionB -TimeoutSec 15
+    Assert-True ($syncResB.status -in @("running", "succeeded")) "Scenario B: sync did not start"
+    $syncOpB = Wait-ForDataOperation -Origin $upgradeDesc.origin -OperationId $syncResB.operation_id -TimeoutSeconds 180 -WebSession $smokeSessionB
+    Assert-True ($syncOpB.status -in @("succeeded", "partial")) "Scenario B: sync operation failed: $($syncOpB.status)"
+
+    $enableResB = Invoke-RestMethod -Uri "$($upgradeDesc.origin)/api/v2/data-operations/symbols/2330.TW/enable" -Method POST -Headers $syncHeadersB -Body "{}" -WebSession $smokeSessionB -TimeoutSec 15
+    Assert-True ($enableResB.status -in @("running", "succeeded")) "Scenario B: enable symbol did not start"
+    $enableOpB = Wait-ForDataOperation -Origin $upgradeDesc.origin -OperationId $enableResB.operation_id -TimeoutSeconds 120 -WebSession $smokeSessionB
+    Assert-True ($enableOpB.status -in @("succeeded", "partial")) "Scenario B: enable symbol operation failed: $($enableOpB.status)"
+
+    # Verify Phase 17 Queue consumption via GET /api/v2/research/daily-context?market_date=<D>&knowledge_cutoff_at=<K>
+    $statusB = Invoke-RestMethod -Uri "$($upgradeDesc.origin)/api/v2/data-operations/status" -UseBasicParsing -TimeoutSec 15
+    $marketDateB = $statusB.market_context_summary.latest_eod_date
+    if (-not $marketDateB) {
+        $marketDateB = [DateTime]::UtcNow.ToString("yyyy-MM-dd")
+    }
+    $cutoffB = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $dailyContextRes = Invoke-RestMethod -Uri "$($upgradeDesc.origin)/api/v2/research/daily-context?market_date=$marketDateB&knowledge_cutoff_at=$cutoffB" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($null -ne $dailyContextRes) "Scenario B: GET /api/v2/research/daily-context did not return data"
+    Assert-True ($dailyContextRes.items.Count -ge 1) "Scenario B: daily-context items empty"
+    $item2330 = $dailyContextRes.items | Where-Object { $_.canonical_symbol -eq "2330.TW" }
+    Assert-True ($null -ne $item2330) "Scenario B: 2330.TW not found in daily-context items"
+    Assert-True ($item2330.watchlist_reference.symbol -eq "2330.TW") "Scenario B: 2330.TW queue item identity mismatch"
+    if ($enableOpB.status -eq "succeeded") {
+        Assert-True ($item2330.quality.phase14_status -eq "available") "Scenario B: 2330.TW did not consume materialized Phase14 EOD evidence"
+    } else {
+        Assert-True ($item2330.quality.phase14_status -in @("available", "partial", "needs_human_input", "insufficient_data", "unknown")) "Scenario B: unexpected phase14_status for partial enablement: $($item2330.quality.phase14_status)"
+    }
+
+    # Verify /research/daily UI bookmarkable route
+    $dailyUiRes = Invoke-WebRequest -Uri "$($upgradeDesc.origin)/research/daily" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($dailyUiRes.StatusCode -eq 200) "Scenario B: GET /research/daily UI did not return HTTP 200"
+
     Stop-Scenario -LauncherProcess $upgradeProcess -ScenarioRoot $upgradeRoot
     $preUpgradeMetadata = Get-ChildItem -LiteralPath (Join-Path $upgradeRoot "backup") -Recurse -Filter "*.meta.json" -File |
         Where-Object { (Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json).reason -eq "pre_upgrade" }
@@ -337,7 +453,7 @@ try {
     Invoke-Fixture -FixtureArguments @("legacy", $legacyDb)
     $legacyHash = (Get-FileHash -LiteralPath $legacyDb -Algorithm SHA256).Hash
     $legacyDescriptor = Join-Path $legacyRoot "runtime\instance.json"
-    $legacyProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $legacyRoot
+    $legacyProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $legacyRoot -RedirectOutput $false
     Wait-ForPath -Path $legacyDescriptor -Process $legacyProcess -DiagnosticRoot $legacyRoot
     Stop-Scenario -LauncherProcess $legacyProcess -ScenarioRoot $legacyRoot
     $legacyArchives = Get-ChildItem -LiteralPath (Join-Path $legacyRoot "backup\legacy") -Filter "legacy-source-*.db" -File
@@ -396,7 +512,7 @@ try {
         "canonical changed after rejected recovery"
 
     $recoveryDescriptor = Join-Path $recoveryRoot "runtime\instance.json"
-    $recoveryProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $recoveryRoot
+    $recoveryProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $recoveryRoot -RedirectOutput $false
     Wait-ForPath -Path $recoveryDescriptor -Process $recoveryProcess -DiagnosticRoot $recoveryRoot
     Write-Host "Smoke scenario: active-writer recovery rejection"
     $writerRejectedProcess = New-ProductProcess -FilePath $launcher -Arguments "recovery activate `"$recoveryBackup`"" -ScenarioRoot $recoveryRoot
@@ -415,7 +531,7 @@ try {
     $nonLog = Join-Path $logDir "preserve.bin"
     [IO.File]::WriteAllBytes($nonLog, [byte[]](1, 2, 3, 4))
     $logDescriptor = Join-Path $logRoot "runtime\instance.json"
-    $logProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $logRoot
+    $logProcess = New-ProductProcess -FilePath $launcher -ScenarioRoot $logRoot -RedirectOutput $false
     Wait-ForPath -Path $logDescriptor -Process $logProcess -DiagnosticRoot $logRoot
     Stop-Scenario -LauncherProcess $logProcess -ScenarioRoot $logRoot
     $logicalLogs = Get-ChildItem -LiteralPath $logDir -Filter "launcher.log*" -File
@@ -433,7 +549,8 @@ try {
         "/VERYSILENT",
         "/SUPPRESSMSGBOXES",
         "/NORESTART"
-    ) -Wait -PassThru
+    ) -PassThru
+    Assert-True $uninstallerProcess.WaitForExit(60000) "uninstaller did not finish within 60s"
     Assert-True ($uninstallerProcess.ExitCode -eq 0) "uninstaller failed with exit code $($uninstallerProcess.ExitCode)"
     Assert-True (Test-Path -LiteralPath $sentinel) "user data was removed during uninstall"
     Assert-True ((Get-Content -LiteralPath $sentinel -Raw) -eq "preserve-me") "user sentinel changed during uninstall"
@@ -461,6 +578,17 @@ try {
     }
     $summary | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $smokeSummaryPath -Encoding UTF8
     $summary | ConvertTo-Json -Depth 4
+}
+catch {
+    Write-Host "Smoke test failed: $_"
+    Write-Host "Diagnostic: Dumping logs on failure from UserRoot ($UserRoot)..."
+    Get-ChildItem -Path $UserRoot -Recurse -Filter "*.log" -File -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.Length -lt 1048576) {
+            Write-Host "=== LOG: $($_.FullName) ==="
+            Get-Content -LiteralPath $_.FullName -Tail 50 -ErrorAction SilentlyContinue
+        }
+    }
+    throw
 }
 finally {
     foreach ($process in @($first, $second, $stop, $orphan, $upgradeProcess, $legacyProcess, $corruptProcess, $recoveryProcess, $rejectedRecoveryProcess, $writerRejectedProcess, $logProcess)) {

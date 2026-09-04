@@ -200,3 +200,5 @@ export const evidenceApi = {
     ), signal);
   },
 };
+
+export * as dataOperationsApi from "./dataOperationsClient";

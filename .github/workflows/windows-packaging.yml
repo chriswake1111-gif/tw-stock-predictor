@@ -15,7 +15,15 @@ on:
       - "src/services/evidence_backup_service.py"
       - "tools/build_windows_package.py"
       - "tools/validate_windows_package.py"
+      - "src/domain/installed_data_operations.py"
+      - "src/collectors/installed_egress_client.py"
+      - "src/repositories/installed_data_operations_repository.py"
+      - "src/services/installed_data_sync_service.py"
+      - "src/services/universe_write_guard.py"
+      - "src/services/eod_close_ingestion_service.py"
+      - "migrations/20260902_21_installed_data_operations.sql"
       - "tests/test_phase18_runtime.py"
+      - "tests/test_phase19_*.py"
       - "frontend/**"
 
 jobs:
@@ -53,9 +61,9 @@ jobs:
           npm ci
           npm run build
 
-      - name: Run Phase 18 runtime tests on Windows
+      - name: Run Phase 18 and Phase 19 runtime tests on Windows
         shell: pwsh
-        run: python -B -m pytest tests/test_phase18_runtime.py -q -p no:cacheprovider
+        run: python -B -m pytest tests/test_phase18_runtime.py tests/test_phase19_installed_smoke.py -q -p no:cacheprovider
 
       - name: Build Windows onedir package and installer
         shell: pwsh

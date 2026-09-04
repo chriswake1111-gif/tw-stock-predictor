@@ -5,11 +5,15 @@ from __future__ import annotations
 import os
 import inspect
 import shutil
+import sqlite3
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from src.repositories.installed_data_operations_repository import (
+    InstalledDataOperationsRepository,
+)
 from src.repositories.migration_runner import apply_valuation_migration
 from src.services.evidence_backup_service import EvidenceBackupService
 
@@ -208,6 +212,27 @@ class StartupCoordinator:
         except Exception as exc:
             raise StartupFailure("legacy_database_preservation_failed", str(exc)) from exc
 
+    def _finalize_ready(
+        self,
+        canonical: Path,
+        classification: DatabaseClassification,
+        *,
+        pre_upgrade_backup: Path | None = None,
+        legacy_archive: Path | None = None,
+    ) -> StartupResult:
+        try:
+            with sqlite3.connect(str(canonical)) as conn:
+                conn.execute("PRAGMA journal_mode = WAL")
+            InstalledDataOperationsRepository(str(canonical)).recover_interrupted_operations()
+        except Exception as exc:
+            raise StartupFailure("operation_recovery_failed", str(exc)) from exc
+        return StartupResult(
+            "ready",
+            classification,
+            pre_upgrade_backup=pre_upgrade_backup,
+            legacy_archive=legacy_archive,
+        )
+
     def prepare(self) -> StartupResult:
         try:
             self.paths.ensure_user_dirs()
@@ -218,14 +243,14 @@ class StartupCoordinator:
             if classification.state is DatabaseState.CORRUPT_UNKNOWN:
                 raise StartupFailure("database_corrupt_unknown")
             if classification.state is DatabaseState.KNOWN_V2_CURRENT:
-                return StartupResult("ready", classification)
+                return self._finalize_ready(canonical, classification)
             if classification.state is DatabaseState.FRESH:
                 self._log("database_fresh", database=str(canonical))
                 self._call_migrator(canonical)
                 classification = self._call_classifier(canonical)
                 if classification.state is not DatabaseState.KNOWN_V2_CURRENT:
                     raise StartupFailure("fresh_database_not_current")
-                return StartupResult("ready", classification)
+                return self._finalize_ready(canonical, classification)
             if classification.state is DatabaseState.KNOWN_V2_UPGRADEABLE:
                 backup = self._unique_path(self.paths.backup_dir, "pre-upgrade")
                 EvidenceBackupService.backup(
@@ -238,13 +263,13 @@ class StartupCoordinator:
                 classification = self._call_classifier(canonical)
                 if classification.state is not DatabaseState.KNOWN_V2_CURRENT:
                     raise StartupFailure("upgraded_database_not_current")
-                return StartupResult("ready", classification, pre_upgrade_backup=backup)
+                return self._finalize_ready(canonical, classification, pre_upgrade_backup=backup)
             if classification.state is DatabaseState.LEGACY:
                 self._log("legacy_database_preserve", database=str(canonical))
                 current, archive = self._create_v2_from_legacy(canonical, classification)
                 if current.state is not DatabaseState.KNOWN_V2_CURRENT:
                     raise StartupFailure("legacy_database_not_current")
-                return StartupResult("ready", current, legacy_archive=archive)
+                return self._finalize_ready(canonical, current, legacy_archive=archive)
             raise StartupFailure("database_state_unhandled")
         except StartupFailure as exc:
             self._log(exc.code, str(exc))

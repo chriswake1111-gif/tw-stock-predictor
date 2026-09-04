@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.domain.installed_data_operations import InstalledWriteAuthorization
 
 
 class UniverseWriteError(RuntimeError):
@@ -33,16 +37,54 @@ class UniverseOperatorContext:
     audit_id: str | None = None
 
 
+_STORAGE_TO_CAPABILITY_RESOURCE = {
+    "twse-universe-master": "twse.t187ap03_L",
+    "tpex-universe-master": "tpex.mopsfin_t187ap03_O",
+}
+
+
 class UniverseWriteGuard:
     ENV_NAME = "UNIVERSE_INGESTION_WRITES_ENABLED"
 
-    def __init__(self, enabled: bool | None = None) -> None:
+    def __init__(
+        self,
+        enabled: bool | None = None,
+        authorization: InstalledWriteAuthorization | None = None,
+        active_instance_id: str | None = None,
+    ) -> None:
         if enabled is None:
             enabled = os.getenv(self.ENV_NAME, "false").strip().lower() == "true"
         self.enabled = bool(enabled)
+        self.authorization = authorization
+        self.active_instance_id = active_instance_id
 
-    def require_enabled(self, context: UniverseOperatorContext | None = None) -> UniverseOperatorContext:
-        if not self.enabled:
+    def require_enabled(
+        self,
+        context: UniverseOperatorContext | None = None,
+        resource_id: str | None = None,
+        current_instance_id: str | None = None,
+    ) -> UniverseOperatorContext:
+        effective_resource = _STORAGE_TO_CAPABILITY_RESOURCE.get(resource_id, resource_id) if resource_id else None
+        if effective_resource is not None:
+            authorized_via_capability = (
+                self.authorization is not None
+                and self.authorization.is_valid(
+                    current_instance_id or self.active_instance_id,
+                    effective_resource,
+                )
+            )
+        else:
+            authorized_via_capability = (
+                self.authorization is not None
+                and any(
+                    self.authorization.is_valid(
+                        current_instance_id or self.active_instance_id,
+                        res,
+                    )
+                    for res in ("twse.t187ap03_L", "tpex.mopsfin_t187ap03_O")
+                )
+            )
+        if not self.enabled and not authorized_via_capability:
             raise UniverseIngestionWritesDisabled()
         if context is None:
             raise UniverseOperatorContextRequired("actor_id")
@@ -61,18 +103,43 @@ class UniverseWriteGuard:
         )
 
     # Names used by services/repositories and simple tests.
-    def before_mutation(self, context: UniverseOperatorContext | None = None) -> UniverseOperatorContext:
-        return self.require_enabled(context)
+    def before_mutation(
+        self,
+        context: UniverseOperatorContext | None = None,
+        resource_id: str | None = None,
+        current_instance_id: str | None = None,
+    ) -> UniverseOperatorContext:
+        return self.require_enabled(context, resource_id=resource_id, current_instance_id=current_instance_id)
 
-    def check(self, *, actor_id: str | None = None, run_id: str | None = None,
-              lock_id: str | None = None, audit_id: str | None = None) -> UniverseOperatorContext:
-        return self.require_enabled(UniverseOperatorContext(actor_id or "", run_id, lock_id, audit_id))
+    def check(
+        self,
+        *,
+        actor_id: str | None = None,
+        run_id: str | None = None,
+        lock_id: str | None = None,
+        audit_id: str | None = None,
+        resource_id: str | None = None,
+        current_instance_id: str | None = None,
+    ) -> UniverseOperatorContext:
+        return self.require_enabled(
+            UniverseOperatorContext(actor_id or "", run_id, lock_id, audit_id),
+            resource_id=resource_id,
+            current_instance_id=current_instance_id,
+        )
 
-    def assert_writes_allowed(self, context: UniverseOperatorContext | None = None) -> UniverseOperatorContext:
-        return self.require_enabled(context)
+    def assert_writes_allowed(
+        self,
+        context: UniverseOperatorContext | None = None,
+        resource_id: str | None = None,
+        current_instance_id: str | None = None,
+    ) -> UniverseOperatorContext:
+        return self.require_enabled(context, resource_id=resource_id, current_instance_id=current_instance_id)
 
 
 __all__ = [
-    "UniverseIngestionWritesDisabled", "UniverseOperatorContext", "UniverseOperatorContextRequired",
-    "UniverseWriteError", "UniverseWriteGuard",
+    "UniverseIngestionWritesDisabled",
+    "UniverseOperatorContext",
+    "UniverseOperatorContextRequired",
+    "UniverseWriteError",
+    "UniverseWriteGuard",
 ]

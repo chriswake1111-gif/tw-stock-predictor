@@ -224,6 +224,7 @@ class EvidenceBackupService:
                     f'''SELECT COUNT(*) FROM "{table}"'''
                     + (''' WHERE resource_id NOT IN (SELECT resource_id FROM universe_resource_policies)'''
                        + ''' AND resource_type NOT IN ('eod_close','product_classification')'''
+                       + ''' AND resource_id NOT IN ('twse.t187ap03_L','tpex.mopsfin_t187ap03_O')'''
                        if table == "data_resources" and "universe_resource_policies" in table_names else "")
                     + (''' WHERE provider_id NOT IN (SELECT DISTINCT r.provider_id FROM data_resources r JOIN universe_resource_policies up ON up.resource_id = r.resource_id)'''
                        + ''' AND provider_id NOT IN (SELECT DISTINCT provider_id FROM data_resources WHERE resource_type IN ('eod_close','product_classification'))'''

@@ -20,13 +20,13 @@ TWSE_ISIN_CLASSIFICATION_URL = (
 )
 
 _LABELS = {
-    "official_code": frozenset({"Security Code", "證券代號"}),
+    "official_code": frozenset({"Security Code", "證券代號", "有價證券代號"}),
     "market": frozenset({"Market", "市場別"}),
     "security_type": frozenset({"Type of security", "有價證券別"}),
-    "listing_date": frozenset({"Date Stock Listed", "上市日期"}),
-    "isin": frozenset({"ISIN Code", "國際證券辨識號碼"}),
+    "listing_date": frozenset({"Date Stock Listed", "上市日期", "公開發行/上市(櫃)/發行日"}),
+    "isin": frozenset({"ISIN Code", "國際證券辨識號碼", "國際證券編碼"}),
     "cfi": frozenset({"CFI", "CFI Code", "CFICode"}),
-    "remarks": frozenset({"Remarks", "備註"}),
+    "remarks": frozenset({"Remarks", "備註", "備 註"}),
     "currency": frozenset({"Currency", "幣別", "計價幣別"}),
 }
 _ALL_LABELS = frozenset(value for values in _LABELS.values() for value in values)
@@ -116,6 +116,10 @@ def _parse_listing_date(value: str | None) -> str | None:
         return None
     text = value.strip()
     try:
+        if "/" in text:
+            parts = text.split("/")
+            if len(parts) == 3 and len(parts[0]) == 4 and parts[0].isdigit():
+                return f"{parts[0]}-{int(parts[1]):02d}-{int(parts[2]):02d}"
         if len(text) >= 3 and text[:3].isdigit() and (
             "/" in text or len(text) == 7
         ):
@@ -251,6 +255,9 @@ def parse_twse_isin_classification(
 
     market = candidate.get("market")
     security_type = candidate.get("security_type")
+    currency = candidate.get("currency")
+    if currency is None and expected_market in {"上市", "上櫃"} and security_type == "股票":
+        currency = "新台幣"
     if expected_market:
         decision = classify_product(
             official_code=candidate.get("official_code"),
@@ -260,7 +267,7 @@ def parse_twse_isin_classification(
             security_type=security_type,
             listing_date=listing_date,
             trade_date=trade_date,
-            currency=candidate.get("currency"),
+            currency=currency,
             cfi=candidate.get("cfi"),
             remarks=candidate.get("remarks"),
         )
@@ -281,7 +288,7 @@ def parse_twse_isin_classification(
         listing_date=listing_date,
         isin_raw=candidate.get("isin"),
         cfi_raw=candidate.get("cfi"),
-        currency_raw=candidate.get("currency"),
+        currency_raw=currency,
         remarks_raw=candidate.get("remarks"),
         raw_cells=raw_cells,
         schema_fingerprint=schema_hash,

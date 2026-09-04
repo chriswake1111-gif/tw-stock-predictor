@@ -777,9 +777,9 @@ class ProductionIngestionService:
     @staticmethod
     def _calendar_status(row: dict[str, Any]) -> TradingSessionStatus:
         text = f"{row.get('Name', '')} {row.get('Description', '')}"
-        if "無交易" in text:
+        if "無交易" in text or "休市" in text:
             return TradingSessionStatus.NO_TRADING
-        if "放假" in text or "假日" in text:
+        if "放假" in text or "假日" in text or "補假" in text:
             return TradingSessionStatus.HOLIDAY
         if "最後交易" in text:
             return TradingSessionStatus.SPECIAL

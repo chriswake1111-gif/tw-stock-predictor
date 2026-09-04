@@ -1,5 +1,69 @@
 # 專案進度與下階段待辦 (NEXT_TODO.md)
 
+## 2026-09-04 交班：Phase 19 Fourth Code Review 修正完成，進入 Fifth Review (LUK-75)
+
+### 當前狀態與成果
+
+- [x] **Fourth Code Review 所有審查項全部修正完畢 (P1-1 ~ P1-5, Smoke Alignment)**:
+  - P1-1: 嚴格鎖定 90 秒全域操作逾時 (`deadline_seconds <= 90.0`) 與 60 秒滾動租約 (`lease_duration_seconds=60`)，貫穿所有階段與同步 API。
+  - P1-2: 徹底移除 `1970-01-01` 偽造時間戳；從 TWSE / TPEx 官方來源動態解析真實上市日期（支援 8 碼西元與 7 碼民國格式），並將營運狀態事件設為 `effective_at=None`。
+  - P1-3: 嚴禁負向日曆推論，移除個股隨選啟用中的合成日曆插入 (`trading_calendar_revisions`)；無授權交易日證明時真實標記為 `PARTIAL`，零合成資料；Scenario B 斷言對齊真實 partial 結果，移除無效 fixture。
+  - P1-4: 實現 TWSE / TPEx 雙市場成交金額對稱真實結算；先物化兩市場數據至 `LiquidityRepository.add_turnover`，再依實際持久化與解析結果獨立評定子任務與項目狀態。
+  - P1-5: `evaluate_installed_readiness` 嚴密綁定最新 EOD 觀察值與啟用中標的 (`identity_epoch >= 1`)，驗證雙市場成交金額存在性，並精準比對日曆最新交易日產出 `STALE` 狀態。
+- [x] **本地全量測試通過**:
+  - Python: 871 passed, 0 failed, 1 warning (4m 09s).
+  - 前端: 8 files passed, 30 tests passed, ESLint 0 errors / 0 warnings.
+- [x] **遠端雙軌 CI 全綠燈通過 (Exact Head: `81794e9f7435f1118c894f57c2bc3585db2f4a42`)**:
+  - `Anti-Gravity TU Predictor CI`: Success in 9m 19s (Run `33822710303`, Job `100868650569`).
+  - `TW Stock Predictor Windows Productization`: Success in 12m 15s (Run `33822710381`, Job `100868650810`).
+- [x] **PR #18 與 Linear LUK-75 已同步完畢**:
+  - GitHub PR #18 保持 Draft / Open / Unmerged 狀態，內文已同步第四次審查修復對照矩陣與 CI 雙綠燈結果。
+  - Linear LUK-75 已留存第五次代碼審查提請留言 (ID `75a63ca0-d3f6-43eb-b78d-b4006f09678f`)。
+
+### 核心安全與邊界聲明
+- 本系統持續嚴格遵守 `DOCS/PRODUCT_BOUNDARY.md`：無券商 API、無真實帳號連線、無自動交易或跟單功能。
+- 所有外網存取均經由 `InstalledEgressClient` 白名單端點，絕無任意 URL 存取。
+- Merge Gate: `NOT AUTHORIZED`；部署或自動合併：`NOT AUTHORIZED`。
+
+### 下一步待辦
+- 保持停止於 **READY FOR PHASE 19 FIFTH CODE REVIEW**，等待 Lukas Chiu 進行第五次審查。
+
+---
+
+## 2026-09-04 交班：Phase 19 Third Code Review 修正完成，雙軌 CI 全綠燈通過，進入 Fourth Review (LUK-75)
+
+### 當前狀態與成果
+
+- [x] **Third Code Review 所有審查項全部修正完畢 (P1-1 ~ P1-5, P2-1, Production Hardening)**:
+  - P1-1: Lineage 正確記錄 Exact Approved Capability IDs (`twse.t187ap03_L` 和 `tpex.mopsfin_t187ap03_O`)，移除 Operation Item 別名重寫。
+  - P1-2: Universe Ingestion 複用受管的 `UniverseIngestionService` 與 `UniverseIdentityRepository`，記錄真實 accepted/rejected 筆數；並補齊上市生命週期錨點時間證明（`event_date="1970-01-01"`），避免 `identity_epoch_ambiguous` / `event_d_applicability_unresolved` 阻塞。
+  - P1-3: 成交金額與 CBC 模組強化；`MarketTurnoverCollector._iso_date()` 支援無斜線民國日期字串（如 `1150902`），精確記錄觀察值筆數，Schema 飄移與網路失敗映射至 `partial`/`failed` 而不崩潰。
+  - P1-4: `evaluate_installed_readiness(conn)` 替換弱代理，改採 5 大多支柱領域證據（交易日曆 Session、Epoch >= 1 標的、獨立上市與正常營運事件、正向公開合規 EOD 觀察值、雙市場成交金額）；若 EOD 日期落後則回傳 `STALE`。
+  - P1-5: 個股隨選啟用（On-Demand Symbol Enablement）嚴格要求日曆交易日正向證明、持久化身份與合規分類證明；驗證物化後公開合規狀態；遵守 `eod_close_observations` 嚴格不可變 (Immutable) 觸發器規範，透過受管版本化修訂 (`revision_number = previous + 1`) 推進。
+  - P2-1: `windows-packaging-smoke.ps1` Scenario B 斷言 `2330.TW` 佇列項目身份與物化 Phase 14 EOD 證據消費 (`quality.phase14_status == 'available'`)；修正動態名單查詢表格為 `research_watchlist_items WHERE membership_state = 'active'`；預設台灣主板普通股幣別為 `新台幣`。
+  - Production Hardening: TWSE 行事曆 OpenAPI 抓取增加重試機制與非空清單驗證，消除 GitHub Actions 偶發空封包失敗。
+- [x] **雙軌遠端 CI 全綠燈驗證通過 (Exact Head: `7488823f6630f305c088a8d11c8172c3886f4c39`)**:
+  - `Anti-Gravity TU Predictor CI`: Success in 3m 54s (Run `33787552884`, Job `100755890968`).
+  - `TW Stock Predictor Windows Productization`: Success in 8m 39s (Run `33787552847`, Job `100755891148`).
+- [x] **本地全量測試通過**:
+  - Python: 866 passed, 0 failed, 1 warning (3m 41s).
+  - 前端: 8 files passed, 30 tests passed, ESLint 0 errors / 0 warnings.
+  - Windows Clean-Machine Smoke: 18 項情境斷言全數通過（含 Scenario A, Scenario B, Graceful Stop, Mutex Rejection, Recovery CLI 等）。
+- [x] **PR #18 與 Linear LUK-75 回寫完畢**:
+  - GitHub PR #18 保持 Draft / Open / Unmerged 狀態，已更新完整取證與修復對照矩陣。
+  - Linear LUK-75 已回寫審查修正與 CI 雙綠燈留言，正式提請 Lukas Chiu 進行 Phase 19 Fourth Code Review。
+
+### 核心安全與邊界聲明
+- 本系統持續嚴格遵守 `DOCS/PRODUCT_BOUNDARY.md`：無券商 API、無真實帳號連線、無自動交易或跟單功能。
+- 所有外網存取均經由 `InstalledEgressClient` 白名單端點，絕無任意 URL 存取。
+- Merge Gate: `NOT AUTHORIZED`；部署或自動合併：`NOT AUTHORIZED`。
+
+### 下一步待辦
+- 保持停止於 **READY FOR PHASE 19 FOURTH CODE REVIEW**，等待 Lukas Chiu 進行第四次審查。
+
+---
+
+
 ## 2026-09-01 交班：Layer 1 完成，準備小型 Productization Phase
 
 ### 當前基線

@@ -24,8 +24,9 @@ def test_migration_20_removes_global_payload_ownership_and_is_rerunnable(tmp_pat
     first = apply_valuation_migration(str(db))
     second = apply_valuation_migration(str(db))
 
-    assert first["additive_migration_ids"][-1] == (
+    assert (
         "20260828_20_phase14_third_code_review_remediation"
+        in first["additive_migration_ids"]
     )
     assert second["additive_migration_ids"] == first["additive_migration_ids"]
 

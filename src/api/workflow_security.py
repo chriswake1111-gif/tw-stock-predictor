@@ -18,6 +18,8 @@ from urllib.parse import urlsplit
 
 
 RESEARCH_PREFIX = "/api/v2/research/"
+DATA_OPERATIONS_PREFIX = "/api/v2/data-operations/"
+PROTECTED_PREFIXES = (RESEARCH_PREFIX, DATA_OPERATIONS_PREFIX)
 CSRF_COOKIE_NAME = "research_csrf_session"
 CSRF_TTL_SECONDS = 1800
 MAX_CSRF_SESSIONS = 128
@@ -151,7 +153,8 @@ class ResearchBoundaryMiddleware:
         return [value.decode("latin-1") for key, value in scope.get("headers", []) if key.lower() == name]
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or not scope.get("path", "").startswith(RESEARCH_PREFIX):
+        path = scope.get("path", "")
+        if scope["type"] != "http" or not any(path.startswith(p) for p in PROTECTED_PREFIXES):
             await self.app(scope, receive, send)
             return
         received_at = datetime.now(timezone.utc)
@@ -194,7 +197,7 @@ class ResearchBoundaryMiddleware:
         if origin is None:
             await self._reject(send, 403, "research_origin_required")
             return
-        if os.getenv("RESEARCH_WORKFLOW_WRITES_ENABLED", "false").strip().lower() != "true":
+        if path.startswith(RESEARCH_PREFIX) and os.getenv("RESEARCH_WORKFLOW_WRITES_ENABLED", "false").strip().lower() != "true":
             await self._reject(send, 503, "research_workflow_writes_disabled")
             return
         content_types = self._header_values(scope, b"content-type")
@@ -226,7 +229,7 @@ class ResearchBoundaryMiddleware:
         if cookie_headers:
             cookie.load("; ".join(cookie_headers))
         session_id = cookie.get(CSRF_COOKIE_NAME)
-        tokens = self._header_values(scope, b"x-csrf-token")
+        tokens = self._header_values(scope, b"x-csrf-token") or self._header_values(scope, b"x-research-csrf-token")
         reason = self.sessions.validate(
             session_id.value if session_id else "", tokens[0] if len(tokens) == 1 else "",
             received_at,
