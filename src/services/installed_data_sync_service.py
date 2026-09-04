@@ -251,21 +251,31 @@ class InstalledDataSyncService:
         try:
             payload = []
             last_exc: Exception | None = None
-            for attempt in range(1, 4):
+            for attempt in range(1, 6):
                 try:
                     status_code, body, _ = self.egress_client.fetch(
                         "https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule",
                         deadline_monotonic=deadline_monotonic,
                     )
-                    text = body.decode("utf-8", errors="replace").strip() if body else ""
-                    if text:
+                    text = body.decode("utf-8-sig", errors="replace").strip() if body else ""
+                    if text and not text.startswith("<"):
                         candidate = json.loads(text)
                         if isinstance(candidate, list) and candidate:
                             payload = candidate
                             break
+                        else:
+                            last_exc = ValueError(
+                                f"TWSE holiday schedule returned non-list or empty list: {type(candidate)}"
+                            )
+                    else:
+                        preview = text[:60] if text else "empty"
+                        last_exc = ValueError(
+                            f"TWSE holiday schedule returned non-JSON payload: {preview}"
+                        )
                 except Exception as exc:
                     last_exc = exc
-                time.sleep(0.5 * attempt)
+                if attempt < 5:
+                    time.sleep(1.0 * attempt)
             else:
                 if last_exc:
                     raise last_exc
@@ -349,8 +359,8 @@ class InstalledDataSyncService:
                 "https://openapi.twse.com.tw/v1/opendata/t187ap03_L",
                 deadline_monotonic=deadline_monotonic,
             )
-            raw_hash = sha256_text(body.decode("utf-8"))
-            payload = json.loads(body.decode("utf-8")) if body else []
+            raw_hash = sha256_text(body.decode("utf-8-sig", errors="replace"))
+            payload = json.loads(body.decode("utf-8-sig", errors="replace")) if body else []
             rows = parse_universe_payload("twse.t187ap03_L", payload)
 
             child_run = IngestionRun(
@@ -578,8 +588,8 @@ class InstalledDataSyncService:
                 "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O",
                 deadline_monotonic=deadline_monotonic,
             )
-            raw_hash = sha256_text(body.decode("utf-8"))
-            payload = json.loads(body.decode("utf-8")) if body else []
+            raw_hash = sha256_text(body.decode("utf-8-sig", errors="replace"))
+            payload = json.loads(body.decode("utf-8-sig", errors="replace")) if body else []
             rows = parse_universe_payload("tpex.mopsfin_t187ap03_O", payload)
 
             child_run = IngestionRun(
@@ -921,7 +931,7 @@ class InstalledDataSyncService:
                 "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
                 deadline_monotonic=deadline_monotonic,
             )
-            payload = json.loads(body.decode("utf-8")) if body else []
+            payload = json.loads(body.decode("utf-8-sig", errors="replace")) if body else []
             parsed_twse = parse_twse_snapshot(payload)
             snapshot_codes = {row.official_code for row in parsed_twse.rows}
             target_codes = classified_codes & snapshot_codes
@@ -1043,7 +1053,7 @@ class InstalledDataSyncService:
                 "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes",
                 deadline_monotonic=deadline_monotonic,
             )
-            payload = json.loads(body.decode("utf-8")) if body else []
+            payload = json.loads(body.decode("utf-8-sig", errors="replace")) if body else []
             parsed_tpex = parse_tpex_snapshot(payload)
             snapshot_codes_tpex = {row.official_code for row in parsed_tpex.rows}
             target_codes_tpex = classified_codes & snapshot_codes_tpex
@@ -1189,8 +1199,8 @@ class InstalledDataSyncService:
                 "https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK",
                 deadline_monotonic=deadline_monotonic,
             )
-            raw_hash_twse = sha256_text(body.decode("utf-8"))
-            twse_payload = json.loads(body.decode("utf-8")) if body else []
+            raw_hash_twse = sha256_text(body.decode("utf-8-sig", errors="replace"))
+            twse_payload = json.loads(body.decode("utf-8-sig", errors="replace")) if body else []
             foundation.add_run(child_run_twse)
             foundation.acquire_resource_lock(twse_turnover_res, child_run_twse_id, child_run_twse.started_at)
             now = utc_now_timestamp()
@@ -1297,8 +1307,8 @@ class InstalledDataSyncService:
                 "https://www.tpex.org.tw/openapi/v1/tpex_daily_trading_index",
                 deadline_monotonic=deadline_monotonic,
             )
-            raw_hash_tpex = sha256_text(body.decode("utf-8"))
-            tpex_payload = json.loads(body.decode("utf-8")) if body else []
+            raw_hash_tpex = sha256_text(body.decode("utf-8-sig", errors="replace"))
+            tpex_payload = json.loads(body.decode("utf-8-sig", errors="replace")) if body else []
             foundation.add_run(child_run_tpex)
             foundation.acquire_resource_lock(tpex_turnover_res, child_run_tpex_id, child_run_tpex.started_at)
             now = utc_now_timestamp()
@@ -1643,7 +1653,7 @@ class InstalledDataSyncService:
             cbc_rejected = 0
             cbc_error = None
             try:
-                cbc_payload = json.loads(body.decode("utf-8")) if body else {}
+                cbc_payload = json.loads(body.decode("utf-8-sig", errors="replace")) if body else {}
                 data_rows = []
                 official_data = cbc_payload.get("data", {})
                 if isinstance(official_data, dict) and "dataSets" in official_data:
@@ -1864,7 +1874,7 @@ class InstalledDataSyncService:
             eod_url,
             deadline_monotonic=deadline_monotonic,
         )
-        eod_payload = json.loads(eod_body.decode("utf-8")) if eod_body else []
+        eod_payload = json.loads(eod_body.decode("utf-8-sig", errors="replace")) if eod_body else []
 
         # 3. Explicit session validation against calendar proof
         parsed_snap = parse_tpex_snapshot(eod_payload) if venue == "TPEX" else parse_twse_snapshot(eod_payload)

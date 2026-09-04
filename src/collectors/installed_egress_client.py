@@ -102,6 +102,13 @@ class InstalledEgressClient:
 
     def __init__(self, session: requests.Session | None = None) -> None:
         self._session = session or requests.Session()
+        if "User-Agent" not in self._session.headers:
+            self._session.headers["User-Agent"] = (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+        if "Accept" not in self._session.headers:
+            self._session.headers["Accept"] = "application/json, text/plain, */*"
 
     def is_isin_endpoint(self, url: str) -> bool:
         return "isin.twse.com.tw" in url.lower()
