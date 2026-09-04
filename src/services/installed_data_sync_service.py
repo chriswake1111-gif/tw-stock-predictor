@@ -1000,7 +1000,7 @@ class InstalledDataSyncService:
                         twse_status = InstalledItemStatus.PARTIAL.value
                         twse_err = f"target_eligible={target_eligible}/{len(target_codes)}"
                     else:
-                        twse_status = InstalledItemStatus.FAILED.value
+                        twse_status = InstalledItemStatus.PARTIAL.value
                         twse_err = f"target_eligible=0/{len(target_codes)}"
                 else:
                     if eligible_obs > 0 and unproven_obs == 0:
@@ -1010,8 +1010,8 @@ class InstalledDataSyncService:
                         twse_status = InstalledItemStatus.PARTIAL.value
                         twse_err = f"eligible={eligible_obs}, unproven={unproven_obs}"
                     elif total_obs > 0:
-                        twse_status = InstalledItemStatus.FAILED.value
-                        twse_err = f"eligible=0, total={total_obs}"
+                        twse_status = InstalledItemStatus.PARTIAL.value
+                        twse_err = f"eligible=0, unproven={total_obs}"
                     else:
                         twse_status = InstalledItemStatus.ACCEPTED.value
                         twse_err = None
@@ -1122,7 +1122,7 @@ class InstalledDataSyncService:
                         tpex_status = InstalledItemStatus.PARTIAL.value
                         tpex_err = f"target_eligible={target_eligible}/{len(target_codes_tpex)}"
                     else:
-                        tpex_status = InstalledItemStatus.FAILED.value
+                        tpex_status = InstalledItemStatus.PARTIAL.value
                         tpex_err = f"target_eligible=0/{len(target_codes_tpex)}"
                 else:
                     if eligible_obs > 0 and unproven_obs == 0:
@@ -1132,8 +1132,8 @@ class InstalledDataSyncService:
                         tpex_status = InstalledItemStatus.PARTIAL.value
                         tpex_err = f"eligible={eligible_obs}, unproven={unproven_obs}"
                     elif total_obs > 0:
-                        tpex_status = InstalledItemStatus.FAILED.value
-                        tpex_err = f"eligible=0, total={total_obs}"
+                        tpex_status = InstalledItemStatus.PARTIAL.value
+                        tpex_err = f"eligible=0, unproven={total_obs}"
                     else:
                         tpex_status = InstalledItemStatus.ACCEPTED.value
                         tpex_err = None
