@@ -20,10 +20,12 @@ from src.api.routes.v2_valuation import router as v2_valuation_router
 from src.api.routes.research_workflow import router as research_workflow_router
 from src.api.routes.daily_research import router as daily_research_router
 from src.api.routes.v2_universe import router as v2_universe_router
+from src.api.routes.v2_universe_search import router as v2_universe_search_router
 from src.api.routes.v2_eod_close import router as v2_eod_close_router
 from src.api.routes.v2_eod_coverage import router as v2_eod_coverage_router
 from src.api.routes.v2_market_context import router as v2_market_context_router
 from src.api.routes.installed_data_operations import router as data_operations_router
+from src.api.routes.v2_research import router as v2_research_router
 from src.api.routes.runtime import router as runtime_router
 from src.api.workflow_security import ResearchBoundaryMiddleware
 from src.api.workflow_security import ResearchSecurityConfig, parse_research_origin
@@ -147,9 +149,11 @@ def create_app(
     app.include_router(research_workflow_router)
     app.include_router(daily_research_router)
     app.include_router(v2_universe_router)
+    app.include_router(v2_universe_search_router)
     app.include_router(v2_eod_close_router)
     app.include_router(v2_eod_coverage_router)
     app.include_router(v2_market_context_router)
+    app.include_router(v2_research_router)
     app.include_router(data_operations_router)
     app.include_router(runtime_router)
     app.include_router(core_router)
