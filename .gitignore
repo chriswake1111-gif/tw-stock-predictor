@@ -14,6 +14,7 @@
 
 # Rebuildable Windows Productization outputs; never commit installers or
 # extracted package payloads.
+/dist/
 /dist/windows-productization/
 /packaging/windows/build/
 /packaging/windows/output/
