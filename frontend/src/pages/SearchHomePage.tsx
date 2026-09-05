@@ -44,13 +44,15 @@ export function SearchHomePage() {
   useEffect(() => {
     const trimmed = query.trim();
     if (!trimmed) {
-      setResults([]);
-      setLoading(false);
-      return;
+      const clearTimer = setTimeout(() => {
+        setResults([]);
+        setLoading(false);
+      }, 0);
+      return () => clearTimeout(clearTimer);
     }
 
-    setLoading(true);
     const timeoutId = setTimeout(() => {
+      setLoading(true);
       searchUniverse(trimmed, 10)
         .then((res) => {
           setResults(res.results);

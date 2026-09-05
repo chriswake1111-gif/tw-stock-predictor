@@ -14,7 +14,8 @@ export function formatPrice(value: number | null | undefined, currency: string =
   if (value === null || value === undefined || isNaN(value)) {
     return "尚無報價";
   }
-  return `${value.toLocaleString("zh-TW", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} 元`;
+  const unit = currency === "TWD" ? "元" : currency;
+  return `${value.toLocaleString("zh-TW", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${unit}`;
 }
 
 export function formatTurnover(turnoverTwd: number | null | undefined): string {

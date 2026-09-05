@@ -1,4 +1,4 @@
-import { X, Shield, FileText, CheckCircle2, AlertCircle } from "lucide-react";
+import { X, Shield, FileText, CheckCircle2 } from "lucide-react";
 import type { AuditReferenceSummary } from "../../api/types";
 
 interface AuditDrawerProps {

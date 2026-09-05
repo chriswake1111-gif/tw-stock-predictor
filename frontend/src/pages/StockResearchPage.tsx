@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, useSearchParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
@@ -7,7 +7,6 @@ import {
   Loader2,
   RefreshCw,
   AlertTriangle,
-  FileSearch,
 } from "lucide-react";
 import { bootstrapSymbol, getResearchSummary } from "../api/phase20Client";
 import { getOperationDetails } from "../api/dataOperationsClient";
@@ -32,7 +31,7 @@ export function StockResearchPage() {
   const [historicalInput, setHistoricalInput] = useState(asOf || "");
   const [showTimeMachine, setShowTimeMachine] = useState(Boolean(asOf));
 
-  async function loadData() {
+  const loadData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -82,11 +81,20 @@ export function StockResearchPage() {
       setBootstrapStatus(null);
       setError(err instanceof Error ? err.message : "載入個股研究資料失敗");
     }
-  }
+  }, [canonicalSymbol, asOf]);
 
   useEffect(() => {
-    loadData();
-  }, [canonicalSymbol, asOf]);
+    let active = true;
+    const timer = setTimeout(() => {
+      if (active) {
+        void loadData();
+      }
+    }, 0);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [loadData]);
 
   function handleHistoricalSubmit(e: React.FormEvent) {
     e.preventDefault();

@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle, ArrowRight, ShieldCheck } from "lucide-react";
+import { CheckCircle, ArrowRight, ShieldCheck } from "lucide-react";
 import type { HumanDecisionItem } from "../api/types";
 
 interface HumanDecisionQueueProps {
@@ -16,6 +16,7 @@ export function HumanDecisionQueue({
     return (
       <div
         className="card"
+        data-symbol={canonicalSymbol}
         style={{
           padding: "1.25rem",
           background: "var(--color-bg-subtle, #f8fafc)",
@@ -34,7 +35,7 @@ export function HumanDecisionQueue({
   }
 
   return (
-    <div className="card human-decision-queue" style={{ padding: "1.5rem", marginBottom: "1.5rem" }}>
+    <div className="card human-decision-queue" data-symbol={canonicalSymbol} style={{ padding: "1.5rem", marginBottom: "1.5rem" }}>
       <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "0.5rem" }}>
         <ShieldCheck size={22} color="var(--color-primary, #0284c7)" />
         <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0 }}>
