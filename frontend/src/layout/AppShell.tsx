@@ -2,25 +2,20 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import {
   BarChart3,
   BookOpen,
-  CalendarDays,
   FileSearch,
+  Home,
   Menu,
   Search,
-  ListChecks,
-  Network,
-  CandlestickChart,
+  Settings,
 } from "lucide-react";
 import { NavLink, useNavigate } from "react-router-dom";
 
 const navigation = [
-  { to: "/market", label: "市場概況", icon: BarChart3 },
+  { to: "/", label: "首頁 / 搜尋", icon: Home },
   { to: "/stocks/2330.TW", label: "個股研究", icon: FileSearch },
-  { to: "/snapshots", label: "歷史快照", icon: CalendarDays },
-  { to: "/validation", label: "歷史觀察", icon: BarChart3 },
+  { to: "/market", label: "市場概況", icon: BarChart3 },
   { to: "/rules", label: "模型說明", icon: BookOpen },
-  { to: "/research", label: "研究清單", icon: ListChecks },
-  { to: "/universe", label: "標的主檔", icon: Network },
-  { to: "/eod-close", label: "官方日收盤", icon: CandlestickChart },
+  { to: "/advanced", label: "進階與審計", icon: Settings },
 ] as const;
 
 export function AppShell({ children }: { children: ReactNode }) {

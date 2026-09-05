@@ -1,6 +1,8 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Route, Routes } from "react-router-dom";
 import { AppShell } from "./layout/AppShell";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
+import { SearchHomePage } from "./pages/SearchHomePage";
+import { StockResearchPage } from "./pages/StockResearchPage";
 import { StockWorkspacePage } from "./pages/StockWorkspacePage";
 import { MarketOverviewPage } from "./pages/MarketOverviewPage";
 import { RuleLibraryPage } from "./pages/RuleLibraryPage";
@@ -11,20 +13,23 @@ import { ResearchQueuePage } from "./pages/ResearchQueuePage";
 import { DailyResearchPage } from "./pages/DailyResearchPage";
 import { UniversePage } from "./pages/UniversePage";
 import { EodCloseContextPage } from "./pages/EodCloseContextPage";
+import { AdvancedConsolePage } from "./pages/AdvancedConsolePage";
 
 export default function App() {
   return (
     <AppShell>
       <Routes>
-        <Route path="/" element={<Navigate to="/stocks/2330.TW" replace />} />
+        <Route path="/" element={<SearchHomePage />} />
+        <Route path="/stocks/:symbol" element={<StockResearchPage />} />
+        <Route path="/legacy/stocks/:symbol" element={<StockWorkspacePage />} />
         <Route path="/market" element={<MarketOverviewPage />} />
-        <Route path="/stocks/:symbol" element={<StockWorkspacePage />} />
+        <Route path="/rules" element={<RuleLibraryPage />} />
+        <Route path="/advanced" element={<AdvancedConsolePage />} />
         <Route path="/snapshots" element={<SnapshotHistoryPage />} />
         <Route path="/snapshots/compare" element={<SnapshotComparisonPage />} />
         <Route path="/snapshots/:snapshotId" element={<SnapshotDetailPage />} />
         <Route path="/validation" element={<ValidationHistoryPage />} />
         <Route path="/validation/runs/:runId" element={<ValidationRunPage />} />
-        <Route path="/rules" element={<RuleLibraryPage />} />
         <Route path="/research" element={<ResearchQueuePage />} />
         <Route path="/research/daily" element={<DailyResearchPage />} />
         <Route path="/universe" element={<UniversePage />} />
