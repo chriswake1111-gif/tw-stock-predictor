@@ -61,9 +61,9 @@ jobs:
           npm ci
           npm run build
 
-      - name: Run Phase 18 and Phase 19 runtime tests on Windows
+      - name: Run Phase 18, Phase 19, and Phase 20 runtime tests on Windows
         shell: pwsh
-        run: python -B -m pytest tests/test_phase18_runtime.py tests/test_phase19_installed_smoke.py -q -p no:cacheprovider
+        run: python -B -m pytest tests/test_phase18_runtime.py tests/test_phase19_installed_smoke.py tests/test_phase20_installed_smoke.py -q -p no:cacheprovider
 
       - name: Build Windows onedir package and installer
         shell: pwsh

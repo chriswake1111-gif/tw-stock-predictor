@@ -34,5 +34,15 @@ class UniverseService:
     def list_instruments(self, **kwargs: Any) -> dict[str, Any]:
         return self.list(**kwargs)
 
+    def search_local(
+        self, query: str, *, limit: int = 10, knowledge_cutoff_at: str | None = None
+    ) -> dict[str, Any]:
+        cutoff = validate_knowledge_cutoff_at(knowledge_cutoff_at) if knowledge_cutoff_at else None
+        return self.repository.search_instruments_local(query=query, limit=limit, cutoff=cutoff)
+
+    def short_name_coverage(self, *, knowledge_cutoff_at: str | None = None) -> dict[str, Any]:
+        cutoff = validate_knowledge_cutoff_at(knowledge_cutoff_at) if knowledge_cutoff_at else None
+        return self.repository.get_short_name_coverage(cutoff=cutoff)
+
 
 __all__ = ["UniverseService"]
