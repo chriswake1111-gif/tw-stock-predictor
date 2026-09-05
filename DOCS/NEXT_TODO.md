@@ -1,5 +1,54 @@
 # 專案進度與下階段待辦 (NEXT_TODO.md)
 
+## 2026-09-06 交班：Phase 20 Implementation 完成，提請 First Code Review (LUK-79)
+
+### 當前狀態與成果
+
+- [x] **Phase 20 所有 Work Packages (WP01 ~ WP11) 依據核准之 LUK-78 Implementation Plan (Rev 2) 全數實作完畢**:
+  - **WP01 — Migration 22 & Universe v2 Normalization (P1-1, BC-IMP-1)**:
+    - 建立 `migrations/20260905_22_phase20_universe_short_name.sql`，新增 `short_name TEXT` 欄位與索引，升級 parser version 至 `2.0.0`。
+    - 嚴格遵守 BC-IMP-1：`UniverseRepository.add_revision()` 於 `BEGIN IMMEDIATE` 交易內以 `COALESCE(MAX(revision_number), 0) + 1` 單調自增派生子修訂版號，不依賴 caller override。
+  - **WP02 — Effective Master Coverage & Local Search API (BC-IP-2)**:
+    - 實作 `_effective_master_records()`，僅從最新已核准修訂本衍生有效主檔，排除非公開、無效與停更代碼。
+    - 實作 `GET /api/v2/universe/search` 與 `GET /api/v2/universe/coverage`，搜尋延遲 < 100ms，輸入與打字過程維持 0 外網 egress。
+  - **WP03 — Latest-Settled Resolver & Two-Stage Settled Context (BC-IP-1, P1-1)**:
+    - 實作二階段正向證明 CTE（同日多修訂版以 `date_rev_rank = 1` 確定性選取），嚴格貫徹 P1-1 fail-closed anti-fallback：非交易日僅依授權日曆標記休市/週末，絕不倒退至 D-1 偽裝為當前交易日。
+    - 提供 `GET /api/v2/research/context/current/{canonical_symbol}`。
+  - **WP04 — Research Bootstrap Orchestrator Service & API**:
+    - 實作 `ResearchBootstrapService`，具備運算前置檢查、活躍作業覆蓋偵測與背景作業啟動。
+    - 提供 `POST /api/v2/research/bootstrap`，維持 loopback + Origin/CSRF 防護，豁免唯讀限制。
+  - **WP05 — Human Status Adapter & Decision Queue Domain Logic (P1-3)**:
+    - 建立繁體中文低認知負荷狀態映射器與摘要領域模型。
+    - 針對未核准預測（`VAL-02` Forward EPS、`FB-03/FB-04` 波浪錨點）輸出明確審查佇列卡片，嚴禁合成預設目標價或前視數據。
+    - 提供 `GET /api/v2/research/summary/{canonical_symbol}`。
+  - **WP06 ~ WP09 — Frontend Usability, Workspace, Audit Drawer & Navigation**:
+    - 實作以搜尋為中心的首頁 (`/`, `SearchHomePage.tsx`) 與一鍵「準備股票清單」引導卡片。
+    - 實作個股研究工作區 (`/stocks/:symbol`, `StockResearchPage.tsx`)，整合最新結算資訊與背景啟動狀態輪詢。
+    - 實作分離的人工決策佇列 (`HumanDecisionQueue.tsx`) 與唯讀審計抽屜 (`AuditDrawer.tsx`)。
+    - 簡化主導航為 5 項高頻項目，次要管理工具收斂至 `/advanced` (`AdvancedConsolePage.tsx`)，完全保留既有端點與治理介面向下相容性。
+  - **WP10 & WP11 — Automated Verification & Packaging Smoke**:
+    - 新增 `tests/test_phase20_security_and_non_regression.py` 與 `tests/test_phase20_installed_smoke.py`。
+    - 更新 `.github/workflows/windows-packaging.yml` 加入 Phase 20 smoke step。
+- [x] **全量自動化驗證結果**:
+  - Python 全量回歸測試：**904 passed, 0 failed** in 205.5s。
+  - Vitest 前端單元與元件測試：**9 files passed, 35 tests passed** in 3.48s。
+  - 前端靜態資源打包：`npm run build` 通過，零錯誤、零警告。
+  - Packaging Smoke 測試：**32 passed, 0 failed** in 12.5s。
+- [x] **Git 提交結構**:
+  - 於分支 `chriswake1111/luk-79-tw-stock-predictorphase-20-implementation-installed-product` 上完成原子化提交（WP01 ~ WP11）。
+  - 通過 `git diff --check`，零空白字元或行尾雜訊。
+
+### 核心安全與邊界聲明
+- 本系統持續嚴格遵守 `DOCS/PRODUCT_BOUNDARY.md`：無券商 API、無真實帳號連線、無自動交易或跟單功能。
+- 本地股票搜尋與啟動輸入過程 100% 於本機 SQLite 執行，零外部網路發送 (Zero Egress)。
+- 杜金龍分析核心語意維持不變；嚴禁合成 Forward EPS 或推造波浪錨點，所有未驗證項目完整保留於人工決策佇列。
+- Merge Gate: `NOT AUTHORIZED`；自動合併 / 部署：`NOT AUTHORIZED`。依規範僅開立 Draft PR。
+
+### 下一步待辦
+- 保持停止於 **READY FOR PHASE 20 FIRST CODE REVIEW**，等待 Lukas Chiu 進行 Phase 20 第一輪代碼審查。
+
+---
+
 ## 2026-09-04 交班：Phase 19 Fourth Code Review 修正完成，進入 Fifth Review (LUK-75)
 
 ### 當前狀態與成果
