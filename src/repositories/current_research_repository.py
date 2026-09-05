@@ -63,7 +63,7 @@ class CurrentResearchRepository:
     ) -> dict[str, Any]:
         query = """
         WITH candidate_snapshots AS (
-            SELECT 
+            SELECT
                 s.source_snapshot_id,
                 s.resource_id,
                 s.source_trade_date,
@@ -83,7 +83,7 @@ class CurrentResearchRepository:
               AND s.ingested_at IS NOT NULL AND s.ingested_at <= :cutoff
         ),
         latest_settled_snapshot AS (
-            SELECT 
+            SELECT
                 source_snapshot_id,
                 resource_id,
                 source_trade_date,
@@ -95,7 +95,7 @@ class CurrentResearchRepository:
             ORDER BY source_trade_date DESC
             LIMIT 1
         )
-        SELECT 
+        SELECT
             ls.source_trade_date AS settled_trade_date,
             ls.source_snapshot_id,
             ls.snapshot_status,
