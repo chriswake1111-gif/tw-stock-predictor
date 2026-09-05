@@ -29,13 +29,17 @@
   - **WP10 & WP11 — Automated Verification & Packaging Smoke**:
     - 新增 `tests/test_phase20_security_and_non_regression.py` 與 `tests/test_phase20_installed_smoke.py`。
     - 更新 `.github/workflows/windows-packaging.yml` 加入 Phase 20 smoke step。
-- [x] **全量自動化驗證結果**:
+- [x] **全量自動化驗證與 CI 狀態**:
   - Python 全量回歸測試：**904 passed, 0 failed** in 205.5s。
   - Vitest 前端單元與元件測試：**9 files passed, 35 tests passed** in 3.48s。
+  - 前端 ESLint 審查：`npm run lint` 通過，零錯誤、零警告。
   - 前端靜態資源打包：`npm run build` 通過，零錯誤、零警告。
+  - Playwright Visual 測試：`npm run test:visual` **6 passed (4.7s)**（Phase 9/11/12 視覺回歸全綠燈）。
   - Packaging Smoke 測試：**32 passed, 0 failed** in 12.5s。
+  - Ubuntu CI (`Anti-Gravity TU Predictor CI`, Run `33980787672`)：**Success in 2m 46s** (Job `101345502246`)。
+  - Windows CI (`TW Stock Predictor Windows Productization`, Run `33980433124`)：**Success in 10m 9s** (Job `101344574078`)。
 - [x] **Git 提交結構**:
-  - 於分支 `chriswake1111/luk-79-tw-stock-predictorphase-20-implementation-installed-product` 上完成原子化提交（WP01 ~ WP11）。
+  - 於分支 `chriswake1111/luk-79-tw-stock-predictorphase-20-implementation-installed-product` 上完成原子化提交（WP01 ~ WP11 + CI fixes）。
   - 通過 `git diff --check`，零空白字元或行尾雜訊。
 
 ### 核心安全與邊界聲明
