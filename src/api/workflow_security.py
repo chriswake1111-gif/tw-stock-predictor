@@ -197,7 +197,7 @@ class ResearchBoundaryMiddleware:
         if origin is None:
             await self._reject(send, 403, "research_origin_required")
             return
-        if path.startswith(RESEARCH_PREFIX) and os.getenv("RESEARCH_WORKFLOW_WRITES_ENABLED", "false").strip().lower() != "true":
+        if path.startswith(RESEARCH_PREFIX) and path != "/api/v2/research/bootstrap" and os.getenv("RESEARCH_WORKFLOW_WRITES_ENABLED", "false").strip().lower() != "true":
             await self._reject(send, 503, "research_workflow_writes_disabled")
             return
         content_types = self._header_values(scope, b"content-type")
