@@ -292,6 +292,13 @@ def _validate_rows(key: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]
         if kind in {"master", "listing", "termination", "corroborating"}:
             code = next((row.get(field) for field in _CODE_FIELDS if row.get(field) not in (None, "")), None)
             value["official_code"] = validate_official_code(str(code))
+        if kind == "master":
+            if key == "twse.t187ap03_L":
+                value["short_name"] = str(row.get("公司簡稱") or "").strip()
+            elif key == "tpex.mopsfin_t187ap03_O":
+                value["short_name"] = str(row.get("CompanyAbbreviation") or "").strip()
+            else:
+                value["short_name"] = str(row.get("公司簡稱") or row.get("CompanyAbbreviation") or "").strip()
         parsed.append(value)
     return parsed
 
@@ -397,9 +404,10 @@ class UniverseCollector:
             query_dimensions["required_field_groups"] = schema_evidence["required_field_groups"]
             query_dimensions["value_required_groups"] = schema_evidence["value_required_groups"]
             query_dimensions["observed_row_fields"] = schema_evidence["observed_row_fields"]
+            parser_version = "2.0.0" if key in ("twse.t187ap03_L", "tpex.mopsfin_t187ap03_O") else "1"
             return UniverseFetchResult(
                 key, "accepted", tuple(rows), first, kwargs.get("received_at", ""), kwargs.get("fetched_at", ""),
-                normalized_hash, schema_hash, None, raw_hash, normalized_hash, "1", query_dimensions,
+                normalized_hash, schema_hash, None, raw_hash, normalized_hash, parser_version, query_dimensions,
                 kwargs.get("source_record_reference") or f"{key}:{normalized_hash[:16]}",
             )
         except UniverseSourceRejected as exc:

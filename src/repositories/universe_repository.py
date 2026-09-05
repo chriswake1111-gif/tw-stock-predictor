@@ -2173,7 +2173,10 @@ class UniverseRepository:
         if resource is None:
             raise ValueError("universe_resource_not_registered")
         parser_version = str(payload.get("parser_version") or resource["parser_version"])
-        if parser_version != str(resource["parser_version"]):
+        allowed_parser_versions = {str(resource["parser_version"])}
+        if resource_id in ("twse-universe-master", "tpex-universe-master"):
+            allowed_parser_versions.update({"1", "2.0.0"})
+        if parser_version not in allowed_parser_versions:
             raise ValueError("parser_evidence_mismatch")
         query_dimensions = payload.get("query_dimensions") or {}
         if not isinstance(query_dimensions, dict):
@@ -2548,10 +2551,16 @@ class UniverseRepository:
                     (universe_revision_id,resource_id,logical_revision_key,revision_number,raw_resource_revision_id,source_published_at,source_effective_date,fetched_at,received_at,first_observed_at,available_at,ingested_at,status,reason,payload_sha256,normalized_payload_sha256,raw_payload_sha256,query_dimensions_json,source_record_reference,parser_evidence_fingerprint,schema_evidence_fingerprint,schema_fingerprint,parser_version,source_reference,publication_evidence_id,supersedes_revision_id,availability_mode,freshness_mode,freshness_status,current_complete,coverage_complete)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
                     revision_id, resource_id, logical_revision_key, int(revision_number), provenance["raw_resource_revision_id"], source_published_at, payload.get("source_effective_date"), fetched_at, received_at, first_observed_at, available_at, ingested_at, status, reason, fingerprint, provenance["normalized_payload_sha256"], provenance["raw_payload_sha256"], provenance["query_dimensions_json"], provenance["source_record_reference"], provenance["parser_evidence_fingerprint"], provenance["schema_evidence_fingerprint"], provenance["schema_fingerprint"], provenance["parser_version"], payload.get("source_reference"), publication_evidence_id, payload.get("supersedes_revision_id"), policy["availability_mode"], freshness_mode, freshness_status, int(current_complete), int(bool(payload.get("coverage_complete", False)))))
+            max_child_rev = conn.execute(
+                "SELECT MAX(revision_number) FROM universe_instrument_revisions WHERE instrument_id = ?",
+                (instrument_id,),
+            ).fetchone()[0]
+            child_revision_number = (int(max_child_rev) + 1) if max_child_rev is not None else 1
+
             conn.execute("""INSERT INTO universe_instrument_revisions
-                    (instrument_revision_id,instrument_id,universe_revision_id,resource_id,revision_number,venue,official_code,canonical_symbol,mapping_basis,security_type,display_name,listing_status,trading_state,membership_state,source_effective_date,source_effective_at,source_published_at,first_observed_at,received_at,fetched_at,available_at,ingested_at,availability_mode,freshness_mode,freshness_status,current_complete,coverage_complete,status,reason,source_reference,payload_sha256,normalized_payload_sha256,raw_payload_sha256,raw_resource_revision_id,query_dimensions_json,source_record_reference,parser_evidence_fingerprint,schema_evidence_fingerprint,schema_fingerprint,parser_version,effective_from,effective_to,supersedes_revision_id)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
-                    f"uirev_{uuid.uuid4().hex}", instrument_id, revision_id, resource_id, int(revision_number), payload_venue.value, payload_code, canonical_symbol, mapping_basis, payload.get("security_type","unknown"), payload.get("display_name"), listing_status, trading_state, membership_state, payload.get("source_effective_date"), source_effective_at, source_published_at, first_observed_at, received_at, fetched_at, available_at, ingested_at, policy["availability_mode"], freshness_mode, freshness_status, int(current_complete), int(bool(payload.get("coverage_complete", False))), status, reason, payload.get("source_reference"), fingerprint, provenance["normalized_payload_sha256"], provenance["raw_payload_sha256"], provenance["raw_resource_revision_id"], provenance["query_dimensions_json"], provenance["source_record_reference"], provenance["parser_evidence_fingerprint"], provenance["schema_evidence_fingerprint"], provenance["schema_fingerprint"], provenance["parser_version"], effective_from, effective_to, instrument_supersedes))
+                    (instrument_revision_id,instrument_id,universe_revision_id,resource_id,revision_number,venue,official_code,canonical_symbol,mapping_basis,security_type,display_name,listing_status,trading_state,membership_state,source_effective_date,source_effective_at,source_published_at,first_observed_at,received_at,fetched_at,available_at,ingested_at,availability_mode,freshness_mode,freshness_status,current_complete,coverage_complete,status,reason,source_reference,payload_sha256,normalized_payload_sha256,raw_payload_sha256,raw_resource_revision_id,query_dimensions_json,source_record_reference,parser_evidence_fingerprint,schema_evidence_fingerprint,schema_fingerprint,parser_version,effective_from,effective_to,supersedes_revision_id,short_name)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                    f"uirev_{uuid.uuid4().hex}", instrument_id, revision_id, resource_id, int(child_revision_number), payload_venue.value, payload_code, canonical_symbol, mapping_basis, payload.get("security_type","unknown"), payload.get("display_name"), listing_status, trading_state, membership_state, payload.get("source_effective_date"), source_effective_at, source_published_at, first_observed_at, received_at, fetched_at, available_at, ingested_at, policy["availability_mode"], freshness_mode, freshness_status, int(current_complete), int(bool(payload.get("coverage_complete", False))), status, reason, payload.get("source_reference"), fingerprint, provenance["normalized_payload_sha256"], provenance["raw_payload_sha256"], provenance["raw_resource_revision_id"], provenance["query_dimensions_json"], provenance["source_record_reference"], provenance["parser_evidence_fingerprint"], provenance["schema_evidence_fingerprint"], provenance["schema_fingerprint"], provenance["parser_version"], effective_from, effective_to, instrument_supersedes, payload.get("short_name")))
             if idempotency_key:
                 try:
                     conn.execute("INSERT INTO universe_ingestion_idempotency VALUES (?,?,?,?,?,?)", (idempotency_key, fingerprint, resource_id, revision_id, actor, ingested_at))
@@ -2639,6 +2648,202 @@ class UniverseRepository:
             write_universe_audit(ctx, command="add_alias_event", outcome="created", venue=venue.value,
                                  channel="identity", reason=alias_type)
             return {**dict(conn.execute("SELECT * FROM universe_identity_alias_events WHERE alias_event_id=?", (event_id,)).fetchone()), "actor_id": ctx.actor_id}
+
+    @classmethod
+    def _effective_master_records(
+        cls, conn: sqlite3.Connection, cutoff: str
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        effective_ids = cls._effective_epoch_instrument_ids(conn, cutoff=cutoff)
+        if not effective_ids:
+            coverage = {
+                "universe_status": "not_initialized",
+                "total_instruments": 0,
+                "phase20_materialized_count": 0,
+                "populated_short_names_count": 0,
+                "coverage_ratio": 0.0,
+                "degraded_search_mode": True,
+                "cutoff": cutoff,
+            }
+            return [], coverage
+
+        ids = sorted(effective_ids)
+        placeholders = cls._sql_placeholders(ids)
+        rows = [dict(row) for row in conn.execute(
+            f"""
+            SELECT r.instrument_id, r.instrument_revision_id, r.canonical_symbol,
+                   r.official_code, r.venue, r.display_name, r.short_name, r.security_type,
+                   r.parser_version, r.revision_number, r.available_at, r.ingested_at,
+                   r.status
+            FROM universe_instrument_revisions r
+            JOIN universe_resource_policies p ON p.resource_id = r.resource_id
+            WHERE r.instrument_id IN ({placeholders})
+              AND r.status = 'accepted'
+              AND p.resource_role = 'master_snapshot'
+              AND {cls._cutoff_where('r')}
+            ORDER BY r.instrument_id, r.revision_number DESC,
+                     COALESCE(r.available_at, '') DESC, r.ingested_at DESC,
+                     r.instrument_revision_id DESC
+            """, ids + [cutoff, cutoff, cutoff, cutoff]
+        ).fetchall()]
+
+        excluded = cls._effective_excluded_instrument_revision_ids(
+            conn, instrument_ids=ids, cutoff=cutoff,
+        )
+
+        candidates: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            candidates.setdefault(str(row["instrument_id"]), []).append(row)
+
+        surviving_master: dict[str, dict[str, Any]] = {}
+        for inst_id in ids:
+            blocked = excluded.get(inst_id, set())
+            safe = next(
+                (row for row in candidates.get(inst_id, []) if str(row["instrument_revision_id"]) not in blocked),
+                None,
+            )
+            if safe:
+                surviving_master[inst_id] = safe
+
+        event_states = cls._select_event_states_batch(
+            conn, instrument_ids=list(surviving_master.keys()), cutoff=cutoff
+        )
+        effective_searchable_master_set: list[dict[str, Any]] = []
+        for inst_id, master_row in surviving_master.items():
+            evt = event_states.get(inst_id, {})
+            eff_listing = evt.get("listing_status") or master_row.get("listing_status") or "listed"
+            if eff_listing == "listed":
+                effective_searchable_master_set.append(master_row)
+
+        total_instruments = len(effective_searchable_master_set)
+        if total_instruments == 0:
+            coverage = {
+                "universe_status": "not_initialized",
+                "total_instruments": 0,
+                "phase20_materialized_count": 0,
+                "populated_short_names_count": 0,
+                "coverage_ratio": 0.0,
+                "degraded_search_mode": True,
+                "cutoff": cutoff,
+            }
+            return [], coverage
+
+        phase20_materialized_count = sum(
+            1 for row in effective_searchable_master_set
+            if str(row.get("parser_version") or "").strip() == "2.0.0"
+        )
+        populated_short_names_count = sum(
+            1 for row in effective_searchable_master_set
+            if str(row.get("parser_version") or "").strip() == "2.0.0"
+            and bool(str(row.get("short_name") or "").strip())
+        )
+
+        coverage_ratio = round(phase20_materialized_count / total_instruments, 4)
+
+        if phase20_materialized_count == 0:
+            universe_status = "short_names_uninitialized"
+        elif phase20_materialized_count < total_instruments:
+            universe_status = "short_names_partial"
+        else:
+            universe_status = "ready"
+
+        degraded_search_mode = (universe_status != "ready")
+
+        coverage = {
+            "universe_status": universe_status,
+            "total_instruments": total_instruments,
+            "phase20_materialized_count": phase20_materialized_count,
+            "populated_short_names_count": populated_short_names_count,
+            "coverage_ratio": coverage_ratio,
+            "degraded_search_mode": degraded_search_mode,
+            "cutoff": cutoff,
+        }
+        return effective_searchable_master_set, coverage
+
+    def get_short_name_coverage(
+        self, cutoff: str | None = None, conn: sqlite3.Connection | None = None
+    ) -> dict[str, Any]:
+        cut = validate_knowledge_cutoff_at(cutoff) if cutoff else validate_knowledge_cutoff_at(utc_now_timestamp())
+        if conn is not None:
+            return self._effective_master_records(conn, cut)[1]
+        with self.read_transaction() as read_conn:
+            return self._effective_master_records(read_conn, cut)[1]
+
+    def search_instruments_local(
+        self,
+        *,
+        query: str,
+        limit: int = 10,
+        cutoff: str | None = None,
+        conn: sqlite3.Connection | None = None,
+    ) -> dict[str, Any]:
+        cut = validate_knowledge_cutoff_at(cutoff) if cutoff else validate_knowledge_cutoff_at(utc_now_timestamp())
+        if conn is not None:
+            return self._do_search_local(conn, query=query, limit=limit, cutoff=cut)
+        with self.read_transaction() as read_conn:
+            return self._do_search_local(read_conn, query=query, limit=limit, cutoff=cut)
+
+    @classmethod
+    def _do_search_local(
+        cls,
+        conn: sqlite3.Connection,
+        *,
+        query: str,
+        limit: int = 10,
+        cutoff: str,
+    ) -> dict[str, Any]:
+        effective_rows, coverage = cls._effective_master_records(conn, cutoff)
+        q = (query or "").strip()
+        if not q:
+            return {
+                "query": query,
+                "total_matches": 0,
+                "results": [],
+                "coverage": coverage,
+            }
+
+        q_upper = q.upper()
+        scored_matches: list[tuple[int, str, dict[str, Any]]] = []
+        for row in effective_rows:
+            official_code = str(row.get("official_code") or "").strip()
+            canonical_symbol = str(row.get("canonical_symbol") or "").strip()
+            short_name = str(row.get("short_name") or "").strip()
+            display_name = str(row.get("display_name") or "").strip()
+
+            score = 0
+            if official_code == q_upper:
+                score = 100
+            elif canonical_symbol.upper() == q_upper:
+                score = 95
+            elif short_name and short_name == q:
+                score = 90
+            elif official_code.startswith(q_upper):
+                score = 80
+            elif canonical_symbol.upper().startswith(q_upper):
+                score = 75
+            elif short_name and q in short_name:
+                score = 70
+            elif display_name and q in display_name:
+                score = 60
+
+            if score > 0:
+                scored_matches.append((score, official_code, {
+                    "canonical_symbol": canonical_symbol,
+                    "official_code": official_code,
+                    "venue": row.get("venue") or "",
+                    "short_name": short_name or None,
+                    "display_name": display_name,
+                    "security_type": row.get("security_type") or "股票",
+                    "has_short_name": bool(short_name),
+                }))
+
+        scored_matches.sort(key=lambda item: (-item[0], item[1]))
+        results = [item[2] for item in scored_matches[:limit]]
+        return {
+            "query": query,
+            "total_matches": len(scored_matches),
+            "results": results,
+            "coverage": coverage,
+        }
 
 
 class UniverseIdentityRepository:
