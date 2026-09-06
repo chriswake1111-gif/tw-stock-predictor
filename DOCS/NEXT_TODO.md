@@ -24,9 +24,16 @@
       - `test_deterministic_worker_quiescence_on_app_shutdown`：驗證協作關閉、active operation 狀態持久化為 `interrupted`、Windows 下即時執行 `VACUUM` 零 lock 衝突。
       - `test_deterministic_worker_quiescence_raises_when_worker_fails_to_stop`：驗證未在 deadline 內停止之 worker 確實引發 `RuntimeError`。
   - **P1-3 (Clean-Machine Packaging & Smoke Pipeline Verification)**:
-    - 前端代碼、測試、型別審查與建置全部通過（Vitest 48/48 passed, Playwright 6/6 passed, ESLint passed, TS build passed）。
-    - 後端全量測試通過（915 passed, 0 failed）。
-    - 等待 GitHub Actions clean-machine smoke 執行、產出並保存 installer artifact 及 digest。
+    - GitHub Actions CI 雙工作流全數通過 (All Green)：
+      - Anti-Gravity TU Predictor CI (Run `34021562683`)：**Success in 4m0s**。
+      - TW Stock Predictor Windows Productization (Run `34021562736`)：**Success in 10m1s**。
+    - Windows Clean-Machine Smoke 測試 22 項檢核全綠通過 (`"status": "passed"`，包括 `phase20_universe_coverage`, `phase20_local_search`, `phase20_bootstrap_ready`, `phase20_summary_ready`, `phase20_zero_egress`, `runtime_dependencies` 等)。
+    - Installer Review Artifact 成功上傳並封存：
+      - Artifact 名稱：`tw-stock-predictor-windows-f4a4214f249e6b76d59a526c060c3b453813b794`
+      - Artifact ID：`9985808331`
+      - 大小：127,821,155 bytes (~121.9 MB)
+      - SHA256 Digest：`73ee8073cf3f994a29b6a52a75a34701656edf655ec403ec5d9f70b3d7144023`
+      - 下載 URL：`https://github.com/chriswake1111-gif/tw-stock-predictor/actions/runs/34021562736/artifacts/9985808331`
 
 - [x] **全量自動化驗證與測試狀態**:
   - Python 全量回歸測試：**915 passed, 0 failed, 1 warning** in 219.92s (3m 39s)。
@@ -46,10 +53,7 @@
 - Merge Gate: `NOT AUTHORIZED`；自動合併 / 部署：`NOT AUTHORIZED`。依規範僅開立 Draft PR。
 
 ### 下一步待辦
-- 推送代碼至 GitHub 觸發 Windows Productization CI workflow。
-- 監控 GitHub Actions 乾淨機器 smoke test 與 installer artifact 封存（保留 artifact name、ID 與 digest）。
-- 更新 PR #19 與 Linear LUK-79。
-- 保持停止於 **READY FOR PHASE 20 SIXTH CODE REVIEW**。
+- 保持停止於 **READY FOR PHASE 20 SIXTH CODE REVIEW**，提請 Lukas Chiu 進行 Phase 20 第六輪代碼審查。
 
 ---
 
