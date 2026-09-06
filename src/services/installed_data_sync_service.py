@@ -137,9 +137,9 @@ class InstalledDataSyncService:
             authorization.revoke()
             raise OperationNotFound(f"Operation {operation_id} not found")
 
-        if row.status in ("cancelling", "cancelled"):
+        if row.status in ("cancelling", "cancelled", "interrupted"):
             authorization.revoke()
-            raise OperationCancelled(f"Operation {operation_id} was cancelled")
+            raise OperationCancelled(f"Operation {operation_id} was {row.status}")
 
         if row.status != InstalledOperationStatus.RUNNING.value:
             authorization.revoke()
@@ -1835,12 +1835,21 @@ class InstalledDataSyncService:
         authorization: InstalledWriteAuthorization,
         symbol: str,
         deadline_monotonic: float | None = None,
+        stop_event: threading.Event | None = None,
     ) -> None:
         """Executes the full approved symbol enablement flow:
 
         classify -> refetch exact official venue EOD -> validate session ->
         reload identity/classification -> governed EOD materialization (Phase 14) -> readiness refresh
         """
+        def _check_cancelled() -> None:
+            if stop_event is not None and stop_event.is_set():
+                authorization.revoke()
+                raise OperationCancelled(f"Operation {operation_id} was interrupted by server shutdown")
+            if authorization.revoked:
+                raise OperationAuthorizationRevoked("capability_revoked_or_missing")
+
+        _check_cancelled()
         clean_sym = symbol.strip().upper()
         code = clean_sym.split(".")[0]
         venue = "TPEX" if clean_sym.endswith(".TWO") else "TWSE"
@@ -1856,6 +1865,7 @@ class InstalledDataSyncService:
         self._require_live_write_authorization(
             operation_id, authorization, TWSE_ISIN_CLASSIFICATION_RESOURCE_ID
         )
+        _check_cancelled()
         isin_item = f"item_{uuid4().hex}"
         self.operation_repo.create_item(
             item_id=isin_item,
@@ -1892,6 +1902,7 @@ class InstalledDataSyncService:
             raw_resource_revision_id=ingest_res.get("raw_resource_revision_id"),
         )
 
+        _check_cancelled()
         # 2. Refetch exact official venue EOD
         eod_url = (
             "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
@@ -1984,6 +1995,7 @@ class InstalledDataSyncService:
                 f"state={classification_context.get('classification_state') if classification_context else 'missing'}"
             )
 
+        _check_cancelled()
         # 5. Governed EOD materialization using approved Phase 14 path with bound contexts
         self._require_live_write_authorization(operation_id, authorization, venue_resource)
         eod_item = f"item_{uuid4().hex}"
@@ -2038,6 +2050,7 @@ class InstalledDataSyncService:
             )
             raise ValueError(f"symbol {code} did not become publicly eligible after eod materialization")
 
+        _check_cancelled()
         # 6. Readiness refresh & completion
         self.run_stage_projection(operation_id, authorization)
 

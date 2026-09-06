@@ -10,9 +10,11 @@ import time
 from typing import Any, Callable
 
 from src.domain.installed_data_operations import (
+    BackgroundWorkerThread,
     InstalledOperationStatus,
     InstalledOperationType,
     OperationActiveConflict,
+    OperationCancelled,
 )
 from src.domain.universe import parse_canonical_symbol
 from src.repositories.current_research_repository import CurrentResearchRepository
@@ -58,6 +60,8 @@ class ResearchBootstrapService:
     def join_workers(self, timeout: float = 5.0) -> None:
         """Join any background worker threads started by this service."""
         for t in self.worker_threads:
+            if hasattr(t, "request_stop"):
+                t.request_stop()
             if t.is_alive():
                 t.join(timeout=timeout)
 
@@ -122,31 +126,62 @@ class ResearchBootstrapService:
 
         deadline_monotonic = time.monotonic() + GLOBAL_OPERATION_DEADLINE_SECONDS
         sync_svc = self.sync_service
+        stop_event = threading.Event()
 
         def _run_bg():
             try:
                 if self.runner_fn is not None:
                     self.runner_fn(op_id, auth, deadline_monotonic)
                 else:
-                    sync_svc.run_stage_prerequisites_calendar(op_id, auth, deadline_monotonic)
-                    sync_svc.run_stage_universe(op_id, auth, deadline_monotonic)
-                    sync_svc.run_stage_classification(op_id, auth, [canonical_symbol], deadline_monotonic)
-                    sync_svc.run_stage_eod(op_id, auth, deadline_monotonic)
-                    sync_svc.run_stage_turnover_and_cbc(op_id, auth, deadline_monotonic)
-                    sync_svc.run_stage_projection(op_id, auth, deadline_monotonic)
-            except Exception as exc:
-                logger.exception("Background bootstrap operation %s failed: %s", op_id, exc)
+                    sync_svc.run_symbol_enablement_pipeline(
+                        op_id,
+                        auth,
+                        canonical_symbol,
+                        deadline_monotonic,
+                        stop_event=stop_event,
+                    )
+            except OperationCancelled as exc:
+                logger.info("Background bootstrap operation %s cancelled/interrupted: %s", op_id, exc)
                 try:
                     auth.revoke()
                     sync_svc.operation_repo.finalize_operation(
                         op_id,
-                        status=InstalledOperationStatus.FAILED.value,
+                        status=InstalledOperationStatus.INTERRUPTED.value,
                         error_detail=str(exc),
                     )
                 except Exception:
                     pass
+            except Exception as exc:
+                logger.exception("Background bootstrap operation %s failed: %s", op_id, exc)
+                try:
+                    auth.revoke()
+                    err_msg = str(exc)
+                    is_partial = (
+                        "not an authorized trading session" in err_msg
+                        or "calendar proof missing" in err_msg
+                        or "proof missing" in err_msg
+                    )
+                    status = (
+                        InstalledOperationStatus.PARTIAL.value
+                        if is_partial
+                        else InstalledOperationStatus.FAILED.value
+                    )
+                    sync_svc.operation_repo.finalize_operation(
+                        op_id,
+                        status=status,
+                        error_detail=err_msg,
+                    )
+                except Exception:
+                    pass
 
-        worker = threading.Thread(target=_run_bg, name=f"bootstrap-{op_id}", daemon=True)
+        worker = BackgroundWorkerThread(
+            target=_run_bg,
+            name=f"bootstrap-{op_id}",
+            operation_id=op_id,
+            auth=auth,
+            stop_event=stop_event,
+            daemon=True,
+        )
         self.worker_threads.append(worker)
         if self.worker_registry is not None:
             self.worker_registry.append(worker)

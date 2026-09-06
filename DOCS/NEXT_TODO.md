@@ -1,5 +1,58 @@
 # 專案進度與下階段待辦 (NEXT_TODO.md)
 
+## 2026-09-06 交班：Phase 20 Fifth Code Review 修正完成，提請 Sixth Code Review (LUK-79)
+
+### 當前狀態與成果
+
+- [x] **Phase 20 Fifth Code Review 三大核心審查項全部修正完畢 (P1-1, P1-2, P1-3)**:
+  - **P1-1 (Bootstrap delegates directly to `run_symbol_enablement_pipeline`)**:
+    - 修正 `src/services/research_bootstrap_service.py`：
+      - `bootstrap_symbol()` 中的背景 worker 徹底改為直接呼叫 `sync_svc.run_symbol_enablement_pipeline(op_id, auth, canonical_symbol, deadline_monotonic, stop_event=stop_event)`。
+      - 徹底杜絕 bootstrap 重複觸發全域 sync 六大階段（Prerequisites, Universe, Classification, EOD, Turnover, CBC），避免 Universe idempotency key 重複或 turnover 全量複查導致失敗。
+    - 於 `tests/test_phase20_research_bootstrap_orchestrator.py` 新增 P1-1 回歸測試 `test_bootstrap_symbol_delegates_to_run_symbol_enablement_pipeline`，驗證 `run_symbol_enablement_pipeline` 被精確呼叫且通用階段從未被調用。
+  - **P1-2 (Truly Deterministic Worker Shutdown & Bounded Quiescence Contract)**:
+    - 於 `src/domain/installed_data_operations.py` 實作專用 `BackgroundWorkerThread`，綁定 `operation_id`、`auth`、`stop_event`，並具備 `request_stop()` 協作中斷與自動撤銷 capability。
+    - 於 `src/services/installed_data_sync_service.py`：
+      - `_require_live_write_authorization` 納入 `"interrupted"` 作為中止狀態。
+      - `run_symbol_enablement_pipeline` 支援 `stop_event` 參數，於每一主要階段（ISIN classification、官方 venue EOD、Phase 14 materialization、readiness refresh）檢查取消狀態，並在停止時撤銷授權且拋出 `OperationCancelled`。
+    - 於 `src/services/research_bootstrap_service.py` 與 `src/api/routes/installed_data_operations.py`：
+      - 全面使用 `BackgroundWorkerThread`，捕獲 `OperationCancelled` 後以 `InstalledOperationStatus.INTERRUPTED` 終止作業，並撤銷寫入授權。
+      - `/cancel` 端點增加向註冊之 worker 發出 `t.request_stop()`，實現即時協同取消。
+    - 於 `src/api/main.py` lifespan 實作確定性關閉契約：
+      - 依序：1) 發出全域 `worker_shutdown_event`；2) 呼叫所有 worker 的 `request_stop()` 協同停止；3) 於 DB 將進行中的 active operation 標記為真實狀態 `INTERRUPTED`；4) 依 deadline 進行 bounded join。若有 worker 未能在時限內停止，拋出 `RuntimeError`，杜絕任何 worker 或 DB lock 殘留。
+    - 於 `tests/test_phase20_research_bootstrap_orchestrator.py` 新增 P1-2 回歸測試：
+      - `test_deterministic_worker_quiescence_on_app_shutdown`：驗證協作關閉、active operation 狀態持久化為 `interrupted`、Windows 下即時執行 `VACUUM` 零 lock 衝突。
+      - `test_deterministic_worker_quiescence_raises_when_worker_fails_to_stop`：驗證未在 deadline 內停止之 worker 確實引發 `RuntimeError`。
+  - **P1-3 (Clean-Machine Packaging & Smoke Pipeline Verification)**:
+    - 前端代碼、測試、型別審查與建置全部通過（Vitest 48/48 passed, Playwright 6/6 passed, ESLint passed, TS build passed）。
+    - 後端全量測試通過（915 passed, 0 failed）。
+    - 等待 GitHub Actions clean-machine smoke 執行、產出並保存 installer artifact 及 digest。
+
+- [x] **全量自動化驗證與測試狀態**:
+  - Python 全量回歸測試：**915 passed, 0 failed, 1 warning** in 219.92s (3m 39s)。
+  - Phase 20 專項後端測試：**39 passed, 0 failed** in 8.74s。
+  - Phase 19 專項後端測試：**59 passed, 0 failed** in 16.34s。
+  - Vitest 前端單元與元件測試：**9 files passed, 48 tests passed** in 4.96s。
+  - 前端 ESLint 審查：`npm run lint` 通過，零錯誤、零警告。
+  - 前端 TypeScript 型別審查：`npx tsc -b` 通過，零錯誤。
+  - 前端靜態資源打包：`npm run build` 通過，`production_bundle_admin_secret_gate=PASS assets=2`。
+  - Playwright 視覺回歸測試：`npm run test:visual` 通過，6 個測試全部通過。
+  - Git hygiene：`git diff --check` 通過，零空白行尾或換行違規。
+
+### 核心安全與邊界聲明
+- 本系統持續嚴格遵守 `DOCS/PRODUCT_BOUNDARY.md`：無券商 API、無真實帳號連線、無自動交易或跟單功能。
+- 本地股票搜尋與啟動輸入過程 100% 於本機 SQLite 執行，零外部網路發送 (Zero Egress)。
+- 杜金龍分析核心語意維持不變；嚴禁合成 Forward EPS 或推造波浪錨點，所有未驗證項目完整保留於人工決策隊列。
+- Merge Gate: `NOT AUTHORIZED`；自動合併 / 部署：`NOT AUTHORIZED`。依規範僅開立 Draft PR。
+
+### 下一步待辦
+- 推送代碼至 GitHub 觸發 Windows Productization CI workflow。
+- 監控 GitHub Actions 乾淨機器 smoke test 與 installer artifact 封存（保留 artifact name、ID 與 digest）。
+- 更新 PR #19 與 Linear LUK-79。
+- 保持停止於 **READY FOR PHASE 20 SIXTH CODE REVIEW**。
+
+---
+
 ## 2026-09-06 交班：Phase 20 Fourth Code Review 修正完成，提請 Fifth Code Review (LUK-79)
 
 ### 當前狀態與成果

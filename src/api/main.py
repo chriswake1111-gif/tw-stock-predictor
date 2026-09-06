@@ -2,6 +2,8 @@ import os
 import sys
 import logging
 import inspect
+import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -124,10 +126,48 @@ def create_app(
             scheduler.stop()
             if scheduler_instance is scheduler:
                 scheduler_instance = None
-        # Join any remaining background worker threads on app shutdown
-        for t in getattr(app.state, "background_worker_threads", []):
+        # Deterministic worker shutdown and bounded quiescence contract
+        if hasattr(app.state, "worker_shutdown_event"):
+            app.state.worker_shutdown_event.set()
+
+        workers = list(getattr(app.state, "background_worker_threads", []))
+        for t in workers:
+            if hasattr(t, "request_stop"):
+                t.request_stop()
+
+        try:
+            from src.domain.installed_data_operations import InstalledOperationStatus
+            from src.repositories.installed_data_operations_repository import (
+                InstalledDataOperationsRepository,
+            )
+
+            db_path = str(runtime_settings.paths.database_path)
+            op_repo = InstalledDataOperationsRepository(db_path)
+            active = op_repo.get_active_operation()
+            if active is not None:
+                op_repo.finalize_operation(
+                    active.operation_id,
+                    status=InstalledOperationStatus.INTERRUPTED.value,
+                    error_detail="Operation interrupted by application shutdown",
+                )
+        except Exception as exc:
+            logger.warning("Failed to mark active operation interrupted on shutdown: %s", exc)
+
+        shutdown_timeout = float(os.getenv("WORKER_SHUTDOWN_TIMEOUT_SECONDS", "10.0"))
+        join_deadline = time.monotonic() + shutdown_timeout
+        alive_workers = []
+        for t in workers:
             if t.is_alive():
-                t.join(timeout=2.0)
+                remaining = max(0.05, join_deadline - time.monotonic())
+                t.join(timeout=remaining)
+                if t.is_alive():
+                    alive_workers.append(t)
+
+        if alive_workers:
+            alive_names = [getattr(t, "name", str(t)) for t in alive_workers]
+            raise RuntimeError(
+                f"Deterministic shutdown failed: background workers {alive_names} did not quiesce within deadline"
+            )
 
     app = FastAPI(
         title="台股市場研究與決策支援 API",
@@ -137,6 +177,7 @@ def create_app(
     app.state.runtime_settings = runtime_settings
     app.state.runtime_readiness = _readiness_state(runtime_settings, startup_result)
     app.state.background_worker_threads = []
+    app.state.worker_shutdown_event = threading.Event()
 
     app.add_middleware(
         CORSMiddleware,
