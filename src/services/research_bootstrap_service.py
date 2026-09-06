@@ -38,6 +38,7 @@ class ResearchBootstrapService:
         operations_repo: InstalledDataOperationsRepository | None = None,
         sync_service: InstalledDataSyncService | None = None,
         runner_fn: Callable[[str, Any, float], None] | None = None,
+        worker_registry: list[threading.Thread] | None = None,
     ):
         self.db_path = os.getenv("DATABASE_PATH", db_path)
         self.runtime_instance_id = runtime_instance_id or "installed-runtime"
@@ -52,6 +53,7 @@ class ResearchBootstrapService:
         )
         self.runner_fn = runner_fn
         self.worker_threads: list[threading.Thread] = []
+        self.worker_registry = worker_registry
 
     def join_workers(self, timeout: float = 5.0) -> None:
         """Join any background worker threads started by this service."""
@@ -146,6 +148,8 @@ class ResearchBootstrapService:
 
         worker = threading.Thread(target=_run_bg, name=f"bootstrap-{op_id}", daemon=True)
         self.worker_threads.append(worker)
+        if self.worker_registry is not None:
+            self.worker_registry.append(worker)
         worker.start()
 
         return {

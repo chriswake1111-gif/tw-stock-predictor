@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
@@ -107,6 +108,11 @@ def get_data_operations_status(request: Request) -> dict[str, Any]:
             {
                 "operation_id": active.operation_id,
                 "operation_type": active.operation_type,
+                "target_symbols": (
+                    json.loads(active.target_symbols_json)
+                    if active.target_symbols_json
+                    else []
+                ),
                 "status": active.status,
                 "current_stage": active.current_stage,
                 "lease_expires_at": active.lease_expires_at,
@@ -132,10 +138,18 @@ def get_operation_details(operation_id: str, request: Request) -> dict[str, Any]
     if op is None:
         raise HTTPException(status_code=404, detail=f"Operation {operation_id} not found")
 
+    target_symbols: list[str] = []
+    if op.target_symbols_json:
+        try:
+            target_symbols = json.loads(op.target_symbols_json)
+        except Exception:
+            target_symbols = []
+
     items = repo.list_items_by_operation(operation_id)
     return {
         "operation_id": op.operation_id,
         "operation_type": op.operation_type,
+        "target_symbols": target_symbols,
         "status": op.status,
         "current_stage": op.current_stage,
         "lease_owner_id": op.lease_owner_id,

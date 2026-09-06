@@ -27,7 +27,7 @@ from src.services.installed_data_sync_service import InstalledDataSyncService
 def api_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[TestClient, InstalledDataOperationsRepository, str]:
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+    with tempfile.TemporaryDirectory() as temp_dir:
         app_dir = Path(temp_dir)
         db_file = app_dir / "data" / "test.db"
         environ = {
@@ -55,10 +55,7 @@ def api_client(
                 workers = getattr(app.state, "background_worker_threads", [])
                 for t in workers:
                     if t.is_alive():
-                        t.join(timeout=2.0)
-                for t in threading.enumerate():
-                    if t.name.startswith(("data-ops-", "bootstrap-")) and t.is_alive():
-                        t.join(timeout=2.0)
+                        t.join(timeout=5.0)
                 del client
                 del repo
                 del app
@@ -112,12 +109,18 @@ def test_get_operation_by_id_404_and_200(
     assert res_404.status_code == 404
 
     # 200 for created operation
-    op = repo.create_operation("op_exists_123", InstalledOperationType.SYNC.value, "launch-1")
+    op = repo.create_operation(
+        "op_exists_123",
+        InstalledOperationType.SYNC.value,
+        "launch-1",
+        target_symbols=["2330.TW"],
+    )
     res_200 = client.get("/api/v2/data-operations/operations/op_exists_123")
     assert res_200.status_code == 200
     data = res_200.json()
     assert data["operation_id"] == "op_exists_123"
     assert data["status"] == "running"
+    assert data["target_symbols"] == ["2330.TW"]
     assert "items" in data
 
 

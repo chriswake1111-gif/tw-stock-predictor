@@ -8,6 +8,7 @@ import sqlite3
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from src.api.routes.installed_data_operations import _get_instance_id
 from src.services.current_research_service import CurrentResearchService
 from src.services.research_bootstrap_service import ResearchBootstrapService
 
@@ -33,11 +34,13 @@ def _bootstrap_service(request: Request) -> ResearchBootstrapService:
     settings = getattr(request.app.state, "runtime_settings", None)
     if settings and getattr(settings, "paths", None):
         db_path = str(settings.paths.database_path)
-    handshake = getattr(request.app.state, "launch_handshake", None)
-    instance_id = "installed-runtime"
-    if handshake and isinstance(handshake, dict) and handshake.get("launch_id"):
-        instance_id = str(handshake["launch_id"])
-    return ResearchBootstrapService(db_path=db_path, runtime_instance_id=instance_id)
+    instance_id = _get_instance_id(request)
+    worker_registry = getattr(request.app.state, "background_worker_threads", None)
+    return ResearchBootstrapService(
+        db_path=db_path,
+        runtime_instance_id=instance_id,
+        worker_registry=worker_registry,
+    )
 
 
 def _map_error(exc: Exception) -> HTTPException:

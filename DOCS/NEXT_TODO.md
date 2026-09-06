@@ -1,29 +1,42 @@
 # 專案進度與下階段待辦 (NEXT_TODO.md)
 
-## 2026-09-06 交班：Phase 20 Third Code Review 修正完成，提請 Fourth Code Review (LUK-79)
+## 2026-09-06 交班：Phase 20 Fourth Code Review 修正完成，提請 Fifth Code Review (LUK-79)
 
 ### 當前狀態與成果
 
-- [x] **Phase 20 Third Code Review 所有審查項全部修正完畢 (P1-1, P1-2, P2)**:
-  - **P1-1 (SC-14 Real Installed Acceptance & One-Step Bootstrap Alignment)**:
-    - 修正 `.github/scripts/windows-packaging-smoke.ps1`：自乾淨安裝驗收路徑中徹底移除手動呼叫的 Phase 19 `/symbols/2330.TW/enable` 端點，不再預先滿足標的。
-    - 真實驗收流程完整涵蓋：啟動前零連線斷言 ➔ 全域準備（sync）➔ 本地搜尋 2330 ➔ 呼叫 Phase 20 一步式啟動 `/api/v2/research/bootstrap` ➔ 若遇未完成作業自動輪詢並重新評估 ➔ 驗證啟動作業為 `enable_symbol` 且 targets 包含 `2330.TW` ➔ 輪詢作業至終態（succeeded/partial）➔ 驗證 BC-2 EOD 與 BC-3 分析 ➔ 驗證最新結算研究摘要（市場、估值、技術、決策隊列、審計參考、截斷時間）➔ 執行作業後零外部連線斷言。
-  - **P1-2 (Background Writer Test Lifecycle & Deterministic Teardown)**:
-    - 修正後端背景作業生命週期治理：
-      - `src/api/main.py`：在 `create_app` 中初始化 `app.state.background_worker_threads`，並於 lifespan 關閉時自動安全 join 殘留背景執行緒。
-      - `src/api/routes/installed_data_operations.py`：在 `sync_data` 與 `enable_symbol` 啟動背景執行緒時，主動登記至 `app.state.background_worker_threads`。
-      - `src/services/research_bootstrap_service.py`：支援可注入之 `runner_fn`，記錄 `self.worker_threads` 並提供 `join_workers()`。
-      - `tests/test_phase19_api_endpoints.py`：`api_client` fixture 採用 `ignore_cleanup_errors=True` 並於 teardown 時嚴格 join 所有背景作業執行緒；`test_enable_symbol_endpoint` 透過 monkeypatch 將 pipeline mock 為即時返回，防止常駐寫入者在測試目錄刪除時造成 `OSError: [Errno 39]`。
-      - `tests/test_phase20_research_bootstrap_orchestrator.py`：注入受控之 `runner_fn` 並在斷言後明確調用 `bootstrap_svc.join_workers()`，杜絕背景執行緒外洩。
-      - 全量回歸驗證：Python 測試套件全綠通過（**910 passed, 0 failed, 1 warning** in 233.94s）。
-  - **P2 (StockResearchPage Bounded State Machine Loop)**:
-    - 修正前端 `StockResearchPage.tsx`：將單次 `if` 判斷升級為完整的狀態機迴圈（`while (Date.now() - bootstrapStartTime < MAX_BOOTSTRAP_TIME_MS)`），涵蓋 `ready | waiting_for_data_operation | preparing` 三態流轉。
-    - 支援多次連續 `waiting_for_data_operation` 週期，直到既有作業終結後接續啟動專屬 `preparing` 並最終抵達 `ready`，在 180s 總體逾時內嚴密防呆。
-    - 新增前端 Vitest 回歸測試 `P2: StockResearchPage handles multiple repeated waiting cycles before preparing and ready` 於 `frontend/src/test/phase20-usability.test.tsx`（全量 48 個測試通過）。
+- [x] **Phase 20 Fourth Code Review 所有審查項全部修正完畢 (P1-1, P1-2, P1-3, P1-4, P2)**:
+  - **P1-1 (SC-14 Packaging Smoke Test Ordering Validation)**:
+    - 查證 `.github/scripts/windows-packaging-smoke.ps1`：確認執行順序嚴格符合規格要求：
+      `launch -> zero-egress -> explicit global prep (sync) -> local search 2330 -> Phase20 bootstrap -> waiting/poll/re-enter if needed -> governed target ENABLE_SYMBOL -> terminal -> Phase 14 BC-2 EOD proof -> BC-3 analysis -> Phase 20 summary/decision queue/audit`。
+    - CI run 34018586263 在 line 397 中斷之主因為後端未返回 `target_symbols`（見 P1-2），順序本身已符合要求。
+  - **P1-2 (Expose Target Symbols in Data Operations API)**:
+    - 修正 `src/api/routes/installed_data_operations.py`：
+      - 在 `GET /api/v2/data-operations/operations/{operation_id}` 回應字典中，自 `op.target_symbols_json` 解析並暴露向下相容之唯讀欄位 `"target_symbols"`。
+      - 在 `GET /api/v2/data-operations/status` 的 `active_operation` 字典中，同步暴露 `"target_symbols"`。
+    - 於 `tests/test_phase19_api_endpoints.py` 中更新 `test_get_operation_by_id_404_and_200`，斷言傳回之 `data["target_symbols"] == ["2330.TW"]`。
+  - **P1-3 (Strict Fail-Closed Launcher Handshake Validation in Research Bootstrap)**:
+    - 修正 `src/api/routes/v2_research.py`：
+      - 徹底移除偽造之 `instance_id = "installed-runtime"` fallback，改為自 `src.api.routes.installed_data_operations` 引用 Phase 19 既有 `_get_instance_id(request)`。
+      - 當 `request.app.state.launch_handshake` 缺失或未經由 launcher 驗證時，在建立任何作業、發行能力權杖或寫入資料庫之前，立即拋出 HTTP 503 `launch_handshake_missing_or_unvalidated`。
+    - 於 `tests/test_phase20_research_bootstrap_orchestrator.py` 新增回歸測試 `test_bootstrap_missing_handshake_fails_closed_503`，驗證 503 拋出且未建立任何作業或背景執行緒。
+  - **P1-4 (FastAPI Lifespan Background Worker Thread Registration & Join)**:
+    - 修正 `src/services/research_bootstrap_service.py`：
+      - `__init__` 擴充接受 `worker_registry: list[threading.Thread] | None = None`。
+      - 在 `bootstrap_symbol()` 啟動背景工作執行緒時，自動註冊至 `self.worker_registry`。
+    - 修正 `src/api/routes/v2_research.py`：
+      - 在 `_bootstrap_service()` 中傳入 `worker_registry=getattr(request.app.state, "background_worker_threads", None)`。
+    - 結合 `src/api/main.py` 的 lifespan shutdown，確保應用程式關閉時確定性 join/wait 殘留之 bootstrap 背景執行緒。
+    - 於 `tests/test_phase20_research_bootstrap_orchestrator.py` 新增回歸測試 `test_bootstrap_worker_registered_in_app_state_and_joined_on_shutdown`，驗證 thread 在 shutdown 後均已 terminate/join。
+  - **P2 (Strict Scoped App Cleanup in Phase 19 Tests Without Global Thread Scanning)**:
+    - 修正 `tests/test_phase19_api_endpoints.py`：
+      - 移除 `tempfile.TemporaryDirectory(ignore_cleanup_errors=True)`，改回嚴格之 `tempfile.TemporaryDirectory()`。
+      - 移除 `threading.enumerate()` 全域執行緒掃描，僅嚴格依賴 `app.state.background_worker_threads` 之 join。
+      - 證實檔案系統釋放不再發生衝突，完全由 app-owned 生命周期乾淨釋放。
 - [x] **全量自動化驗證與測試狀態**:
-  - Python 全量回歸測試：**910 passed, 0 failed, 1 warning** in 233.94s (3m 53s)。
-  - Phase 20 專項後端測試：**34 passed, 0 failed** in 5.88s。
-  - Vitest 前端單元與元件測試：**9 files passed, 48 tests passed** in 4.99s。
+  - Python 全量回歸測試：**912 passed, 0 failed, 1 warning** in 223.20s (3m 43s)。
+  - Phase 20 專項後端測試：**36 passed, 0 failed** in 7.84s。
+  - Phase 19 專項後端測試：**59 passed, 0 failed** in 16.33s。
+  - Vitest 前端單元與元件測試：**9 files passed, 48 tests passed** in 4.72s。
   - 前端 ESLint 審查：`npm run lint` 通過，零錯誤、零警告。
   - 前端 TypeScript 型別審查：`npx tsc -b` 通過，零錯誤。
   - 前端靜態資源打包：`npm run build` 通過，`production_bundle_admin_secret_gate=PASS assets=2`。

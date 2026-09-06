@@ -83,6 +83,7 @@ def test_phase20_packaged_clean_machine_bootstrap(monkeypatch: pytest.MonkeyPatc
         assert "20260905_22_phase20_universe_short_name" in ADDITIONAL_MIGRATION_IDS
 
         app = create_app(settings=settings, startup_result=startup_res)
+        app.state.launch_handshake = {"launch_id": "test-launch-smoke"}
         client = TestClient(app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
 
         # 1. Frontend serves index.html at root

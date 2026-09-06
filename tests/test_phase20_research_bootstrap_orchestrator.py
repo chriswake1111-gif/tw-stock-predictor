@@ -183,6 +183,7 @@ def test_api_v2_research_bootstrap_endpoint(tmp_path, monkeypatch):
     settings = RuntimeSettings.from_environment(environ, paths=paths)
     settings.paths.ensure_user_dirs()
     app = create_app(settings)
+    app.state.launch_handshake = {"launch_id": "test-launch-1"}
     client = TestClient(app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
 
     token_resp = client.get("/api/v2/data-operations/csrf-token")
@@ -199,6 +200,113 @@ def test_api_v2_research_bootstrap_endpoint(tmp_path, monkeypatch):
     data = resp.json()
     assert data["status"] == "ready"
     assert data["canonical_symbol"] == "2330.TW"
+
+
+def test_bootstrap_missing_handshake_fails_closed_503(tmp_path, monkeypatch):
+    """P1-3 regression: Missing or unvalidated launcher handshake must fail closed with 503 before operation creation."""
+    db, cur_svc, ops_repo = _setup_db(tmp_path)
+    environ = {
+        "TW_STOCK_PREDICTOR_ENV": "development",
+        "DATABASE_PATH": str(db),
+        "UNIVERSE_DB_PATH": str(db),
+        "RESEARCH_APPLICATION_ORIGIN": "http://127.0.0.1:8000",
+    }
+    monkeypatch.setenv("DATABASE_PATH", str(db))
+    monkeypatch.setenv("RESEARCH_APPLICATION_ORIGIN", "http://127.0.0.1:8000")
+    paths = RuntimePaths.from_environment(environ)
+    settings = RuntimeSettings.from_environment(environ, paths=paths)
+    settings.paths.ensure_user_dirs()
+    app = create_app(settings)
+    # Explicitly verify app.state.launch_handshake is missing
+    assert getattr(app.state, "launch_handshake", None) is None
+    client = TestClient(app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
+
+    token_resp = client.get("/api/v2/data-operations/csrf-token")
+    assert token_resp.status_code == 200
+    token = token_resp.json()["csrf_token"]
+    headers = {
+        "Origin": "http://127.0.0.1:8000",
+        "X-CSRF-Token": token,
+        "Content-Type": "application/json",
+    }
+
+    resp = client.post("/api/v2/research/bootstrap", json={"canonical_symbol": "2330.TW"}, headers=headers)
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "launch_handshake_missing_or_unvalidated"
+    # Ensure fail-closed: NO operation was created in repository
+    assert ops_repo.get_active_operation() is None
+    # Ensure no background workers registered
+    assert len(getattr(app.state, "background_worker_threads", [])) == 0
+
+
+def test_bootstrap_worker_registered_in_app_state_and_joined_on_shutdown(tmp_path, monkeypatch):
+    """P1-4 regression: Background worker thread started by bootstrap is registered in app.state and joined on shutdown."""
+    db, cur_svc, ops_repo = _setup_db(tmp_path)
+    environ = {
+        "TW_STOCK_PREDICTOR_ENV": "development",
+        "DATABASE_PATH": str(db),
+        "UNIVERSE_DB_PATH": str(db),
+        "RESEARCH_APPLICATION_ORIGIN": "http://127.0.0.1:8000",
+    }
+    monkeypatch.setenv("DATABASE_PATH", str(db))
+    monkeypatch.setenv("RESEARCH_APPLICATION_ORIGIN", "http://127.0.0.1:8000")
+    paths = RuntimePaths.from_environment(environ)
+    settings = RuntimeSettings.from_environment(environ, paths=paths)
+    settings.paths.ensure_user_dirs()
+    app = create_app(settings)
+    app.state.launch_handshake = {"launch_id": "test-launch-1"}
+
+    # Mock InstalledDataSyncService run stages so worker completes cleanly
+    monkeypatch.setattr(
+        "src.services.research_bootstrap_service.InstalledDataSyncService.run_stage_prerequisites_calendar",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "src.services.research_bootstrap_service.InstalledDataSyncService.run_stage_universe",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "src.services.research_bootstrap_service.InstalledDataSyncService.run_stage_classification",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "src.services.research_bootstrap_service.InstalledDataSyncService.run_stage_eod",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "src.services.research_bootstrap_service.InstalledDataSyncService.run_stage_turnover_and_cbc",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "src.services.research_bootstrap_service.InstalledDataSyncService.run_stage_projection",
+        lambda *args, **kwargs: None,
+    )
+
+    with TestClient(app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000)) as client:
+        token_resp = client.get("/api/v2/data-operations/csrf-token")
+        assert token_resp.status_code == 200
+        token = token_resp.json()["csrf_token"]
+        headers = {
+            "Origin": "http://127.0.0.1:8000",
+            "X-CSRF-Token": token,
+            "Content-Type": "application/json",
+        }
+
+        resp = client.post("/api/v2/research/bootstrap", json={"canonical_symbol": "2330.TW"}, headers=headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "preparing"
+        assert data["canonical_symbol"] == "2330.TW"
+        assert data["operation_id"] is not None
+
+        # Verify thread was registered in app.state.background_worker_threads
+        workers = getattr(app.state, "background_worker_threads", [])
+        assert len(workers) >= 1
+        assert any("bootstrap-" in t.name for t in workers)
+
+    # When TestClient context exits, FastAPI lifespan shutdown joins app.state.background_worker_threads
+    for t in getattr(app.state, "background_worker_threads", []):
+        assert not t.is_alive()
 
 
 def test_bootstrap_returns_waiting_when_active_sync_operation_has_empty_targets(tmp_path):
