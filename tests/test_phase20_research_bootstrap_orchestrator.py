@@ -199,3 +199,24 @@ def test_api_v2_research_bootstrap_endpoint(tmp_path, monkeypatch):
     data = resp.json()
     assert data["status"] == "ready"
     assert data["canonical_symbol"] == "2330.TW"
+
+
+def test_bootstrap_returns_waiting_when_active_sync_operation_has_empty_targets(tmp_path):
+    """P1-2 regression: Active SYNC with empty targets returns 'waiting_for_data_operation' when target EOD is not yet ready."""
+    db, cur_svc, ops_repo = _setup_db(tmp_path)
+    op = ops_repo.create_operation(
+        operation_id="op_generic_sync",
+        operation_type=InstalledOperationType.SYNC.value,
+        lease_owner_id="owner-1",
+        target_symbols=[],
+    )
+
+    bootstrap_svc = ResearchBootstrapService(
+        db_path=str(db),
+        current_research_service=cur_svc,
+        operations_repo=ops_repo,
+    )
+    res = bootstrap_svc.bootstrap_symbol("2330.TW")
+    assert res["status"] == "waiting_for_data_operation"
+    assert res["canonical_symbol"] == "2330.TW"
+    assert res["operation_id"] == "op_generic_sync"

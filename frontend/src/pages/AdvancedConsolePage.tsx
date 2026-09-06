@@ -74,7 +74,7 @@ export function AdvancedConsolePage() {
           </h1>
         </div>
         <p style={{ color: "var(--color-muted, #64748b)", fontSize: "0.95rem", margin: 0 }}>
-          供系統管理員與研究人員檢視底層材料快照、執行主檔治理、並追蹤歷史回測與驗證歷程。
+          供系統管理員與研究人員檢視底層資料快照、執行主檔治理、並追蹤歷史回測與驗證歷程。
         </p>
       </div>
 
@@ -87,7 +87,7 @@ export function AdvancedConsolePage() {
       >
         <ConsoleCard
           to="/eod-close"
-          title="官方日收盤價材料化"
+          title="官方日收盤價管理"
           description="檢視 TWSE／TPEx 日收盤官方快照與觀測值入庫狀態。"
           icon={CandlestickChart}
         />
@@ -95,7 +95,7 @@ export function AdvancedConsolePage() {
         <ConsoleCard
           to="/universe"
           title="標的主檔治理"
-          description="檢視全市場股票主檔材料化狀態、簡稱覆蓋率與生命週期。"
+          description="檢視全市場股票主檔準備狀態、簡稱覆蓋率與生命週期。"
           icon={Network}
         />
 

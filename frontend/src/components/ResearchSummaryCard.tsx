@@ -158,7 +158,7 @@ export function ResearchSummaryCard({
             {m.settled_trade_date || "尚未結算"}
           </div>
           <div style={{ fontSize: "0.8rem", color: "var(--color-muted, #64748b)", marginTop: "0.3rem" }}>
-            每日收盤 14:30 正式結算
+            經官方核實之結算日期
           </div>
         </div>
 

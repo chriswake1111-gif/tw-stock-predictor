@@ -18,6 +18,8 @@ from src.domain.research_summary import (
 from src.domain.universe import parse_canonical_symbol, validate_knowledge_cutoff_at
 from src.domain.valuation import utc_now_timestamp
 from src.repositories.current_research_repository import CurrentResearchRepository
+from src.repositories.forward_eps_repository import ForwardEPSRepository
+from src.repositories.technical_anchor_repository import TechnicalAnchorRepository
 
 
 class CurrentResearchService:
@@ -27,9 +29,8 @@ class CurrentResearchService:
         *,
         repository: CurrentResearchRepository | None = None,
     ):
-        self.repository = repository or CurrentResearchRepository(
-            os.getenv("DATABASE_PATH", db_path)
-        )
+        self.db_path = getattr(repository, "db_path", os.getenv("DATABASE_PATH", db_path))
+        self.repository = repository or CurrentResearchRepository(self.db_path)
 
     def get_context(
         self, canonical_symbol: str, *, knowledge_cutoff_at: str | None = None
@@ -132,21 +133,11 @@ class CurrentResearchService:
 
             has_approved_forward_eps = False
             if "forward_eps_observations" in tables and "valuation_approvals" in tables:
-                f_row = conn.execute(
-                    """
-                    SELECT 1
-                    FROM forward_eps_observations f
-                    JOIN valuation_approvals a ON a.resource_id = f.id
-                    WHERE f.symbol = ?
-                      AND f.status = 'active'
-                      AND a.decision = 'approved'
-                      AND a.rule_id = 'VAL-02'
-                      AND a.available_at <= ? AND a.ingested_at <= ?
-                    LIMIT 1
-                    """,
-                    (canonical_symbol, cutoff, cutoff),
-                ).fetchone()
-                if f_row:
+                eps_repo = ForwardEPSRepository(self.db_path, auto_migrate=False)
+                approved_eps = eps_repo.forward_eps_as_of_with_connection(
+                    conn, canonical_symbol, cutoff
+                )
+                if approved_eps:
                     has_approved_forward_eps = True
 
             if has_approved_forward_eps:
@@ -175,25 +166,22 @@ class CurrentResearchService:
 
             has_approved_anchors = False
             if (
-                "manual_anchor_set_revisions" in tables
+                "technical_anchor_revisions" in tables
                 and "technical_anchor_approvals" in tables
             ):
-                t_row = conn.execute(
-                    """
-                    SELECT 1
-                    FROM manual_anchor_set_revisions r
-                    JOIN technical_anchor_approvals a ON a.anchor_revision_id = r.id
-                    WHERE r.symbol = ?
-                      AND r.status = 'active'
-                      AND a.decision = 'approved'
-                      AND a.rule_id IN ('FB-03', 'FB-04')
-                      AND a.available_at <= ?
-                    LIMIT 1
-                    """,
-                    (canonical_symbol, cutoff),
-                ).fetchone()
-                if t_row:
-                    has_approved_anchors = True
+                anchor_repo = TechnicalAnchorRepository(self.db_path, auto_migrate=False)
+                anchor_states = anchor_repo.states_as_of_with_connection(
+                    conn, canonical_symbol, cutoff
+                )
+                for state in anchor_states:
+                    if (
+                        state.get("status") == "active"
+                        and state.get("approval")
+                        and state["approval"].get("decision") == "approved"
+                        and state.get("evidence_basis_rule_id") in ("FB-03", "FB-04")
+                    ):
+                        has_approved_anchors = True
+                        break
 
             if has_approved_anchors:
                 technical_ctx = TechnicalContextSummary(

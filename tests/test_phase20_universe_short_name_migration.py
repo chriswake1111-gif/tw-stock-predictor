@@ -307,6 +307,10 @@ def test_sc_15_phase19_upgrade_dual_supersession(tmp_path):
     )
     inst_id = anchor["instrument_id"]
 
+    # Simulate pre-migration Phase 19 registry state (parser_version = '1')
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE data_resources SET parser_version = '1' WHERE resource_id = 'twse-universe-master'")
+
     # Phase 19 revision (revision 1, short_name=None, parser_version=1)
     p19_rev = repo.add_revision(
         context=ctx,
@@ -336,6 +340,10 @@ def test_sc_15_phase19_upgrade_dual_supersession(tmp_path):
             "raw_payload_sha256": raw_hash_v1,
         },
     )
+
+    # Migration 22 executes upon upgrade to Phase 20: registry parser_version updated to 2.0.0
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE data_resources SET parser_version = '2.0.0' WHERE resource_id = 'twse-universe-master'")
 
     # Now Phase 20 sync materializes v2 with short_name = "聯發科"
     p20_rev = repo.add_revision(
@@ -385,3 +393,51 @@ def test_sc_15_phase19_upgrade_dual_supersession(tmp_path):
         assert child_uir[2] == 2
         assert child_uir[3] == "聯發科"
         assert child_uir[4] == "2.0.0"
+
+
+def test_parser_evidence_gate_rejects_v1_writes_post_migration22(tmp_path):
+    """P1-6 regression: Post-migration 22, new writes with parser_version '1' must be rejected."""
+    db, repo, _, _ = _setup_db(tmp_path)
+    ctx = _context("p1_6_test")
+    raw_hash = _seed_raw(db, "raw-phase13-twse_universe_master", "twse-universe-master")
+
+    anchor = repo.allocate_instrument(
+        venue="TWSE",
+        official_code="2308",
+        source_identity="twse:2308",
+        first_observed_at="2026-09-01T00:00:00Z",
+        source_reference="fixture",
+        context=ctx,
+    )
+    inst_id = anchor["instrument_id"]
+
+    with pytest.raises(ValueError, match="parser_evidence_mismatch"):
+        repo.add_revision(
+            context=ctx,
+            idempotency_key="univ-twse-v1-write-fail",
+            instrument_id=inst_id,
+            resource_id="twse-universe-master",
+            logical_revision_key="twse:2308:master",
+            revision_number=1,
+            payload={
+                "venue": "TWSE",
+                "official_code": "2308",
+                "canonical_symbol": "2308.TW",
+                "display_name": "台達電",
+                "short_name": "台達電",
+                "security_type": "股票",
+                "fetched_at": "2026-09-01T00:00:00Z",
+                "received_at": "2026-09-01T00:00:00Z",
+                "ingested_at": "2026-09-01T00:00:00Z",
+                "available_at": "2026-09-01T00:00:00Z",
+                "source_reference": "twse.t187ap03_L",
+                "status": "accepted",
+                "freshness_status": "current",
+                "freshness_mode": "official_cadence_window",
+                "current_complete": True,
+                "coverage_complete": True,
+                "parser_version": "1",  # Rejected: registry requires 2.0.0 post-migration
+                "raw_resource_revision_id": "raw-phase13-twse_universe_master",
+                "raw_payload_sha256": raw_hash,
+            },
+        )

@@ -8,6 +8,14 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from src.api.main import create_app
+from src.domain.valuation import (
+    ApprovalResourceType,
+    ApprovalStatus,
+    ForwardEPSObservation,
+    ForwardEPSSourceType,
+    ValuationApproval,
+)
+from src.repositories.forward_eps_repository import ForwardEPSRepository
 from src.repositories.migration_runner import apply_valuation_migration
 from src.runtime.paths import RuntimePaths
 from src.runtime.settings import RuntimeSettings
@@ -83,10 +91,13 @@ def _insert_snapshot_and_observation(
     official_code: str = "2330",
     close: str | None = "980.0",
     turnover: float = 300000000000.0,
+    revision_number: int = 1,
+    status: str = "available",
+    snapshot_id: str | None = None,
 ):
     import hashlib
 
-    raw_id = f"raw_snap_{date}"
+    raw_id = f"raw_snap_{date}_{revision_number}"
     raw_hash = hashlib.sha256(raw_id.encode()).hexdigest()
     conn.execute(
         """
@@ -99,7 +110,7 @@ def _insert_snapshot_and_observation(
         """,
         (raw_id, raw_hash),
     )
-    snap_id = f"snap_{date}"
+    snap_id = snapshot_id or f"snap_{date}_rev_{revision_number}"
     snap_fp = hashlib.sha256(f"snap:{date}:{snap_id}".encode()).hexdigest()
     conn.execute(
         """
@@ -114,7 +125,7 @@ def _insert_snapshot_and_observation(
             supersedes_source_snapshot_id, revocation_reference, identity_fingerprint
         ) VALUES (
             ?, 'twse.eod.stock_day_all', ?, 'key',
-            1, ?, 'valid', 'available',
+            ?, ?, 'valid', ?,
             'complete', NULL, NULL, 1,
             ?, ?, NULL, '2026-09-04T13:35:00Z', '2026-09-04T13:35:00Z',
             '2026-09-04T13:35:00Z', '2026-09-04T13:36:00Z', 'http://url', 'GET', 'json', 'v1',
@@ -123,11 +134,11 @@ def _insert_snapshot_and_observation(
             NULL, NULL, ?
         )
         """,
-        (snap_id, raw_id, date, date, date, raw_hash, raw_hash, snap_fp),
+        (snap_id, raw_id, revision_number, date, status, date, date, raw_hash, raw_hash, snap_fp),
     )
 
     if close is not None:
-        obs_id = f"obs_{date}_{official_code}"
+        obs_id = f"obs_{date}_{official_code}_{revision_number}"
         obs_fp = hashlib.sha256(f"obs:{official_code}:{date}".encode()).hexdigest()
         conn.execute(
             """
@@ -289,3 +300,103 @@ def test_summary_api_endpoint(tmp_path, monkeypatch):
     # 404 on unlisted symbol
     resp404 = client.get("/api/v2/research/summary/9999.TW")
     assert resp404.status_code == 404
+
+
+def test_summary_latest_settled_revoked_revision_fails_closed(tmp_path):
+    """P1-4 regression: When date D has rev 1 (available) and rev 2 (revoked), latest is rev 2.
+    It must fail closed (insufficient_data), and NOT resurrect rev 1 or fall back to D-1.
+    """
+    db, service = _setup_db(tmp_path)
+    with sqlite3.connect(db) as conn:
+        _insert_universe_instrument(conn, official_code="2330")
+        # Older date D-1 (2026-09-03) available
+        _insert_snapshot_and_observation(conn, date="2026-09-03", official_code="2330", close="970.0")
+        # Date D (2026-09-04) revision 1 available
+        _insert_snapshot_and_observation(
+            conn, date="2026-09-04", official_code="2330", close="980.0", revision_number=1, status="available"
+        )
+        # Date D (2026-09-04) revision 2 revoked!
+        _insert_snapshot_and_observation(
+            conn, date="2026-09-04", official_code="2330", close=None, revision_number=2, status="revoked"
+        )
+
+    summary = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert summary is not None
+    m_ctx = summary["market_context"]
+    assert m_ctx["settled_trade_date"] == "2026-09-04"
+    assert m_ctx["official_close"] is None
+    assert m_ctx["close_status"] == "insufficient_data"
+    assert m_ctx["close_reason"] == "snapshot_revoked_without_replacement"
+
+
+def test_summary_governed_forward_eps_and_technical_anchor_as_of(tmp_path):
+    """P1-3 regression: Forward EPS and Technical Anchor evaluation must use governed effective-as-of repositories."""
+    db, service = _setup_db(tmp_path)
+    with sqlite3.connect(db) as conn:
+        _insert_universe_instrument(conn, official_code="2330")
+        _insert_snapshot_and_observation(conn, date="2026-09-04", official_code="2330", close="980.0")
+
+    eps_repo = ForwardEPSRepository(str(db), auto_migrate=False)
+    obs = ForwardEPSObservation(
+        logical_series_id="2330-2027-series",
+        revision_number=1,
+        revision_of=None,
+        symbol="2330.TW",
+        fiscal_year=2027,
+        eps_base=52.0,
+        source_name="Analyst A",
+        source_type=ForwardEPSSourceType.BROKER_REPORT,
+        published_at="2026-09-01",
+        available_at="2026-09-01T08:00:00Z",
+        unit="TWD_per_share",
+    )
+    added = eps_repo.add_forward_eps(obs, "idemp-eps-1", ingested_at="2026-09-01T08:00:00Z")
+
+    # Before approval, summary valuation_context requires human judgment
+    summary_before = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert summary_before["valuation_context"]["status"] == "needs_human_judgment"
+    assert any(item["rule_id"] == "VAL-02" for item in summary_before["human_decision_queue"])
+
+    # Approve with VAL-02
+    eps_repo.add_approval(
+        ValuationApproval(
+            approval_id="app-1",
+            resource_type=ApprovalResourceType.FORWARD_EPS,
+            resource_id=added["id"],
+            decision=ApprovalStatus.APPROVED,
+            rule_id="VAL-02",
+            evidence_level="A",
+            project_operationalization=False,
+            approved_by="lead_analyst",
+            rationale="Approved forward EPS based on validated reports",
+            available_at="2026-09-02T08:00:00Z",
+        ),
+        idempotency_key="idemp-app-1",
+        ingested_at="2026-09-02T08:00:00Z",
+    )
+
+    # After approval, summary valuation_context is available, VAL-02 not in decision queue
+    summary_after = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert summary_after["valuation_context"]["status"] == "available"
+    assert not any(item["rule_id"] == "VAL-02" for item in summary_after["human_decision_queue"])
+
+    # If approval is revoked, it reverts to needs_human_judgment
+    eps_repo.add_approval(
+        ValuationApproval(
+            approval_id="app-2",
+            resource_type=ApprovalResourceType.FORWARD_EPS,
+            resource_id=added["id"],
+            decision=ApprovalStatus.REVOKED,
+            rule_id="VAL-02",
+            evidence_level="A",
+            project_operationalization=False,
+            approved_by="compliance_officer",
+            rationale="Revoked due to outdated assumption",
+            available_at="2026-09-03T08:00:00Z",
+        ),
+        idempotency_key="idemp-app-2",
+        ingested_at="2026-09-03T08:00:00Z",
+    )
+    summary_revoked = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert summary_revoked["valuation_context"]["status"] == "needs_human_judgment"
+    assert any(item["rule_id"] == "VAL-02" for item in summary_revoked["human_decision_queue"])

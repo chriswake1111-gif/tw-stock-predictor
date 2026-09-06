@@ -78,7 +78,6 @@ class CurrentResearchRepository:
             FROM eod_close_source_snapshots s
             WHERE s.resource_id = :resource_id
               AND s.source_trade_date_status = 'valid'
-              AND s.status IN ('available', 'partial')
               AND s.available_at IS NOT NULL AND s.available_at <= :cutoff
               AND s.ingested_at IS NOT NULL AND s.ingested_at <= :cutoff
         ),
@@ -149,19 +148,10 @@ class CurrentResearchRepository:
             market_turnover_total = None
         else:
             settled_trade_date = str(row["settled_trade_date"])
-            close_val = row["close_value"]
-            if close_val is not None:
-                official_close = {
-                    "status": "available",
-                    "value": float(close_val),
-                    "currency": str(row["currency"] or "TWD"),
-                    "unit": str(row["unit"] or "TWD_per_share"),
-                    "observation_id": str(row["close_observation_id"]),
-                    "snapshot_id": str(row["source_snapshot_id"]),
-                    "reason": None,
-                }
-            else:
-                # Fail-closed anti-fallback rule (P1-1): do NOT fall back to D-1
+            snap_status = str(row["snapshot_status"])
+            if snap_status not in ("available", "partial"):
+                # P1-4: Latest snapshot revision on date D is not available (e.g. revoked/error)
+                # Fail-closed anti-fallback: never resurrect older same-date revision or fall back to D-1
                 official_close = {
                     "status": "insufficient_data",
                     "value": None,
@@ -169,22 +159,50 @@ class CurrentResearchRepository:
                     "unit": "TWD_per_share",
                     "observation_id": None,
                     "snapshot_id": str(row["source_snapshot_id"]),
-                    "reason": "symbol_observation_not_yet_materialized_for_settled_session",
+                    "reason": f"snapshot_{snap_status}_without_replacement",
                 }
+                market_turnover_total = None
+            else:
+                close_val = row["close_value"]
+                if close_val is not None:
+                    official_close = {
+                        "status": "available",
+                        "value": float(close_val),
+                        "currency": str(row["currency"] or "TWD"),
+                        "unit": str(row["unit"] or "TWD_per_share"),
+                        "observation_id": str(row["close_observation_id"]),
+                        "snapshot_id": str(row["source_snapshot_id"]),
+                        "reason": None,
+                    }
+                else:
+                    # Fail-closed anti-fallback rule (P1-1): do NOT fall back to D-1
+                    official_close = {
+                        "status": "insufficient_data",
+                        "value": None,
+                        "currency": "TWD",
+                        "unit": "TWD_per_share",
+                        "observation_id": None,
+                        "snapshot_id": str(row["source_snapshot_id"]),
+                        "reason": "symbol_observation_not_yet_materialized_for_settled_session",
+                    }
 
-            # Query market turnover for settled date D
-            to_row = conn.execute(
-                """
-                SELECT total_turnover_twd
-                FROM market_turnover_daily
-                WHERE trade_date = ?
-                  AND available_at <= ? AND ingested_at <= ?
-                ORDER BY revision DESC, available_at DESC, ingested_at DESC, id DESC
-                LIMIT 1
-                """,
-                (settled_trade_date, cutoff, cutoff),
-            ).fetchone()
-            market_turnover_total = float(to_row["total_turnover_twd"]) if to_row and to_row["total_turnover_twd"] is not None else None
+                # Query market turnover for settled date D
+                to_row = conn.execute(
+                    """
+                    SELECT total_turnover_twd
+                    FROM market_turnover_daily
+                    WHERE trade_date = ?
+                      AND available_at <= ? AND ingested_at <= ?
+                    ORDER BY revision DESC, available_at DESC, ingested_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (settled_trade_date, cutoff, cutoff),
+                ).fetchone()
+                market_turnover_total = (
+                    float(to_row["total_turnover_twd"])
+                    if to_row and to_row["total_turnover_twd"] is not None
+                    else None
+                )
 
         is_market_closed = False
         if settled_trade_date:

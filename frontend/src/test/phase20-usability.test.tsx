@@ -4,17 +4,34 @@ import App from "../App";
 import { mockReadApi, renderWithProviders } from "./render";
 import { SearchHomePage } from "../pages/SearchHomePage";
 import { AdvancedConsolePage } from "../pages/AdvancedConsolePage";
+import { FirstRunPrepCard } from "../components/FirstRunPrepCard";
+import { ShortNameUpgradeBanner } from "../components/ShortNameUpgradeBanner";
 
 describe("Phase 20 Usability & Bootstrap Tests", () => {
   beforeEach(() => {
+    localStorage.clear();
     mockReadApi();
   });
 
-  it("renders Search-First Home page with search input and quick stocks", async () => {
+  it("renders Search-First Home page with search input and recent searches when present", async () => {
+    localStorage.setItem(
+      "tw_stock_recent_searches",
+      JSON.stringify([
+        { code: "2330.TW", name: "台積電" },
+        { code: "2454.TW", name: "聯發科" },
+      ])
+    );
     renderWithProviders(<SearchHomePage />, "/");
     expect(screen.getByPlaceholderText(/請輸入股票代號/)).toBeInTheDocument();
+    expect(screen.getByText("最近搜尋標的")).toBeInTheDocument();
     expect(screen.getAllByText("台積電").length).toBeGreaterThan(0);
     expect(screen.getAllByText("聯發科").length).toBeGreaterThan(0);
+  });
+
+  it("omits recent search section when search history is empty", async () => {
+    localStorage.removeItem("tw_stock_recent_searches");
+    renderWithProviders(<SearchHomePage />, "/");
+    expect(screen.queryByText("最近搜尋標的")).not.toBeInTheDocument();
   });
 
   it("shows matching results when user types in search box", async () => {
@@ -103,11 +120,169 @@ describe("Phase 20 Usability & Bootstrap Tests", () => {
 
   it("renders AdvancedConsolePage with links to legacy and governance surfaces", async () => {
     renderWithProviders(<AdvancedConsolePage />, "/advanced");
-    expect(screen.getByText("官方日收盤價材料化")).toBeInTheDocument();
+    expect(screen.getByText("官方日收盤價管理")).toBeInTheDocument();
     expect(screen.getByText("標的主檔治理")).toBeInTheDocument();
     expect(screen.getByText("歷史分析快照")).toBeInTheDocument();
     expect(screen.getByText("快照差異比對")).toBeInTheDocument();
     expect(screen.getByText("歷史觀察與驗證")).toBeInTheDocument();
     expect(screen.getByText("研究待辦隊列")).toBeInTheDocument();
+  });
+
+  // P1-1: FirstRunPrepCard parent status mapping tests
+  describe("FirstRunPrepCard parent status handling", () => {
+    const terminalSuccessStatuses = ["succeeded", "partial"] as const;
+    terminalSuccessStatuses.forEach((status) => {
+      it(`handles terminal success status: ${status}`, async () => {
+        const onComplete = vi.fn();
+        vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+          const url = String(input);
+          if (url.includes("/csrf-token")) {
+            return new Response(JSON.stringify({ csrf_token: "mock-csrf" }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (url.includes("/data-operations/sync")) {
+            return new Response(JSON.stringify({ operation_id: "op_test_success" }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (url.includes("op_test_success")) {
+            return new Response(JSON.stringify({ operation_id: "op_test_success", status }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          return new Response(JSON.stringify({}), { status: 200 });
+        });
+
+        renderWithProviders(<FirstRunPrepCard onPreparationComplete={onComplete} />);
+        fireEvent.click(screen.getByText("準備股票清單"));
+
+        await waitFor(() => {
+          expect(onComplete).toHaveBeenCalled();
+          expect(screen.getByText(/股票清單準備完成/)).toBeInTheDocument();
+        });
+      });
+    });
+
+    const terminalErrorStatuses = ["failed", "cancelled", "interrupted"] as const;
+    terminalErrorStatuses.forEach((status) => {
+      it(`handles terminal error status: ${status}`, async () => {
+        vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+          const url = String(input);
+          if (url.includes("/csrf-token")) {
+            return new Response(JSON.stringify({ csrf_token: "mock-csrf" }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (url.includes("/data-operations/sync")) {
+            return new Response(JSON.stringify({ operation_id: "op_test_err" }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (url.includes("op_test_err")) {
+            return new Response(JSON.stringify({ operation_id: "op_test_err", status }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          return new Response(JSON.stringify({}), { status: 200 });
+        });
+
+        renderWithProviders(<FirstRunPrepCard />);
+        fireEvent.click(screen.getByText("準備股票清單"));
+
+        await waitFor(() => {
+          expect(screen.getByText(new RegExp(`狀態：${status}`))).toBeInTheDocument();
+        });
+      });
+    });
+  });
+
+  // P1-1: ShortNameUpgradeBanner parent status mapping tests
+  describe("ShortNameUpgradeBanner parent status handling", () => {
+    const coverage = {
+      universe_status: "short_names_partial" as const,
+      total_instruments: 100,
+      phase20_materialized_count: 50,
+      coverage_ratio: 0.5,
+      degraded_search_mode: true,
+    };
+
+    const terminalSuccessStatuses = ["succeeded", "partial"] as const;
+    terminalSuccessStatuses.forEach((status) => {
+      it(`handles terminal success status: ${status}`, async () => {
+        const onUpgrade = vi.fn();
+        vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+          const url = String(input);
+          if (url.includes("/csrf-token")) {
+            return new Response(JSON.stringify({ csrf_token: "mock-csrf" }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (url.includes("/data-operations/sync")) {
+            return new Response(JSON.stringify({ operation_id: "op_banner_success" }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (url.includes("op_banner_success")) {
+            return new Response(JSON.stringify({ operation_id: "op_banner_success", status }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          return new Response(JSON.stringify({}), { status: 200 });
+        });
+
+        renderWithProviders(<ShortNameUpgradeBanner coverage={coverage} onUpgradeComplete={onUpgrade} />);
+        fireEvent.click(screen.getByText("更新股票簡稱清單"));
+
+        await waitFor(() => {
+          expect(onUpgrade).toHaveBeenCalled();
+          expect(screen.getByText("更新完成")).toBeInTheDocument();
+        });
+      });
+    });
+
+    const terminalErrorStatuses = ["failed", "cancelled", "interrupted"] as const;
+    terminalErrorStatuses.forEach((status) => {
+      it(`handles terminal error status: ${status}`, async () => {
+        vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+          const url = String(input);
+          if (url.includes("/csrf-token")) {
+            return new Response(JSON.stringify({ csrf_token: "mock-csrf" }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (url.includes("/data-operations/sync")) {
+            return new Response(JSON.stringify({ operation_id: "op_banner_err" }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (url.includes("op_banner_err")) {
+            return new Response(JSON.stringify({ operation_id: "op_banner_err", status }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          return new Response(JSON.stringify({}), { status: 200 });
+        });
+
+        renderWithProviders(<ShortNameUpgradeBanner coverage={coverage} />);
+        fireEvent.click(screen.getByText("更新股票簡稱清單"));
+
+        await waitFor(() => {
+          expect(screen.getByText(new RegExp(`狀態：${status}`))).toBeInTheDocument();
+        });
+      });
+    });
   });
 });

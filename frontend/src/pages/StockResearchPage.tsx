@@ -41,7 +41,7 @@ export function StockResearchPage() {
         setBootstrapStatus("正在檢查資料就緒狀態...");
         const bRes = await bootstrapSymbol(canonicalSymbol);
         if (bRes.status === "preparing" || bRes.status === "waiting_for_data_operation") {
-          setBootstrapStatus("正在材料化最新已結算行情...");
+          setBootstrapStatus("正在準備最新已結算行情資料...");
           if (bRes.operation_id) {
             // Poll for completion
             const startTime = Date.now();
@@ -55,12 +55,12 @@ export function StockResearchPage() {
                 try {
                   const op = await getOperationDetails(bRes.operation_id!);
                   const opStatus = (op as { status?: string }).status;
-                  if (opStatus === "completed") {
+                  if (opStatus === "succeeded" || opStatus === "partial") {
                     clearInterval(timer);
                     resolve();
-                  } else if (opStatus === "failed") {
+                  } else if (opStatus === "failed" || opStatus === "cancelled" || opStatus === "interrupted") {
                     clearInterval(timer);
-                    reject(new Error("行情材料化失敗。"));
+                    reject(new Error(`行情資料準備已中斷或失敗（狀態：${opStatus}）。`));
                   }
                 } catch {
                   // transient polling error
@@ -209,12 +209,12 @@ export function StockResearchPage() {
           }}
         >
           <Clock size={18} color="var(--color-primary, #0284c7)" />
-          <span style={{ fontSize: "0.9rem", fontWeight: 600 }}>歷史切點 (ISO-8601)：</span>
+          <span style={{ fontSize: "0.9rem", fontWeight: 600 }}>指定歷史時間點：</span>
           <input
             type="text"
             value={historicalInput}
             onChange={(e) => setHistoricalInput(e.target.value)}
-            placeholder="例如 2026-09-04T16:00:00Z"
+            placeholder="請輸入日期時間（例如 2026-09-04 16:00）"
             style={{
               padding: "0.4rem 0.75rem",
               borderRadius: 6,

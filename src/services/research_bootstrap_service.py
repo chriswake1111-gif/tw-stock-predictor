@@ -77,7 +77,7 @@ class ResearchBootstrapService:
             except Exception:
                 targets = []
 
-            # Does active operation cover this symbol?
+            # Does active operation explicitly cover this symbol?
             if canonical_symbol in targets:
                 return {
                     "status": "preparing",
@@ -85,17 +85,7 @@ class ResearchBootstrapService:
                     "operation_id": active.operation_id,
                     "message": f"Data operation {active.operation_id} is preparing research data",
                 }
-            if active.operation_type in (
-                InstalledOperationType.SYNC.value,
-                InstalledOperationType.BOOTSTRAP.value,
-            ) and (not targets or canonical_symbol in targets):
-                return {
-                    "status": "preparing",
-                    "canonical_symbol": canonical_symbol,
-                    "operation_id": active.operation_id,
-                    "message": f"Sync operation {active.operation_id} is preparing research data",
-                }
-            # Active operation does not cover target
+            # Active operation does not cover target (generic SYNC/BOOTSTRAP with empty targets or different target)
             return {
                 "status": "waiting_for_data_operation",
                 "canonical_symbol": canonical_symbol,

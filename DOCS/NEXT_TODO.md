@@ -1,55 +1,52 @@
 # 專案進度與下階段待辦 (NEXT_TODO.md)
 
-## 2026-09-06 交班：Phase 20 Implementation 完成，提請 First Code Review (LUK-79)
+## 2026-09-06 交班：Phase 20 First Code Review 修正完成，提請 Second Code Review (LUK-79)
 
 ### 當前狀態與成果
 
-- [x] **Phase 20 所有 Work Packages (WP01 ~ WP11) 依據核准之 LUK-78 Implementation Plan (Rev 2) 全數實作完畢**:
-  - **WP01 — Migration 22 & Universe v2 Normalization (P1-1, BC-IMP-1)**:
-    - 建立 `migrations/20260905_22_phase20_universe_short_name.sql`，新增 `short_name TEXT` 欄位與索引，升級 parser version 至 `2.0.0`。
-    - 嚴格遵守 BC-IMP-1：`UniverseRepository.add_revision()` 於 `BEGIN IMMEDIATE` 交易內以 `COALESCE(MAX(revision_number), 0) + 1` 單調自增派生子修訂版號，不依賴 caller override。
-  - **WP02 — Effective Master Coverage & Local Search API (BC-IP-2)**:
-    - 實作 `_effective_master_records()`，僅從最新已核准修訂本衍生有效主檔，排除非公開、無效與停更代碼。
-    - 實作 `GET /api/v2/universe/search` 與 `GET /api/v2/universe/coverage`，搜尋延遲 < 100ms，輸入與打字過程維持 0 外網 egress。
-  - **WP03 — Latest-Settled Resolver & Two-Stage Settled Context (BC-IP-1, P1-1)**:
-    - 實作二階段正向證明 CTE（同日多修訂版以 `date_rev_rank = 1` 確定性選取），嚴格貫徹 P1-1 fail-closed anti-fallback：非交易日僅依授權日曆標記休市/週末，絕不倒退至 D-1 偽裝為當前交易日。
-    - 提供 `GET /api/v2/research/context/current/{canonical_symbol}`。
-  - **WP04 — Research Bootstrap Orchestrator Service & API**:
-    - 實作 `ResearchBootstrapService`，具備運算前置檢查、活躍作業覆蓋偵測與背景作業啟動。
-    - 提供 `POST /api/v2/research/bootstrap`，維持 loopback + Origin/CSRF 防護，豁免唯讀限制。
-  - **WP05 — Human Status Adapter & Decision Queue Domain Logic (P1-3)**:
-    - 建立繁體中文低認知負荷狀態映射器與摘要領域模型。
-    - 針對未核准預測（`VAL-02` Forward EPS、`FB-03/FB-04` 波浪錨點）輸出明確審查佇列卡片，嚴禁合成預設目標價或前視數據。
-    - 提供 `GET /api/v2/research/summary/{canonical_symbol}`。
-  - **WP06 ~ WP09 — Frontend Usability, Workspace, Audit Drawer & Navigation**:
-    - 實作以搜尋為中心的首頁 (`/`, `SearchHomePage.tsx`) 與一鍵「準備股票清單」引導卡片。
-    - 實作個股研究工作區 (`/stocks/:symbol`, `StockResearchPage.tsx`)，整合最新結算資訊與背景啟動狀態輪詢。
-    - 實作分離的人工決策佇列 (`HumanDecisionQueue.tsx`) 與唯讀審計抽屜 (`AuditDrawer.tsx`)。
-    - 簡化主導航為 5 項高頻項目，次要管理工具收斂至 `/advanced` (`AdvancedConsolePage.tsx`)，完全保留既有端點與治理介面向下相容性。
-  - **WP10 & WP11 — Automated Verification & Packaging Smoke**:
-    - 新增 `tests/test_phase20_security_and_non_regression.py` 與 `tests/test_phase20_installed_smoke.py`。
-    - 更新 `.github/workflows/windows-packaging.yml` 加入 Phase 20 smoke step。
-- [x] **全量自動化驗證與 CI 狀態**:
-  - Python 全量回歸測試：**904 passed, 0 failed** in 205.5s。
-  - Vitest 前端單元與元件測試：**9 files passed, 35 tests passed** in 3.48s。
+- [x] **Phase 20 First Code Review 所有審查項全部修正完畢 (P1-1 ~ P1-7, P2-1 ~ P2-2)**:
+  - **P1-1 (Parent Operation Status & Polling Latency)**:
+    - 修正前端所有輪詢元件（`FirstRunPrepCard.tsx`、`ShortNameUpgradeBanner.tsx`、`StockResearchPage.tsx`）映射 Phase 19 父層作業終態 (`succeeded`, `partial`, `failed`, `cancelled`, `interrupted`)，不再依賴不存在的 `completed`。
+    - 輪詢機制加入初始即時檢查 (`checkStatus()`)，終態或快取立即可得時零延遲返回，消除 1.5 秒無效等待。
+    - 補齊 Vitest 單元測試 `frontend/src/test/phase20-usability.test.tsx` 覆蓋 5 種終態。
+  - **P1-2 (Generic Sync Target Scoping)**:
+    - 修正 `ResearchBootstrapService`：泛用 `SYNC` 或 `BOOTSTRAP` 作業在 `targets` 為空且目標標的 EOD 數據不足時，正確回傳 `waiting_for_data_operation`，僅在目標標的明確包含於 `targets` 或本機已有足夠日行情時才進入 `preparing`。
+    - 新增回歸測試於 `tests/test_phase20_research_bootstrap_orchestrator.py`。
+  - **P1-3 (Authoritative As-Of Domain Repositories)**:
+    - 移除 `CurrentResearchService` 中 bypass 領域模型的手寫 SQL 證據查詢，改為統一復用權威性 as-of 方法：`ForwardEPSRepository.forward_eps_as_of_with_connection` 與 `TechnicalAnchorRepository.states_as_of_with_connection`。
+    - 新增回歸測試於 `tests/test_phase20_research_summary_and_queue.py`。
+  - **P1-4 (Latest-Settled Fail-Closed Resolver)**:
+    - 修正 `CurrentResearchRepository` 結算解析器：CTE 於排序 `date_rev_rank` 時不再預先以 `status IN ('available', 'partial')` 過濾，改為優先選取結算日 D 之最新修訂版；若最新修訂版為非 available/partial，嚴格 fail-closed 回傳 `insufficient_data` (`snapshot_{status}_without_replacement`)，絕不復活舊修訂版或倒退至 D-1。
+    - 新增同日修訂版作廢與撤銷測試於 `tests/test_phase20_research_summary_and_queue.py`。
+  - **P1-5 (Windows Packaged Loopback Human Flow & Zero Egress Smoke)**:
+    - 擴充 `.github/scripts/windows-packaging-smoke.ps1` 與 `.github/workflows/windows-packaging.yml`，於真實安裝打包環境下驗證 Phase 20 端到端迴圈流程（靜態前端首頁 HTML、標的涵蓋率、本地搜尋 2330、研究啟動、官方結算日收盤價、人工決策隊列與審計抽屜）。
+    - 加入基於 `netstat -ano` 之作業系統等級零外部連線 (Zero Egress) 斷言，並於 `smoke-summary.json` 產出 Phase 20 驗證金鑰。
+  - **P1-6 (Strict Post-Migration Universe Parser Version Gate)**:
+    - 修正 `UniverseRepository._provenance()` 寫入防護閘門：移除相容舊版的 `allowed_parser_versions.update({"1", "2.0.0"})`；遷移完成後的新寫入嚴格強制登錄 `2.0.0`，拒絕舊版 `1`，歷史 v1 紀錄仍維持唯讀相容。
+    - 新增回歸測試於 `tests/test_phase20_universe_short_name_migration.py`。
+  - **P1-7 (Removed Unproven Claims)**:
+    - 移除 `ResearchSummaryCard.tsx` 中未經核准的宣稱「每日收盤 14:30 正式結算」，對齊真實 EOD 觀察值。
+  - **P2-1 (Jargon Elimination)**:
+    - 移除介面上的工程術語（如「材料化」改為「整理完成/準備完成」），並將生硬的 ISO-8601 時間戳轉換為易讀之繁體中文格式。
+  - **P2-2 (Dynamic Local Search History)**:
+    - 移除 `SearchHomePage.tsx` 中硬編碼且帶有主觀評論的「推薦關注標的」（如「權值龍頭」），改以使用者本機 `localStorage` 最近搜尋紀錄動態呈現，保護 Local-First 隱私。
+- [x] **全量自動化驗證與測試狀態**:
+  - Python 全量回歸測試：**908 passed, 0 failed** in 265.87s (4m 25s)。
+  - Phase 20 專項後端測試：**32 passed, 0 failed** in 10.52s。
+  - Vitest 前端單元與元件測試：**9 files passed, 46 tests passed** in 6.41s。
   - 前端 ESLint 審查：`npm run lint` 通過，零錯誤、零警告。
-  - 前端靜態資源打包：`npm run build` 通過，零錯誤、零警告。
-  - Playwright Visual 測試：`npm run test:visual` **6 passed (4.7s)**（Phase 9/11/12 視覺回歸全綠燈）。
-  - Packaging Smoke 測試：**32 passed, 0 failed** in 12.5s。
-  - Ubuntu CI (`Anti-Gravity TU Predictor CI`, Run `33980787672`)：**Success in 2m 46s** (Job `101345502246`)。
-  - Windows CI (`TW Stock Predictor Windows Productization`, Run `33980433124`)：**Success in 10m 9s** (Job `101344574078`)。
-- [x] **Git 提交結構**:
-  - 於分支 `chriswake1111/luk-79-tw-stock-predictorphase-20-implementation-installed-product` 上完成原子化提交（WP01 ~ WP11 + CI fixes）。
-  - 通過 `git diff --check`，零空白字元或行尾雜訊。
+  - 前端 TypeScript 型別審查：`npx tsc -b` 通過，零錯誤。
+  - 前端靜態資源打包：`npm run build` 通過，`production_bundle_admin_secret_gate=PASS assets=2`。
+  - Git hygiene：`git diff --check` 通過，零空白行尾或換行違規。
 
 ### 核心安全與邊界聲明
 - 本系統持續嚴格遵守 `DOCS/PRODUCT_BOUNDARY.md`：無券商 API、無真實帳號連線、無自動交易或跟單功能。
 - 本地股票搜尋與啟動輸入過程 100% 於本機 SQLite 執行，零外部網路發送 (Zero Egress)。
-- 杜金龍分析核心語意維持不變；嚴禁合成 Forward EPS 或推造波浪錨點，所有未驗證項目完整保留於人工決策佇列。
+- 杜金龍分析核心語意維持不變；嚴禁合成 Forward EPS 或推造波浪錨點，所有未驗證項目完整保留於人工決策隊列。
 - Merge Gate: `NOT AUTHORIZED`；自動合併 / 部署：`NOT AUTHORIZED`。依規範僅開立 Draft PR。
 
 ### 下一步待辦
-- 保持停止於 **READY FOR PHASE 20 FIRST CODE REVIEW**，等待 Lukas Chiu 進行 Phase 20 第一輪代碼審查。
+- 保持停止於 **READY FOR PHASE 20 SECOND CODE REVIEW**，等待 Lukas Chiu 進行 Phase 20 第二輪代碼審查。
 
 ---
 

@@ -359,6 +359,52 @@ try {
     $analysisRes = Invoke-WebRequest -Uri "$($descriptor.origin)/api/v2/analysis/2330.TW?knowledge_cutoff_at=$cutoff" -UseBasicParsing -TimeoutSec 15
     Assert-True ($analysisRes.StatusCode -eq 200) "BC-3: GET /api/v2/analysis/2330.TW did not return HTTP 200"
 
+    # 5. Phase 20 Installed Loopback Human Flow & Egress Assertions (P1-5)
+    Write-Host "Smoke scenario: Phase 20 loopback product flow"
+    # 5a. Verify static frontend root returns HTTP 200 and loads HTML
+    $frontendRoot = Invoke-WebRequest -Uri "$($descriptor.origin)/" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($frontendRoot.StatusCode -eq 200) "Frontend root did not return HTTP 200"
+    Assert-True ($frontendRoot.Content -match 'tw-stock-evidence-workspace|<div id="root">') "Frontend root HTML structure missing"
+
+    # 5b. Check universe coverage and perform local universe search
+    $coverageRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/universe/coverage" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($null -ne $coverageRes.universe_status) "universe coverage status missing"
+
+    $searchRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/universe/search?q=2330" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($searchRes.items.Count -ge 1) "Local search for 2330 returned no items"
+    Assert-True ($searchRes.items[0].symbol -eq "2330") "First search item symbol is not 2330"
+    Assert-True ($null -ne $searchRes.items[0].short_name) "First search item missing short_name"
+
+    # 5c. Bootstrap research symbol for 2330.TW
+    $bootstrapBody = @{ canonical_symbol = "2330.TW" } | ConvertTo-Json
+    $bootstrapRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/bootstrap" -Method POST -Headers $syncHeaders -Body $bootstrapBody -WebSession $smokeSession -TimeoutSec 15
+    Assert-True ($bootstrapRes.canonical_symbol -eq "2330.TW") "Bootstrap canonical_symbol mismatch"
+    Assert-True ($bootstrapRes.status -in @("ready", "preparing", "waiting_for_data_operation")) "Bootstrap status invalid: $($bootstrapRes.status)"
+    if ($bootstrapRes.status -eq "preparing" -and $bootstrapRes.operation_id) {
+        $bootOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $bootstrapRes.operation_id -TimeoutSeconds 120 -WebSession $smokeSession
+        Assert-True ($bootOp.status -in @("succeeded", "partial")) "Bootstrap data operation failed: $($bootOp.status)"
+    }
+
+    # 5d. Research summary verification (settled close, decision queue, audit reference)
+    $summaryRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/summary/2330.TW" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($summaryRes.canonical_symbol -eq "2330.TW") "Research summary canonical_symbol mismatch"
+    Assert-True ($null -ne $summaryRes.market_context) "Research summary missing market_context"
+    Assert-True ($null -ne $summaryRes.valuation_context) "Research summary missing valuation_context"
+    Assert-True ($null -ne $summaryRes.technical_context) "Research summary missing technical_context"
+    Assert-True ($null -ne $summaryRes.human_decision_queue) "Research summary missing human_decision_queue"
+    Assert-True ($null -ne $summaryRes.audit_reference) "Research summary missing audit_reference"
+    Assert-True ($null -ne $summaryRes.contract_version) "Research summary missing contract_version"
+
+    # 5e. Zero external egress assertion for server process
+    $netstatOut = netstat -ano | Select-String "\s+$serverPid$"
+    foreach ($line in $netstatOut) {
+        $parts = ($line.Line.Trim() -split '\s+')
+        if ($parts.Length -ge 3) {
+            $remote = $parts[2]
+            Assert-True ($remote -match '^(127\.0\.0\.1|0\.0\.0\.0|\[::1?\]|\*):' -or $remote -eq "*:*") "External socket connection detected on server process: $remote"
+        }
+    }
+
     $second = New-ProductProcess -FilePath $launcher
     Write-Host "Smoke scenario: single-instance rejection"
     $secondResult = Wait-ProductExit -Process $second -Scenario "single-instance rejection"
@@ -574,6 +620,11 @@ try {
         active_writer_rejection = $true
         bounded_log_retention = $true
         uninstall_preserved_user_data = $true
+        phase20_universe_coverage = $true
+        phase20_local_search = $true
+        phase20_bootstrap_ready = $true
+        phase20_summary_ready = $true
+        phase20_zero_egress = $true
         runtime_dependencies = "installed_onedir_executables_with_minimal_system_path_only"
     }
     $summary | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $smokeSummaryPath -Encoding UTF8

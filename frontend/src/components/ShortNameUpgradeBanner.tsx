@@ -7,11 +7,13 @@ import type { UniverseCoverage } from "../api/types";
 interface ShortNameUpgradeBannerProps {
   coverage: UniverseCoverage;
   onUpgradeComplete?: () => void;
+  pollIntervalMs?: number;
 }
 
 export function ShortNameUpgradeBanner({
   coverage,
   onUpgradeComplete,
+  pollIntervalMs = 1500,
 }: ShortNameUpgradeBannerProps) {
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -29,30 +31,40 @@ export function ShortNameUpgradeBanner({
       const opId = res.operation_id;
 
       const startTime = Date.now();
-      const interval = setInterval(async () => {
+      const checkStatus = async (): Promise<boolean> => {
         try {
           if (Date.now() - startTime > 90000) {
-            clearInterval(interval);
             setLoading(false);
             setError("更新逾時，請稍後重試。");
-            return;
+            return true;
           }
           const op = await getOperationDetails(opId);
           const status = (op as { status?: string }).status;
-          if (status === "completed") {
-            clearInterval(interval);
+          if (status === "succeeded" || status === "partial") {
             setLoading(false);
             setSuccess(true);
             onUpgradeComplete?.();
-          } else if (status === "failed") {
-            clearInterval(interval);
+            return true;
+          } else if (status === "failed" || status === "cancelled" || status === "interrupted") {
             setLoading(false);
-            setError("股票簡稱更新失敗。");
+            setError(`股票簡稱更新已中斷或失敗（狀態：${status}）。`);
+            return true;
           }
         } catch {
           // ignore
         }
-      }, 1500);
+        return false;
+      };
+
+      const isDone = await checkStatus();
+      if (!isDone) {
+        const interval = setInterval(async () => {
+          const finished = await checkStatus();
+          if (finished) {
+            clearInterval(interval);
+          }
+        }, pollIntervalMs);
+      }
     } catch (err) {
       setLoading(false);
       setError(err instanceof Error ? err.message : "無法啟動更新");
@@ -83,7 +95,7 @@ export function ShortNameUpgradeBanner({
         <div>
           <div style={{ fontWeight: 600, fontSize: "0.95rem" }}>
             {isPartial
-              ? `股票簡稱已材料化 ${pct}%（${coverage.phase20_materialized_count}/${coverage.total_instruments} 檔）`
+              ? `股票簡稱已準備 ${pct}%（${coverage.phase20_materialized_count}/${coverage.total_instruments} 檔）`
               : "可升級股票簡稱以支援中文快速搜尋"}
           </div>
           <div style={{ fontSize: "0.85rem", color: "var(--color-muted, #64748b)", marginTop: "0.2rem" }}>

@@ -2174,8 +2174,6 @@ class UniverseRepository:
             raise ValueError("universe_resource_not_registered")
         parser_version = str(payload.get("parser_version") or resource["parser_version"])
         allowed_parser_versions = {str(resource["parser_version"])}
-        if resource_id in ("twse-universe-master", "tpex-universe-master"):
-            allowed_parser_versions.update({"1", "2.0.0"})
         if parser_version not in allowed_parser_versions:
             raise ValueError("parser_evidence_mismatch")
         query_dimensions = payload.get("query_dimensions") or {}

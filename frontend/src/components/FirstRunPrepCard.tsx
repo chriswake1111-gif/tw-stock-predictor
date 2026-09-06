@@ -5,9 +5,13 @@ import { getOperationDetails } from "../api/dataOperationsClient";
 
 interface FirstRunPrepCardProps {
   onPreparationComplete?: () => void;
+  pollIntervalMs?: number;
 }
 
-export function FirstRunPrepCard({ onPreparationComplete }: FirstRunPrepCardProps) {
+export function FirstRunPrepCard({
+  onPreparationComplete,
+  pollIntervalMs = 1500,
+}: FirstRunPrepCardProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -21,30 +25,40 @@ export function FirstRunPrepCard({ onPreparationComplete }: FirstRunPrepCardProp
 
       // Poll until operation finishes
       const startTime = Date.now();
-      const interval = setInterval(async () => {
+      const checkStatus = async (): Promise<boolean> => {
         try {
           if (Date.now() - startTime > 90000) {
-            clearInterval(interval);
             setLoading(false);
             setError("資料準備逾時，請稍後重試。");
-            return;
+            return true;
           }
           const op = await getOperationDetails(opId);
           const status = (op as { status?: string }).status;
-          if (status === "completed") {
-            clearInterval(interval);
+          if (status === "succeeded" || status === "partial") {
             setLoading(false);
             setSuccess(true);
             onPreparationComplete?.();
-          } else if (status === "failed") {
-            clearInterval(interval);
+            return true;
+          } else if (status === "failed" || status === "cancelled" || status === "interrupted") {
             setLoading(false);
-            setError("股票清單準備失敗，請檢查系統日誌。");
+            setError(`股票清單準備已中斷或失敗（狀態：${status}），請檢查系統日誌。`);
+            return true;
           }
         } catch {
           // ignore transient poll error
         }
-      }, 1500);
+        return false;
+      };
+
+      const isDone = await checkStatus();
+      if (!isDone) {
+        const interval = setInterval(async () => {
+          const finished = await checkStatus();
+          if (finished) {
+            clearInterval(interval);
+          }
+        }, pollIntervalMs);
+      }
     } catch (err) {
       setLoading(false);
       setError(err instanceof Error ? err.message : "無法啟動資料作業");

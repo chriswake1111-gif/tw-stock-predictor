@@ -1,17 +1,42 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, ArrowRight, TrendingUp, Sparkles, Building2 } from "lucide-react";
+import { Search, ArrowRight, Clock, Sparkles, Building2 } from "lucide-react";
 import { searchUniverse, getUniverseCoverage } from "../api/phase20Client";
 import type { UniverseCoverage, UniverseSearchResultItem } from "../api/types";
 import { FirstRunPrepCard } from "../components/FirstRunPrepCard";
 import { ShortNameUpgradeBanner } from "../components/ShortNameUpgradeBanner";
 
-const QUICK_STOCKS = [
-  { code: "2330.TW", name: "台積電", desc: "半導體權值龍頭" },
-  { code: "2454.TW", name: "聯發科", desc: "IC設計龍頭" },
-  { code: "2317.TW", name: "鴻海", desc: "電子代工龍頭" },
-  { code: "2603.TW", name: "長榮", desc: "航運主流標的" },
-];
+interface RecentSearchItem {
+  code: string;
+  name: string;
+}
+
+const RECENT_KEY = "tw_stock_recent_searches";
+
+function getStoredRecentSearches(): RecentSearchItem[] {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.slice(0, 6);
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+function storeRecentSearch(item: RecentSearchItem) {
+  try {
+    const current = getStoredRecentSearches();
+    const filtered = current.filter((x) => x.code !== item.code);
+    const updated = [item, ...filtered].slice(0, 6);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(updated));
+  } catch {
+    // ignore
+  }
+}
 
 export function SearchHomePage() {
   const navigate = useNavigate();
@@ -19,6 +44,7 @@ export function SearchHomePage() {
   const [results, setResults] = useState<UniverseSearchResultItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [coverage, setCoverage] = useState<UniverseCoverage | null>(null);
+  const [recentSearches, setRecentSearches] = useState<RecentSearchItem[]>(() => getStoredRecentSearches());
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Load coverage on mount to determine first run / upgrade banner
@@ -70,7 +96,10 @@ export function SearchHomePage() {
     return () => clearTimeout(timeoutId);
   }, [query]);
 
-  function handleSelect(canonicalSymbol: string) {
+  function handleSelect(canonicalSymbol: string, displayName?: string) {
+    const name = displayName || canonicalSymbol;
+    storeRecentSearch({ code: canonicalSymbol, name });
+    setRecentSearches(getStoredRecentSearches());
     navigate(`/stocks/${encodeURIComponent(canonicalSymbol)}`);
   }
 
@@ -166,7 +195,7 @@ export function SearchHomePage() {
                 {results.map((item) => (
                   <div
                     key={item.canonical_symbol}
-                    onClick={() => handleSelect(item.canonical_symbol)}
+                    onClick={() => handleSelect(item.canonical_symbol, item.short_name || item.display_name)}
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -241,62 +270,61 @@ export function SearchHomePage() {
             )}
           </div>
 
-          {/* Quick Launch Section */}
-          <div style={{ marginTop: "3rem" }}>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-                color: "var(--color-muted, #64748b)",
-                fontSize: "0.9rem",
-                fontWeight: 600,
-                marginBottom: "1rem",
-              }}
-            >
-              <TrendingUp size={16} />
-              <span>快速開啟常備研究標的</span>
-            </div>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
-                gap: "1rem",
-              }}
-            >
-              {QUICK_STOCKS.map((st) => (
-                <div
-                  key={st.code}
-                  onClick={() => handleSelect(st.code)}
-                  className="card"
-                  style={{
-                    padding: "1rem",
-                    cursor: "pointer",
-                    transition: "transform 0.15s ease, box-shadow 0.15s ease",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = "translateY(-2px)";
-                    e.currentTarget.style.boxShadow = "0 6px 16px -2px rgba(0, 0, 0, 0.08)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = "none";
-                    e.currentTarget.style.boxShadow = "none";
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontWeight: 700, fontSize: "1.1rem", color: "var(--color-primary, #0284c7)" }}>
-                      {st.code.split(".")[0]}
-                    </span>
-                    <Building2 size={16} color="var(--color-muted, #94a3b8)" />
+          {/* Recent Searches Section */}
+          {recentSearches.length > 0 && (
+            <div style={{ marginTop: "3rem" }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  color: "var(--color-muted, #64748b)",
+                  fontSize: "0.9rem",
+                  fontWeight: 600,
+                  marginBottom: "1rem",
+                }}
+              >
+                <Clock size={16} />
+                <span>最近搜尋標的</span>
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+                  gap: "1rem",
+                }}
+              >
+                {recentSearches.map((st) => (
+                  <div
+                    key={st.code}
+                    onClick={() => handleSelect(st.code, st.name)}
+                    className="card"
+                    style={{
+                      padding: "1rem",
+                      cursor: "pointer",
+                      transition: "transform 0.15s ease, box-shadow 0.15s ease",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = "translateY(-2px)";
+                      e.currentTarget.style.boxShadow = "0 6px 16px -2px rgba(0, 0, 0, 0.08)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = "none";
+                      e.currentTarget.style.boxShadow = "none";
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontWeight: 700, fontSize: "1.1rem", color: "var(--color-primary, #0284c7)" }}>
+                        {st.code.split(".")[0]}
+                      </span>
+                      <Building2 size={16} color="var(--color-muted, #94a3b8)" />
+                    </div>
+                    <div style={{ fontWeight: 600, marginTop: "0.3rem" }}>{st.name}</div>
                   </div>
-                  <div style={{ fontWeight: 600, marginTop: "0.3rem" }}>{st.name}</div>
-                  <div style={{ fontSize: "0.8rem", color: "var(--color-muted, #64748b)", marginTop: "0.2rem" }}>
-                    {st.desc}
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </>
       )}
     </div>

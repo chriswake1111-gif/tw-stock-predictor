@@ -79,6 +79,10 @@ def test_coverage_states_uninitialized_partial_and_ready(tmp_path):
         first_observed_at="2026-09-01T00:00:00Z", source_reference="fix", context=ctx,
     )
 
+    # Simulate pre-migration Phase 19 registry state (parser_version = '1')
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE data_resources SET parser_version = '1' WHERE resource_id = 'twse-universe-master'")
+
     # Ingest Phase 19 style (parser_version="1", short_name=None) for both
     r1_2330 = repo.add_revision(
         context=ctx, idempotency_key="u-2330-v1", instrument_id=a1["instrument_id"],
@@ -117,6 +121,10 @@ def test_coverage_states_uninitialized_partial_and_ready(tmp_path):
     assert cov1["total_instruments"] == 2
     assert cov1["phase20_materialized_count"] == 0
     assert cov1["degraded_search_mode"] is True
+
+    # Migration 22 executes upon upgrade to Phase 20: registry parser_version updated to 2.0.0
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE data_resources SET parser_version = '2.0.0' WHERE resource_id = 'twse-universe-master'")
 
     # Upgrade 2330 to v2 (parser_version="2.0.0", short_name="台積電")
     repo.add_revision(
