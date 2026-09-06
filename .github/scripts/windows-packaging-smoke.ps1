@@ -349,37 +349,22 @@ try {
         "X-CSRF-Token" = $csrfRes.csrf_token
         "Content-Type" = "application/json"
     }
-    # 1. Trigger sync and poll to terminal completed state
+    # 1. Explicit global preparation (sync) if needed by clean installation
+    Write-Host "Smoke scenario: Phase 19 explicit global preparation (sync)"
     $syncRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/sync" -Method POST -Headers $syncHeaders -Body "{}" -WebSession $smokeSession -TimeoutSec 15
     Assert-True ($syncRes.status -in @("running", "succeeded")) "sync did not start"
     $syncOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $syncRes.operation_id -TimeoutSeconds 180 -WebSession $smokeSession
     $syncItemsJson = if ($syncOp.items) { ($syncOp.items | ConvertTo-Json -Compress) } else { "none" }
     Assert-True ($syncOp.status -in @("succeeded", "partial")) "sync operation failed: $($syncOp.status), error: $($syncOp.error_detail), items: $syncItemsJson"
 
-    # 2. Trigger on-demand symbol enablement and poll to terminal completed state
-    $enableRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/symbols/2330.TW/enable" -Method POST -Headers $syncHeaders -Body "{}" -WebSession $smokeSession -TimeoutSec 15
-    Assert-True ($enableRes.status -in @("running", "succeeded")) "enable symbol did not start"
-    $enableOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $enableRes.operation_id -TimeoutSeconds 120 -WebSession $smokeSession
-    $enableItemsJson = if ($enableOp.items) { ($enableOp.items | ConvertTo-Json -Compress) } else { "none" }
-    Assert-True ($enableOp.status -in @("succeeded", "partial")) "enable symbol operation failed: $($enableOp.status), error: $($enableOp.error_detail), items: $enableItemsJson"
-
-    # 3. Assert BC-2: Authoritative Phase 14 EOD context proof
-    $cutoff = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
-    $eodRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/market-context/eod-close/as-of/2330.TW?knowledge_cutoff_at=$cutoff" -UseBasicParsing -TimeoutSec 15
-    Assert-True ($null -ne $eodRes) "BC-2: EOD market context not returned"
-
-    # 4. Assert BC-3: General V2 analysis regression
-    $analysisRes = Invoke-WebRequest -Uri "$($descriptor.origin)/api/v2/analysis/2330.TW?knowledge_cutoff_at=$cutoff" -UseBasicParsing -TimeoutSec 15
-    Assert-True ($analysisRes.StatusCode -eq 200) "BC-3: GET /api/v2/analysis/2330.TW did not return HTTP 200"
-
-    # 5. Phase 20 Installed Loopback Human Flow & Egress Assertions (P1-5)
+    # 2. Phase 20 Installed Loopback Human Flow & Egress Assertions (P1-1, P1-5)
     Write-Host "Smoke scenario: Phase 20 loopback product flow"
-    # 5a. Verify static frontend root returns HTTP 200 and loads HTML
+    # 2a. Verify static frontend root returns HTTP 200 and loads HTML
     $frontendRoot = Invoke-WebRequest -Uri "$($descriptor.origin)/" -UseBasicParsing -TimeoutSec 15
     Assert-True ($frontendRoot.StatusCode -eq 200) "Frontend root did not return HTTP 200"
     Assert-True ($frontendRoot.Content -match 'tw-stock-evidence-workspace|<div id="root">') "Frontend root HTML structure missing"
 
-    # 5b. Check universe coverage and perform local universe search
+    # 2b. Check universe coverage and perform local universe search for 2330
     $coverageRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/universe/coverage" -UseBasicParsing -TimeoutSec 15
     Assert-True ($null -ne $coverageRes.universe_status) "universe coverage status missing"
 
@@ -389,17 +374,43 @@ try {
     Assert-True ($searchRes.results[0].canonical_symbol -eq "2330.TW") "First search item canonical_symbol is not 2330.TW"
     Assert-True ($null -ne $searchRes.results[0].short_name) "First search item missing short_name"
 
-    # 5c. Bootstrap research symbol for 2330.TW
+    # 2c. Phase 20 one-step bootstrap for 2330.TW without manual pre-enablement (P1-1)
+    Write-Host "Smoke scenario: Phase 20 one-step symbol bootstrap"
     $bootstrapBody = @{ canonical_symbol = "2330.TW" } | ConvertTo-Json
     $bootstrapRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/bootstrap" -Method POST -Headers $syncHeaders -Body $bootstrapBody -WebSession $smokeSession -TimeoutSec 15
     Assert-True ($bootstrapRes.canonical_symbol -eq "2330.TW") "Bootstrap canonical_symbol mismatch"
-    Assert-True ($bootstrapRes.status -in @("ready", "preparing", "waiting_for_data_operation")) "Bootstrap status invalid: $($bootstrapRes.status)"
-    if ($bootstrapRes.status -eq "preparing" -and $bootstrapRes.operation_id) {
-        $bootOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $bootstrapRes.operation_id -TimeoutSeconds 120 -WebSession $smokeSession
-        Assert-True ($bootOp.status -in @("succeeded", "partial")) "Bootstrap data operation failed: $($bootOp.status)"
+
+    # If bootstrap returns waiting_for_data_operation, wait for unrelated operation and re-enter
+    if ($bootstrapRes.status -eq "waiting_for_data_operation" -and $bootstrapRes.operation_id) {
+        $waitOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $bootstrapRes.operation_id -TimeoutSeconds 180 -WebSession $smokeSession
+        Assert-True ($waitOp.status -in @("succeeded", "partial")) "Unrelated data operation failed: $($waitOp.status)"
+        $bootstrapRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/bootstrap" -Method POST -Headers $syncHeaders -Body $bootstrapBody -WebSession $smokeSession -TimeoutSec 15
+        Assert-True ($bootstrapRes.canonical_symbol -eq "2330.TW") "Second bootstrap canonical_symbol mismatch"
     }
 
-    # 5d. Research summary verification (settled close, decision queue, audit reference)
+    # Prove target-aware ENABLE_SYMBOL was launched
+    Assert-True ($bootstrapRes.status -in @("preparing", "ready")) "Bootstrap status unexpected: $($bootstrapRes.status)"
+    if ($bootstrapRes.status -eq "preparing") {
+        Assert-True ($null -ne $bootstrapRes.operation_id) "Bootstrap preparing status missing operation_id"
+        $opDetails = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/operations/$($bootstrapRes.operation_id)" -UseBasicParsing -TimeoutSec 15
+        Assert-True ($opDetails.operation_type -eq "enable_symbol") "Bootstrap operation_type must be enable_symbol: $($opDetails.operation_type)"
+        Assert-True ($opDetails.target_symbols -contains "2330.TW") "Bootstrap operation target_symbols must contain 2330.TW"
+
+        $bootOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $bootstrapRes.operation_id -TimeoutSeconds 180 -WebSession $smokeSession
+        $bootItemsJson = if ($bootOp.items) { ($bootOp.items | ConvertTo-Json -Compress) } else { "none" }
+        Assert-True ($bootOp.status -in @("succeeded", "partial")) "Bootstrap enable_symbol operation failed: $($bootOp.status), error: $($bootOp.error_detail), items: $bootItemsJson"
+    }
+
+    # 2d. Assert BC-2: Authoritative Phase 14 EOD context proof
+    $cutoff = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $eodRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/market-context/eod-close/as-of/2330.TW?knowledge_cutoff_at=$cutoff" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($null -ne $eodRes) "BC-2: EOD market context not returned"
+
+    # 2e. Assert BC-3: General V2 analysis regression
+    $analysisRes = Invoke-WebRequest -Uri "$($descriptor.origin)/api/v2/analysis/2330.TW?knowledge_cutoff_at=$cutoff" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($analysisRes.StatusCode -eq 200) "BC-3: GET /api/v2/analysis/2330.TW did not return HTTP 200"
+
+    # 2f. Research summary verification (settled close, decision queue, audit reference)
     $summaryRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/summary/2330.TW" -UseBasicParsing -TimeoutSec 15
     Assert-True ($summaryRes.canonical_symbol -eq "2330.TW") "Research summary canonical_symbol mismatch"
     Assert-True ($summaryRes.official_code -eq "2330") "Research summary official_code mismatch"
@@ -410,7 +421,7 @@ try {
     Assert-True ($null -ne $summaryRes.audit_reference) "Research summary missing audit_reference"
     Assert-True ($null -ne $summaryRes.knowledge_cutoff_at) "Research summary missing knowledge_cutoff_at"
 
-    # 5e. Zero external egress assertion for server process after local search & summary
+    # 2g. Zero external egress assertion for server process after local search & summary
     $netstatOut = netstat -ano | Select-String "\s+$serverPid$"
     foreach ($line in $netstatOut) {
         $parts = ($line.Line.Trim() -split '\s+')

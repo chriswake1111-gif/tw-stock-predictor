@@ -203,6 +203,8 @@ def trigger_sync_operation(
                 pass
 
     worker_thread = threading.Thread(target=_run_bg, name=f"data-ops-sync-{op_id}", daemon=True)
+    if hasattr(request.app.state, "background_worker_threads"):
+        request.app.state.background_worker_threads.append(worker_thread)
     worker_thread.start()
 
     return {
@@ -273,6 +275,8 @@ def enable_symbol(
                 pass
 
     worker_thread = threading.Thread(target=_run_bg, name=f"data-ops-enable-{clean_sym}-{op_id}", daemon=True)
+    if hasattr(request.app.state, "background_worker_threads"):
+        request.app.state.background_worker_threads.append(worker_thread)
     worker_thread.start()
 
     return {

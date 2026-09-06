@@ -310,13 +310,23 @@ describe("Phase 20 Usability & Bootstrap Tests", () => {
             { status: 200, headers: { "Content-Type": "application/json" } }
           );
         }
-        // Second bootstrap returns preparing (target-aware ENABLE_SYMBOL)
+        if (bootstrapCallCount === 2) {
+          // Second bootstrap returns preparing (target-aware ENABLE_SYMBOL)
+          return new Response(
+            JSON.stringify({
+              status: "preparing",
+              canonical_symbol: "2330.TW",
+              operation_id: "op_target_enable",
+              message: "Target enable started",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        // Terminal bootstrap returns ready
         return new Response(
           JSON.stringify({
-            status: "preparing",
+            status: "ready",
             canonical_symbol: "2330.TW",
-            operation_id: "op_target_enable",
-            message: "Target enable started",
           }),
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
@@ -363,7 +373,114 @@ describe("Phase 20 Usability & Bootstrap Tests", () => {
     renderWithProviders(<App />, "/stocks/2330.TW");
 
     await waitFor(() => {
-      expect(bootstrapCallCount).toBe(2);
+      expect(bootstrapCallCount).toBeGreaterThanOrEqual(2);
+      expect(screen.getByText(/980.00 元/)).toBeInTheDocument();
+    });
+  });
+
+  it("P2: StockResearchPage handles multiple repeated waiting cycles before preparing and ready", async () => {
+    let bootstrapCallCount = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/csrf-token")) {
+        return new Response(JSON.stringify({ csrf_token: "mock-csrf" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/research/bootstrap")) {
+        bootstrapCallCount += 1;
+        if (bootstrapCallCount === 1) {
+          // Cycle 1: waiting for op1
+          return new Response(
+            JSON.stringify({
+              status: "waiting_for_data_operation",
+              canonical_symbol: "2330.TW",
+              operation_id: "op_sync_cycle_1",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        if (bootstrapCallCount === 2) {
+          // Cycle 2: waiting for op2
+          return new Response(
+            JSON.stringify({
+              status: "waiting_for_data_operation",
+              canonical_symbol: "2330.TW",
+              operation_id: "op_sync_cycle_2",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        if (bootstrapCallCount === 3) {
+          // Cycle 3: preparing target
+          return new Response(
+            JSON.stringify({
+              status: "preparing",
+              canonical_symbol: "2330.TW",
+              operation_id: "op_target_enable",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        // Cycle 4: ready
+        return new Response(
+          JSON.stringify({
+            status: "ready",
+            canonical_symbol: "2330.TW",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.includes("op_sync_cycle_1")) {
+        return new Response(
+          JSON.stringify({ operation_id: "op_sync_cycle_1", status: "succeeded" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.includes("op_sync_cycle_2")) {
+        return new Response(
+          JSON.stringify({ operation_id: "op_sync_cycle_2", status: "succeeded" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.includes("op_target_enable")) {
+        return new Response(
+          JSON.stringify({ operation_id: "op_target_enable", status: "succeeded" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.includes("/research/summary/2330.TW")) {
+        return new Response(
+          JSON.stringify({
+            canonical_symbol: "2330.TW",
+            official_code: "2330",
+            venue: "TWSE",
+            company_name: "台積電",
+            market_context: {
+              settled_trade_date: "2026-09-04",
+              official_close: 980.0,
+              close_status: "available",
+              is_market_closed: true,
+              market_status_label: "已正式結算收盤",
+            },
+            valuation_context: { status: "available" },
+            technical_context: { status: "available" },
+            screening_context: {},
+            human_decision_queue: [],
+            audit_reference: { model_version: "2.0.0" },
+            knowledge_cutoff_at: "2026-09-04T16:00:00Z",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+
+    renderWithProviders(<App />, "/stocks/2330.TW");
+
+    await waitFor(() => {
+      expect(bootstrapCallCount).toBe(4);
       expect(screen.getByText(/980.00 元/)).toBeInTheDocument();
     });
   });

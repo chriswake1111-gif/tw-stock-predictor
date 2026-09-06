@@ -7,7 +7,7 @@ import logging
 import os
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 from src.domain.installed_data_operations import (
     InstalledOperationStatus,
@@ -37,6 +37,7 @@ class ResearchBootstrapService:
         current_research_service: CurrentResearchService | None = None,
         operations_repo: InstalledDataOperationsRepository | None = None,
         sync_service: InstalledDataSyncService | None = None,
+        runner_fn: Callable[[str, Any, float], None] | None = None,
     ):
         self.db_path = os.getenv("DATABASE_PATH", db_path)
         self.runtime_instance_id = runtime_instance_id or "installed-runtime"
@@ -49,6 +50,14 @@ class ResearchBootstrapService:
             db_path=self.db_path,
             runtime_instance_id=self.runtime_instance_id,
         )
+        self.runner_fn = runner_fn
+        self.worker_threads: list[threading.Thread] = []
+
+    def join_workers(self, timeout: float = 5.0) -> None:
+        """Join any background worker threads started by this service."""
+        for t in self.worker_threads:
+            if t.is_alive():
+                t.join(timeout=timeout)
 
     def bootstrap_symbol(self, canonical_symbol: str) -> dict[str, Any]:
         """Bootstrap research readiness for canonical_symbol.
@@ -114,12 +123,15 @@ class ResearchBootstrapService:
 
         def _run_bg():
             try:
-                sync_svc.run_stage_prerequisites_calendar(op_id, auth, deadline_monotonic)
-                sync_svc.run_stage_universe(op_id, auth, deadline_monotonic)
-                sync_svc.run_stage_classification(op_id, auth, [canonical_symbol], deadline_monotonic)
-                sync_svc.run_stage_eod(op_id, auth, deadline_monotonic)
-                sync_svc.run_stage_turnover_and_cbc(op_id, auth, deadline_monotonic)
-                sync_svc.run_stage_projection(op_id, auth, deadline_monotonic)
+                if self.runner_fn is not None:
+                    self.runner_fn(op_id, auth, deadline_monotonic)
+                else:
+                    sync_svc.run_stage_prerequisites_calendar(op_id, auth, deadline_monotonic)
+                    sync_svc.run_stage_universe(op_id, auth, deadline_monotonic)
+                    sync_svc.run_stage_classification(op_id, auth, [canonical_symbol], deadline_monotonic)
+                    sync_svc.run_stage_eod(op_id, auth, deadline_monotonic)
+                    sync_svc.run_stage_turnover_and_cbc(op_id, auth, deadline_monotonic)
+                    sync_svc.run_stage_projection(op_id, auth, deadline_monotonic)
             except Exception as exc:
                 logger.exception("Background bootstrap operation %s failed: %s", op_id, exc)
                 try:
@@ -133,6 +145,7 @@ class ResearchBootstrapService:
                     pass
 
         worker = threading.Thread(target=_run_bg, name=f"bootstrap-{op_id}", daemon=True)
+        self.worker_threads.append(worker)
         worker.start()
 
         return {

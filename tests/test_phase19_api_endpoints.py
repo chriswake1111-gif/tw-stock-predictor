@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -19,13 +20,14 @@ from src.repositories.installed_data_operations_repository import (
 )
 from src.repositories.migration_runner import apply_valuation_migration
 from src.runtime.settings import RuntimePaths, RuntimeSettings
+from src.services.installed_data_sync_service import InstalledDataSyncService
 
 
 @pytest.fixture
 def api_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[TestClient, InstalledDataOperationsRepository, str]:
-    with tempfile.TemporaryDirectory() as temp_dir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
         app_dir = Path(temp_dir)
         db_file = app_dir / "data" / "test.db"
         environ = {
@@ -43,17 +45,24 @@ def api_client(
 
         app = create_app(settings=settings)
         app.state.launch_handshake = {"launch_id": "test-launch-1"}
-        client = TestClient(
+        with TestClient(
             app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000)
-        )
-        repo = InstalledDataOperationsRepository(str(db_file))
-        try:
-            yield client, repo, str(db_file)
-        finally:
-            del client
-            del repo
-            del app
-            gc.collect()
+        ) as client:
+            repo = InstalledDataOperationsRepository(str(db_file))
+            try:
+                yield client, repo, str(db_file)
+            finally:
+                workers = getattr(app.state, "background_worker_threads", [])
+                for t in workers:
+                    if t.is_alive():
+                        t.join(timeout=2.0)
+                for t in threading.enumerate():
+                    if t.name.startswith(("data-ops-", "bootstrap-")) and t.is_alive():
+                        t.join(timeout=2.0)
+                del client
+                del repo
+                del app
+                gc.collect()
 
 
 def _csrf(client: TestClient) -> tuple[str, dict[str, str]]:
@@ -132,9 +141,15 @@ def test_cancel_active_operation(
 
 
 def test_enable_symbol_endpoint(
-    api_client: tuple[TestClient, InstalledDataOperationsRepository, str]
+    api_client: tuple[TestClient, InstalledDataOperationsRepository, str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, repo, _ = api_client
+    monkeypatch.setattr(
+        InstalledDataSyncService,
+        "run_symbol_enablement_pipeline",
+        lambda *args, **kwargs: None,
+    )
     _, headers = _csrf(client)
     res_enable = client.post(
         "/api/v2/data-operations/symbols/2330.TW/enable", headers=headers, json={}

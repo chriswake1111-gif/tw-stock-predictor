@@ -77,19 +77,25 @@ export function StockResearchPage() {
           }
         };
 
-        let currentBootstrap = await bootstrapSymbol(canonicalSymbol);
+        const MAX_BOOTSTRAP_TIME_MS = 180000;
 
-        // If waiting for an unrelated/global active operation:
-        if (currentBootstrap.status === "waiting_for_data_operation" && currentBootstrap.operation_id) {
-          await pollOperation(currentBootstrap.operation_id, "正在等待既有背景資料作業完成...");
-          // Re-enter bootstrap evaluation after unrelated operation finished:
-          setBootstrapStatus("背景資料作業已完成，正在為目標標的準備行情...");
-          currentBootstrap = await bootstrapSymbol(canonicalSymbol);
+        while (Date.now() - bootstrapStartTime < MAX_BOOTSTRAP_TIME_MS) {
+          const currentBootstrap = await bootstrapSymbol(canonicalSymbol);
+
+          if (currentBootstrap.status === "ready") {
+            break;
+          } else if (currentBootstrap.status === "waiting_for_data_operation" && currentBootstrap.operation_id) {
+            await pollOperation(currentBootstrap.operation_id, "正在等待既有背景資料作業完成...");
+            setBootstrapStatus("背景資料作業已完成，正在為目標標的準備行情...");
+          } else if (currentBootstrap.status === "preparing" && currentBootstrap.operation_id) {
+            await pollOperation(currentBootstrap.operation_id, "正在準備最新已結算行情資料...");
+          } else {
+            break;
+          }
         }
 
-        // If preparing target-aware operation:
-        if (currentBootstrap.status === "preparing" && currentBootstrap.operation_id) {
-          await pollOperation(currentBootstrap.operation_id, "正在準備最新已結算行情資料...");
+        if (Date.now() - bootstrapStartTime >= MAX_BOOTSTRAP_TIME_MS) {
+          throw new Error("資料準備逾時，請稍後重試。");
         }
       }
 

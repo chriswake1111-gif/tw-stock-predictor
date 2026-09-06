@@ -1,5 +1,46 @@
 # 專案進度與下階段待辦 (NEXT_TODO.md)
 
+## 2026-09-06 交班：Phase 20 Third Code Review 修正完成，提請 Fourth Code Review (LUK-79)
+
+### 當前狀態與成果
+
+- [x] **Phase 20 Third Code Review 所有審查項全部修正完畢 (P1-1, P1-2, P2)**:
+  - **P1-1 (SC-14 Real Installed Acceptance & One-Step Bootstrap Alignment)**:
+    - 修正 `.github/scripts/windows-packaging-smoke.ps1`：自乾淨安裝驗收路徑中徹底移除手動呼叫的 Phase 19 `/symbols/2330.TW/enable` 端點，不再預先滿足標的。
+    - 真實驗收流程完整涵蓋：啟動前零連線斷言 ➔ 全域準備（sync）➔ 本地搜尋 2330 ➔ 呼叫 Phase 20 一步式啟動 `/api/v2/research/bootstrap` ➔ 若遇未完成作業自動輪詢並重新評估 ➔ 驗證啟動作業為 `enable_symbol` 且 targets 包含 `2330.TW` ➔ 輪詢作業至終態（succeeded/partial）➔ 驗證 BC-2 EOD 與 BC-3 分析 ➔ 驗證最新結算研究摘要（市場、估值、技術、決策隊列、審計參考、截斷時間）➔ 執行作業後零外部連線斷言。
+  - **P1-2 (Background Writer Test Lifecycle & Deterministic Teardown)**:
+    - 修正後端背景作業生命週期治理：
+      - `src/api/main.py`：在 `create_app` 中初始化 `app.state.background_worker_threads`，並於 lifespan 關閉時自動安全 join 殘留背景執行緒。
+      - `src/api/routes/installed_data_operations.py`：在 `sync_data` 與 `enable_symbol` 啟動背景執行緒時，主動登記至 `app.state.background_worker_threads`。
+      - `src/services/research_bootstrap_service.py`：支援可注入之 `runner_fn`，記錄 `self.worker_threads` 並提供 `join_workers()`。
+      - `tests/test_phase19_api_endpoints.py`：`api_client` fixture 採用 `ignore_cleanup_errors=True` 並於 teardown 時嚴格 join 所有背景作業執行緒；`test_enable_symbol_endpoint` 透過 monkeypatch 將 pipeline mock 為即時返回，防止常駐寫入者在測試目錄刪除時造成 `OSError: [Errno 39]`。
+      - `tests/test_phase20_research_bootstrap_orchestrator.py`：注入受控之 `runner_fn` 並在斷言後明確調用 `bootstrap_svc.join_workers()`，杜絕背景執行緒外洩。
+      - 全量回歸驗證：Python 測試套件全綠通過（**910 passed, 0 failed, 1 warning** in 233.94s）。
+  - **P2 (StockResearchPage Bounded State Machine Loop)**:
+    - 修正前端 `StockResearchPage.tsx`：將單次 `if` 判斷升級為完整的狀態機迴圈（`while (Date.now() - bootstrapStartTime < MAX_BOOTSTRAP_TIME_MS)`），涵蓋 `ready | waiting_for_data_operation | preparing` 三態流轉。
+    - 支援多次連續 `waiting_for_data_operation` 週期，直到既有作業終結後接續啟動專屬 `preparing` 並最終抵達 `ready`，在 180s 總體逾時內嚴密防呆。
+    - 新增前端 Vitest 回歸測試 `P2: StockResearchPage handles multiple repeated waiting cycles before preparing and ready` 於 `frontend/src/test/phase20-usability.test.tsx`（全量 48 個測試通過）。
+- [x] **全量自動化驗證與測試狀態**:
+  - Python 全量回歸測試：**910 passed, 0 failed, 1 warning** in 233.94s (3m 53s)。
+  - Phase 20 專項後端測試：**34 passed, 0 failed** in 5.88s。
+  - Vitest 前端單元與元件測試：**9 files passed, 48 tests passed** in 4.99s。
+  - 前端 ESLint 審查：`npm run lint` 通過，零錯誤、零警告。
+  - 前端 TypeScript 型別審查：`npx tsc -b` 通過，零錯誤。
+  - 前端靜態資源打包：`npm run build` 通過，`production_bundle_admin_secret_gate=PASS assets=2`。
+  - Playwright 視覺回歸測試：`npm run test:visual` 通過，6 個測試全部通過。
+  - Git hygiene：`git diff --check` 通過，零空白行尾或換行違規。
+
+### 核心安全與邊界聲明
+- 本系統持續嚴格遵守 `DOCS/PRODUCT_BOUNDARY.md`：無券商 API、無真實帳號連線、無自動交易或跟單功能。
+- 本地股票搜尋與啟動輸入過程 100% 於本機 SQLite 執行，零外部網路發送 (Zero Egress)。
+- 杜金龍分析核心語意維持不變；嚴禁合成 Forward EPS 或推造波浪錨點，所有未驗證項目完整保留於人工決策隊列。
+- Merge Gate: `NOT AUTHORIZED`；自動合併 / 部署：`NOT AUTHORIZED`。依規範僅開立 Draft PR。
+
+### 下一步待辦
+- 保持停止於 **READY FOR PHASE 20 FOURTH CODE REVIEW**，等待 Lukas Chiu 進行 Phase 20 第四輪代碼審查。
+
+---
+
 ## 2026-09-06 交班：Phase 20 Second Code Review 修正完成，提請 Third Code Review (LUK-79)
 
 ### 當前狀態與成果

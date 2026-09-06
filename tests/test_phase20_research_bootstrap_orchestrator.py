@@ -236,6 +236,7 @@ def test_generic_sync_terminal_triggers_second_bootstrap_enable_symbol(tmp_path)
         db_path=str(db),
         current_research_service=cur_svc,
         operations_repo=ops_repo,
+        runner_fn=lambda *args: None,
     )
     # 1. First bootstrap: waiting for unrelated SYNC
     res1 = bootstrap_svc.bootstrap_symbol("2330.TW")
@@ -256,3 +257,4 @@ def test_generic_sync_terminal_triggers_second_bootstrap_enable_symbol(tmp_path)
     assert active_op is not None
     assert active_op.operation_type == InstalledOperationType.ENABLE_SYMBOL.value
     assert json.loads(active_op.target_symbols_json) == ["2330.TW"]
+    bootstrap_svc.join_workers(timeout=2.0)

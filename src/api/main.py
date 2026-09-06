@@ -124,6 +124,10 @@ def create_app(
             scheduler.stop()
             if scheduler_instance is scheduler:
                 scheduler_instance = None
+        # Join any remaining background worker threads on app shutdown
+        for t in getattr(app.state, "background_worker_threads", []):
+            if t.is_alive():
+                t.join(timeout=2.0)
 
     app = FastAPI(
         title="台股市場研究與決策支援 API",
@@ -132,6 +136,7 @@ def create_app(
     )
     app.state.runtime_settings = runtime_settings
     app.state.runtime_readiness = _readiness_state(runtime_settings, startup_result)
+    app.state.background_worker_threads = []
 
     app.add_middleware(
         CORSMiddleware,
