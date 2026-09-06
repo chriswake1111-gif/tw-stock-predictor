@@ -39,35 +39,57 @@ export function StockResearchPage() {
       // In current mode (no as_of), trigger bootstrap readiness check
       if (!asOf) {
         setBootstrapStatus("正在檢查資料就緒狀態...");
-        const bRes = await bootstrapSymbol(canonicalSymbol);
-        if (bRes.status === "preparing" || bRes.status === "waiting_for_data_operation") {
-          setBootstrapStatus("正在準備最新已結算行情資料...");
-          if (bRes.operation_id) {
-            // Poll for completion
-            const startTime = Date.now();
+        const bootstrapStartTime = Date.now();
+
+        const pollOperation = async (opId: string, statusMessage: string): Promise<void> => {
+          setBootstrapStatus(statusMessage);
+          const startTime = Date.now();
+          const checkOp = async (): Promise<boolean> => {
+            if (Date.now() - startTime > 90000 || Date.now() - bootstrapStartTime > 180000) {
+              throw new Error("資料準備逾時，請稍後重試。");
+            }
+            const op = await getOperationDetails(opId);
+            const opStatus = (op as { status?: string }).status;
+            if (opStatus === "succeeded" || opStatus === "partial") {
+              return true;
+            } else if (opStatus === "failed" || opStatus === "cancelled" || opStatus === "interrupted") {
+              throw new Error(`行情資料準備已中斷或失敗（狀態：${opStatus}）。`);
+            }
+            return false;
+          };
+
+          const isDone = await checkOp();
+          if (!isDone) {
             await new Promise<void>((resolve, reject) => {
               const timer = setInterval(async () => {
-                if (Date.now() - startTime > 90000) {
-                  clearInterval(timer);
-                  reject(new Error("資料準備逾時（90秒），請稍後重試。"));
-                  return;
-                }
                 try {
-                  const op = await getOperationDetails(bRes.operation_id!);
-                  const opStatus = (op as { status?: string }).status;
-                  if (opStatus === "succeeded" || opStatus === "partial") {
+                  const done = await checkOp();
+                  if (done) {
                     clearInterval(timer);
                     resolve();
-                  } else if (opStatus === "failed" || opStatus === "cancelled" || opStatus === "interrupted") {
-                    clearInterval(timer);
-                    reject(new Error(`行情資料準備已中斷或失敗（狀態：${opStatus}）。`));
                   }
-                } catch {
-                  // transient polling error
+                } catch (err) {
+                  clearInterval(timer);
+                  reject(err);
                 }
               }, 1500);
             });
           }
+        };
+
+        let currentBootstrap = await bootstrapSymbol(canonicalSymbol);
+
+        // If waiting for an unrelated/global active operation:
+        if (currentBootstrap.status === "waiting_for_data_operation" && currentBootstrap.operation_id) {
+          await pollOperation(currentBootstrap.operation_id, "正在等待既有背景資料作業完成...");
+          // Re-enter bootstrap evaluation after unrelated operation finished:
+          setBootstrapStatus("背景資料作業已完成，正在為目標標的準備行情...");
+          currentBootstrap = await bootstrapSymbol(canonicalSymbol);
+        }
+
+        // If preparing target-aware operation:
+        if (currentBootstrap.status === "preparing" && currentBootstrap.operation_id) {
+          await pollOperation(currentBootstrap.operation_id, "正在準備最新已結算行情資料...");
         }
       }
 

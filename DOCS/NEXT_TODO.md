@@ -1,5 +1,47 @@
 # 專案進度與下階段待辦 (NEXT_TODO.md)
 
+## 2026-09-06 交班：Phase 20 Second Code Review 修正完成，提請 Third Code Review (LUK-79)
+
+### 當前狀態與成果
+
+- [x] **Phase 20 Second Code Review 所有審查項全部修正完畢 (P1-A, P1-B, P1-C)**:
+  - **P1-A (Waiting for Data Operation & Target-Aware Bootstrap Re-evaluation)**:
+    - 修正前端 `StockResearchPage.tsx`：區分標的專屬之 `preparing` 與全域或無關之 `waiting_for_data_operation`。當全域/無關作業達到終態 (`succeeded` 或 `partial`) 時，自動重新呼叫 `bootstrapSymbol` 重新評估，使後端能啟動帶有標的之 `ENABLE_SYMBOL` 作業，並輪詢該專屬作業完成後才載入研究摘要。
+    - 輪詢機制設定 180 秒總體截止防護 (`Date.now() > deadline`)，避免在無進展狀態下無限循環。
+    - 新增後端回歸測試 `test_generic_sync_terminal_triggers_second_bootstrap_enable_symbol` 於 `tests/test_phase20_research_bootstrap_orchestrator.py`。
+    - 新增前端 Vitest 測試 `P1-A: StockResearchPage re-evaluates bootstrap when unrelated waiting_for_data_operation terminates` 於 `frontend/src/test/phase20-usability.test.tsx`。
+  - **P1-B (Governed Technical Anchor Approval & Status Alignment)**:
+    - 修正 `CurrentResearchService.get_summary()`：修訂版狀態檢查由非領域規範的 `"active"` 改為標準之 `state.get("status") == "available"`，且審批紀錄必須為 `approval.get("decision") == "approved"`，且 `evidence_basis_rule_id in ("FB-03", "FB-04")`。
+    - 若審批為 approved 且修訂版為 available，則將 `fb_wave_anchor` 從人工決策隊列移除，並將波浪技術摘要狀態設為 `available`；若審批或修訂版為 `revoked`，嚴格 fail-closed 標記為 `needs_human_judgment` 並列入人工決策隊列。
+    - 修正符號比對 fallback，相容 `2330.TW` 與 `2330` 標的。
+    - 透過真實領域模型與 `TechnicalAnchorRepository` 撰寫完整狀態轉換與歷史隔離回歸測試 `test_summary_governed_technical_anchor_as_of` 於 `tests/test_phase20_research_summary_and_queue.py`。
+  - **P1-C (Windows Packaging Smoke Script Zero-Egress Timing & Contract Alignment)**:
+    - 修正 `.github/scripts/windows-packaging-smoke.ps1`：
+      1. 將作業系統等級的 `netstat -ano` 零外部連線 (Zero Egress) 檢查調整至伺服器 `/api/ready` 就緒後、且在任何使用者同步或啟動請求發生前立即執行，證明未提示啟動時零連線。
+      2. 搜尋回傳契約對齊真實欄位：使用 `$searchRes.results` 遍歷，斷言 `official_code`、`canonical_symbol` 與 `short_name`（非不存在的 `items` 或 `symbol`）。
+      3. 移除研究摘要中不存在的 `contract_version` 斷言，對齊真實領域模型。
+      4. 保留搜尋與摘要載入後的二次零外部連線斷言。
+- [x] **全量自動化驗證與測試狀態**:
+  - Python 全量回歸測試：**910 passed, 0 failed** in 223.14s (3m 43s)。
+  - Phase 20 專項後端測試：**34 passed, 0 failed** in 8.05s。
+  - Vitest 前端單元與元件測試：**9 files passed, 47 tests passed** in 5.02s。
+  - 前端 ESLint 審查：`npm run lint` 通過，零錯誤、零警告。
+  - 前端 TypeScript 型別審查：`npx tsc -b` 通過，零錯誤。
+  - 前端靜態資源打包：`npm run build` 通過，`production_bundle_admin_secret_gate=PASS assets=2`。
+  - Playwright 視覺回歸測試：`npm run test:visual` 通過，6 個測試全部通過。
+  - Git hygiene：`git diff --check` 通過，零空白行尾或換行違規。
+
+### 核心安全與邊界聲明
+- 本系統持續嚴格遵守 `DOCS/PRODUCT_BOUNDARY.md`：無券商 API、無真實帳號連線、無自動交易或跟單功能。
+- 本地股票搜尋與啟動輸入過程 100% 於本機 SQLite 執行，零外部網路發送 (Zero Egress)。
+- 杜金龍分析核心語意維持不變；嚴禁合成 Forward EPS 或推造波浪錨點，所有未驗證項目完整保留於人工決策隊列。
+- Merge Gate: `NOT AUTHORIZED`；自動合併 / 部署：`NOT AUTHORIZED`。依規範僅開立 Draft PR。
+
+### 下一步待辦
+- 保持停止於 **READY FOR PHASE 20 THIRD CODE REVIEW**，等待 Lukas Chiu 進行 Phase 20 第三輪代碼審查。
+
+---
+
 ## 2026-09-06 交班：Phase 20 First Code Review 修正完成，提請 Second Code Review (LUK-79)
 
 ### 當前狀態與成果

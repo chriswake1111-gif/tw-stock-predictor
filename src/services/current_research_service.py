@@ -170,17 +170,24 @@ class CurrentResearchService:
                 and "technical_anchor_approvals" in tables
             ):
                 anchor_repo = TechnicalAnchorRepository(self.db_path, auto_migrate=False)
-                anchor_states = anchor_repo.states_as_of_with_connection(
-                    conn, canonical_symbol, cutoff
-                )
-                for state in anchor_states:
-                    if (
-                        state.get("status") == "active"
-                        and state.get("approval")
-                        and state["approval"].get("decision") == "approved"
-                        and state.get("evidence_basis_rule_id") in ("FB-03", "FB-04")
-                    ):
-                        has_approved_anchors = True
+                candidate_symbols = [canonical_symbol]
+                if "." in canonical_symbol:
+                    candidate_symbols.append(canonical_symbol.split(".")[0])
+                for sym in candidate_symbols:
+                    anchor_states = anchor_repo.states_as_of_with_connection(
+                        conn, sym, cutoff
+                    )
+                    for state in anchor_states:
+                        approval = state.get("approval")
+                        if (
+                            state.get("status") == "available"
+                            and approval is not None
+                            and approval.get("decision") == "approved"
+                            and state.get("evidence_basis_rule_id") in ("FB-03", "FB-04")
+                        ):
+                            has_approved_anchors = True
+                            break
+                    if has_approved_anchors:
                         break
 
             if has_approved_anchors:

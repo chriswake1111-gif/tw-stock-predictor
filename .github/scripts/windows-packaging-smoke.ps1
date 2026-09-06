@@ -321,6 +321,19 @@ try {
     $ready = Invoke-RestMethod -Uri "$($descriptor.origin)/api/ready" -UseBasicParsing -TimeoutSec 15
     Assert-True ($ready.contract_version -eq "tw_stock_ready_v1") "readiness contract mismatch"
     Assert-True ($ready.ready -eq $true) "packaged server did not become ready"
+
+    # Assert zero external egress on packaged startup prior to any explicit user action (P1-C)
+    Write-Host "Smoke assertion: Zero external egress on startup before explicit user action"
+    $startupNetstat = netstat -ano | Select-String "\s+$serverPid$"
+    foreach ($line in $startupNetstat) {
+        $parts = ($line.Line.Trim() -split '\s+')
+        if ($parts.Length -ge 3) {
+            $remote = $parts[2]
+            Assert-True ($remote -match '^(127\.0\.0\.1|0\.0\.0\.0|\[::1?\]|\*):' -or $remote -eq "*:*") `
+                "External socket connection detected on server process before explicit user action: $remote"
+        }
+    }
+
     $daily = Invoke-WebRequest -Uri "$($descriptor.origin)/research/daily" -UseBasicParsing -TimeoutSec 15
     Assert-True ($daily.StatusCode -eq 200) "research/daily did not return HTTP 200"
 
@@ -371,9 +384,10 @@ try {
     Assert-True ($null -ne $coverageRes.universe_status) "universe coverage status missing"
 
     $searchRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/universe/search?q=2330" -UseBasicParsing -TimeoutSec 15
-    Assert-True ($searchRes.items.Count -ge 1) "Local search for 2330 returned no items"
-    Assert-True ($searchRes.items[0].symbol -eq "2330") "First search item symbol is not 2330"
-    Assert-True ($null -ne $searchRes.items[0].short_name) "First search item missing short_name"
+    Assert-True ($searchRes.results.Count -ge 1) "Local search for 2330 returned no results"
+    Assert-True ($searchRes.results[0].official_code -eq "2330") "First search item official_code is not 2330"
+    Assert-True ($searchRes.results[0].canonical_symbol -eq "2330.TW") "First search item canonical_symbol is not 2330.TW"
+    Assert-True ($null -ne $searchRes.results[0].short_name) "First search item missing short_name"
 
     # 5c. Bootstrap research symbol for 2330.TW
     $bootstrapBody = @{ canonical_symbol = "2330.TW" } | ConvertTo-Json
@@ -388,20 +402,22 @@ try {
     # 5d. Research summary verification (settled close, decision queue, audit reference)
     $summaryRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/summary/2330.TW" -UseBasicParsing -TimeoutSec 15
     Assert-True ($summaryRes.canonical_symbol -eq "2330.TW") "Research summary canonical_symbol mismatch"
+    Assert-True ($summaryRes.official_code -eq "2330") "Research summary official_code mismatch"
     Assert-True ($null -ne $summaryRes.market_context) "Research summary missing market_context"
     Assert-True ($null -ne $summaryRes.valuation_context) "Research summary missing valuation_context"
     Assert-True ($null -ne $summaryRes.technical_context) "Research summary missing technical_context"
     Assert-True ($null -ne $summaryRes.human_decision_queue) "Research summary missing human_decision_queue"
     Assert-True ($null -ne $summaryRes.audit_reference) "Research summary missing audit_reference"
-    Assert-True ($null -ne $summaryRes.contract_version) "Research summary missing contract_version"
+    Assert-True ($null -ne $summaryRes.knowledge_cutoff_at) "Research summary missing knowledge_cutoff_at"
 
-    # 5e. Zero external egress assertion for server process
+    # 5e. Zero external egress assertion for server process after local search & summary
     $netstatOut = netstat -ano | Select-String "\s+$serverPid$"
     foreach ($line in $netstatOut) {
         $parts = ($line.Line.Trim() -split '\s+')
         if ($parts.Length -ge 3) {
             $remote = $parts[2]
-            Assert-True ($remote -match '^(127\.0\.0\.1|0\.0\.0\.0|\[::1?\]|\*):' -or $remote -eq "*:*") "External socket connection detected on server process: $remote"
+            Assert-True ($remote -match '^(127\.0\.0\.1|0\.0\.0\.0|\[::1?\]|\*):' -or $remote -eq "*:*") `
+                "External socket connection detected on server process during local search/summary: $remote"
         }
     }
 

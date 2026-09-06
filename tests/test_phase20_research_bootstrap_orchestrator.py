@@ -220,3 +220,39 @@ def test_bootstrap_returns_waiting_when_active_sync_operation_has_empty_targets(
     assert res["status"] == "waiting_for_data_operation"
     assert res["canonical_symbol"] == "2330.TW"
     assert res["operation_id"] == "op_generic_sync"
+
+
+def test_generic_sync_terminal_triggers_second_bootstrap_enable_symbol(tmp_path):
+    """P1-A regression: Generic SYNC (empty targets) reaches terminal state, second bootstrap launches ENABLE_SYMBOL."""
+    db, cur_svc, ops_repo = _setup_db(tmp_path)
+    ops_repo.create_operation(
+        operation_id="op_generic_sync",
+        operation_type=InstalledOperationType.SYNC.value,
+        lease_owner_id="owner-1",
+        target_symbols=[],
+    )
+
+    bootstrap_svc = ResearchBootstrapService(
+        db_path=str(db),
+        current_research_service=cur_svc,
+        operations_repo=ops_repo,
+    )
+    # 1. First bootstrap: waiting for unrelated SYNC
+    res1 = bootstrap_svc.bootstrap_symbol("2330.TW")
+    assert res1["status"] == "waiting_for_data_operation"
+    assert res1["operation_id"] == "op_generic_sync"
+
+    # 2. Unrelated SYNC reaches terminal state
+    ops_repo.finalize_operation("op_generic_sync", status="succeeded")
+
+    # 3. Second bootstrap: no active operation, launches ENABLE_SYMBOL for 2330.TW
+    res2 = bootstrap_svc.bootstrap_symbol("2330.TW")
+    assert res2["status"] == "preparing"
+    assert res2["canonical_symbol"] == "2330.TW"
+    assert res2["operation_id"] != "op_generic_sync"
+
+    # Verify created operation
+    active_op = ops_repo.get_operation_by_id(res2["operation_id"])
+    assert active_op is not None
+    assert active_op.operation_type == InstalledOperationType.ENABLE_SYMBOL.value
+    assert json.loads(active_op.target_symbols_json) == ["2330.TW"]

@@ -285,4 +285,86 @@ describe("Phase 20 Usability & Bootstrap Tests", () => {
       });
     });
   });
+
+  it("P1-A: StockResearchPage re-evaluates bootstrap when unrelated waiting_for_data_operation terminates", async () => {
+    let bootstrapCallCount = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/csrf-token")) {
+        return new Response(JSON.stringify({ csrf_token: "mock-csrf" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/research/bootstrap")) {
+        bootstrapCallCount += 1;
+        if (bootstrapCallCount === 1) {
+          // First bootstrap returns waiting_for_data_operation (unrelated global sync)
+          return new Response(
+            JSON.stringify({
+              status: "waiting_for_data_operation",
+              canonical_symbol: "2330.TW",
+              operation_id: "op_global_sync",
+              message: "Another operation is active",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        // Second bootstrap returns preparing (target-aware ENABLE_SYMBOL)
+        return new Response(
+          JSON.stringify({
+            status: "preparing",
+            canonical_symbol: "2330.TW",
+            operation_id: "op_target_enable",
+            message: "Target enable started",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.includes("op_global_sync")) {
+        return new Response(
+          JSON.stringify({ operation_id: "op_global_sync", status: "succeeded" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.includes("op_target_enable")) {
+        return new Response(
+          JSON.stringify({ operation_id: "op_target_enable", status: "succeeded" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.includes("/research/summary/2330.TW")) {
+        return new Response(
+          JSON.stringify({
+            canonical_symbol: "2330.TW",
+            official_code: "2330",
+            venue: "TWSE",
+            company_name: "台積電",
+            market_context: {
+              settled_trade_date: "2026-09-04",
+              official_close: 980.0,
+              close_status: "available",
+              is_market_closed: true,
+              market_status_label: "已正式結算收盤",
+            },
+            valuation_context: { status: "available" },
+            technical_context: { status: "available" },
+            screening_context: {},
+            human_decision_queue: [],
+            audit_reference: { model_version: "2.0.0" },
+            knowledge_cutoff_at: "2026-09-04T16:00:00Z",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+
+    renderWithProviders(<App />, "/stocks/2330.TW");
+
+    await waitFor(() => {
+      expect(bootstrapCallCount).toBe(2);
+      expect(screen.getByText(/980.00 元/)).toBeInTheDocument();
+    });
+  });
 });

@@ -8,6 +8,13 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from src.api.main import create_app
+from src.domain.technical_anchor import (
+    AnchorPoint,
+    AnchorRevisionStatus,
+    AnchorRole,
+    ManualAnchorSetRevision,
+    TechnicalAnchorApproval,
+)
 from src.domain.valuation import (
     ApprovalResourceType,
     ApprovalStatus,
@@ -16,6 +23,7 @@ from src.domain.valuation import (
     ValuationApproval,
 )
 from src.repositories.forward_eps_repository import ForwardEPSRepository
+from src.repositories.technical_anchor_repository import TechnicalAnchorRepository
 from src.repositories.migration_runner import apply_valuation_migration
 from src.runtime.paths import RuntimePaths
 from src.runtime.settings import RuntimeSettings
@@ -400,3 +408,162 @@ def test_summary_governed_forward_eps_and_technical_anchor_as_of(tmp_path):
     summary_revoked = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
     assert summary_revoked["valuation_context"]["status"] == "needs_human_judgment"
     assert any(item["rule_id"] == "VAL-02" for item in summary_revoked["human_decision_queue"])
+
+
+def test_summary_governed_technical_anchor_as_of(tmp_path):
+    """P1-B: Technical anchor approved path must become available, revoked/cutoff must fail closed."""
+    db, service = _setup_db(tmp_path)
+    with sqlite3.connect(db) as conn:
+        _insert_universe_instrument(conn, official_code="2330", display_name="台積電", short_name="台積電")
+        _insert_snapshot_and_observation(conn, date="2026-09-04", official_code="2330", close="980.0")
+
+    anchor_repo = TechnicalAnchorRepository(str(db), auto_migrate=False)
+
+    # 1. Before any technical anchor: needs human judgment, FB-03/FB-04 in queue
+    s_init = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert s_init["technical_context"]["status"] == "needs_human_judgment"
+    assert any(item["rule_id"] == "FB-03/FB-04" for item in s_init["human_decision_queue"])
+
+    # 2. Add available anchor revision (FB-04)
+    rev1 = anchor_repo.add_anchor_revision(
+        ManualAnchorSetRevision(
+            logical_anchor_set_id="2330-fb04-1",
+            revision_number=1,
+            revision_of=None,
+            symbol="2330",
+            evidence_basis_rule_id="FB-04",
+            anchors=(
+                AnchorPoint(AnchorRole.ORIGIN, 800.0, "2026-01-10"),
+                AnchorPoint(AnchorRole.SWING_END, 950.0, "2026-01-20"),
+            ),
+            available_at="2026-09-01T08:00:00Z",
+            created_by="reviewer",
+            source="manual_research",
+            status=AnchorRevisionStatus.AVAILABLE,
+        ),
+        idempotency_key="idemp-anchor-1",
+        ingested_at="2026-09-01T08:00:00Z",
+    )
+
+    # Before approval: still needs human judgment
+    s_unapproved = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert s_unapproved["technical_context"]["status"] == "needs_human_judgment"
+    assert any(item["rule_id"] == "FB-03/FB-04" for item in s_unapproved["human_decision_queue"])
+
+    # 3. Add approved approval (effective as of 2026-09-02)
+    anchor_repo.add_approval(
+        TechnicalAnchorApproval(
+            approval_id="app-anchor-1",
+            anchor_revision_id=rev1["id"],
+            decision=ApprovalStatus.APPROVED,
+            rule_id="FB-04",
+            rule_version="2.0.0",
+            evidence_level="A",
+            implementation_mode="verified_core",
+            project_operationalization=False,
+            approved_by="lead_technical_analyst",
+            rationale="Approved FB-04 wave anchor geometry",
+            approved_at="2026-09-02T08:00:00Z",
+        ),
+        idempotency_key="idemp-app-anchor-1",
+        ingested_at="2026-09-02T08:00:00Z",
+    )
+
+    # Query before approval cutoff: cutoff isolation, needs judgment
+    s_before_app = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-01T12:00:00Z")
+    assert s_before_app["technical_context"]["status"] == "needs_human_judgment"
+    assert any(item["rule_id"] == "FB-03/FB-04" for item in s_before_app["human_decision_queue"])
+
+    # Query after approval cutoff: available, FB item removed from decision queue
+    s_approved = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert s_approved["technical_context"]["status"] == "available"
+    assert s_approved["technical_context"]["reason_code"] is None
+    assert not any(item["rule_id"] == "FB-03/FB-04" for item in s_approved["human_decision_queue"])
+
+    # 4. Later approval is revoked: reverts to needs_human_judgment
+    anchor_repo.add_approval(
+        TechnicalAnchorApproval(
+            approval_id="app-anchor-2",
+            anchor_revision_id=rev1["id"],
+            decision=ApprovalStatus.REVOKED,
+            rule_id="FB-04",
+            rule_version="2.0.0",
+            evidence_level="A",
+            implementation_mode="verified_core",
+            project_operationalization=False,
+            approved_by="compliance_officer",
+            rationale="Revoked due to structural break",
+            approved_at="2026-09-03T08:00:00Z",
+        ),
+        idempotency_key="idemp-app-anchor-2",
+        ingested_at="2026-09-03T08:00:00Z",
+    )
+    s_revoked_app = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert s_revoked_app["technical_context"]["status"] == "needs_human_judgment"
+    assert any(item["rule_id"] == "FB-03/FB-04" for item in s_revoked_app["human_decision_queue"])
+
+    # 5. New logical anchor set where rev 1 is approved, but rev 2 is revoked
+    rev2_1 = anchor_repo.add_anchor_revision(
+        ManualAnchorSetRevision(
+            logical_anchor_set_id="2330-fb03-set2",
+            revision_number=1,
+            revision_of=None,
+            symbol="2330.TW",
+            evidence_basis_rule_id="FB-03",
+            anchors=(
+                AnchorPoint(AnchorRole.ORIGIN, 820.0, "2026-01-10"),
+                AnchorPoint(AnchorRole.SWING_END, 960.0, "2026-01-20"),
+                AnchorPoint(AnchorRole.PROJECTION_ORIGIN, 880.0, "2026-01-25"),
+            ),
+            available_at="2026-09-03T09:00:00Z",
+            created_by="reviewer",
+            source="manual_research",
+            status=AnchorRevisionStatus.AVAILABLE,
+        ),
+        idempotency_key="idemp-anchor-set2-r1",
+        ingested_at="2026-09-03T09:00:00Z",
+    )
+    anchor_repo.add_approval(
+        TechnicalAnchorApproval(
+            approval_id="app-anchor-set2-1",
+            anchor_revision_id=rev2_1["id"],
+            decision=ApprovalStatus.APPROVED,
+            rule_id="FB-03",
+            rule_version="2.0.0",
+            evidence_level="A",
+            implementation_mode="verified_core",
+            project_operationalization=False,
+            approved_by="lead_technical_analyst",
+            rationale="Approved FB-03 wave anchor",
+            approved_at="2026-09-03T10:00:00Z",
+        ),
+        idempotency_key="idemp-app-set2-1",
+        ingested_at="2026-09-03T10:00:00Z",
+    )
+    s_set2_app = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-03T12:00:00Z")
+    assert s_set2_app["technical_context"]["status"] == "available"
+
+    # Add rev 2 with revoked status
+    anchor_repo.add_anchor_revision(
+        ManualAnchorSetRevision(
+            logical_anchor_set_id="2330-fb03-set2",
+            revision_number=2,
+            revision_of=rev2_1["id"],
+            symbol="2330.TW",
+            evidence_basis_rule_id="FB-03",
+            anchors=(
+                AnchorPoint(AnchorRole.ORIGIN, 820.0, "2026-01-10"),
+                AnchorPoint(AnchorRole.SWING_END, 960.0, "2026-01-20"),
+                AnchorPoint(AnchorRole.PROJECTION_ORIGIN, 880.0, "2026-01-25"),
+            ),
+            available_at="2026-09-03T14:00:00Z",
+            created_by="reviewer",
+            source="manual_research",
+            status=AnchorRevisionStatus.REVOKED,
+        ),
+        idempotency_key="idemp-anchor-set2-r2",
+        ingested_at="2026-09-03T14:00:00Z",
+    )
+    s_set2_revoked = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert s_set2_revoked["technical_context"]["status"] == "needs_human_judgment"
+    assert any(item["rule_id"] == "FB-03/FB-04" for item in s_set2_revoked["human_decision_queue"])
