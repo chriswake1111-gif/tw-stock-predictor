@@ -1,0 +1,198 @@
+"""Research bootstrap orchestrator service for installed stock research."""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import threading
+import time
+from typing import Any, Callable
+
+from src.domain.installed_data_operations import (
+    BackgroundWorkerThread,
+    InstalledOperationStatus,
+    InstalledOperationType,
+    OperationActiveConflict,
+    OperationCancelled,
+)
+from src.domain.universe import parse_canonical_symbol
+from src.repositories.current_research_repository import CurrentResearchRepository
+from src.repositories.installed_data_operations_repository import (
+    InstalledDataOperationsRepository,
+)
+from src.services.current_research_service import CurrentResearchService
+from src.services.installed_data_sync_service import (
+    GLOBAL_OPERATION_DEADLINE_SECONDS,
+    InstalledDataSyncService,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class ResearchBootstrapService:
+    def __init__(
+        self,
+        db_path: str = "data/cache.db",
+        runtime_instance_id: str | None = None,
+        *,
+        current_research_service: CurrentResearchService | None = None,
+        operations_repo: InstalledDataOperationsRepository | None = None,
+        sync_service: InstalledDataSyncService | None = None,
+        runner_fn: Callable[[str, Any, float], None] | None = None,
+        worker_registry: list[threading.Thread] | None = None,
+    ):
+        self.db_path = os.getenv("DATABASE_PATH", db_path)
+        self.runtime_instance_id = runtime_instance_id or "installed-runtime"
+        self.current_research_service = current_research_service or CurrentResearchService(
+            self.db_path,
+            repository=CurrentResearchRepository(self.db_path),
+        )
+        self.operations_repo = operations_repo or InstalledDataOperationsRepository(self.db_path)
+        self.sync_service = sync_service or InstalledDataSyncService(
+            db_path=self.db_path,
+            runtime_instance_id=self.runtime_instance_id,
+        )
+        self.runner_fn = runner_fn
+        self.worker_threads: list[threading.Thread] = []
+        self.worker_registry = worker_registry
+
+    def join_workers(self, timeout: float = 5.0) -> None:
+        """Join any background worker threads started by this service."""
+        for t in self.worker_threads:
+            if hasattr(t, "request_stop"):
+                t.request_stop()
+            if t.is_alive():
+                t.join(timeout=timeout)
+
+    def bootstrap_symbol(self, canonical_symbol: str) -> dict[str, Any]:
+        """Bootstrap research readiness for canonical_symbol.
+
+        Evaluates installed readiness, active data operations, and target coverage.
+        Maps active conflicts gracefully without raw errors.
+        """
+        parse_canonical_symbol(canonical_symbol)
+
+        # 1. Check if current settled research is already available
+        context = self.current_research_service.get_context(canonical_symbol)
+        official_close = context.get("official_close") or {}
+        if official_close.get("status") == "available":
+            return {
+                "status": "ready",
+                "canonical_symbol": canonical_symbol,
+                "operation_id": None,
+                "message": f"Research data for {canonical_symbol} is ready",
+            }
+
+        # 2. Check if an operation is currently active
+        active = self.operations_repo.get_active_operation()
+        if active is not None:
+            try:
+                targets = json.loads(active.target_symbols_json or "[]")
+            except Exception:
+                targets = []
+
+            # Does active operation explicitly cover this symbol?
+            if canonical_symbol in targets:
+                return {
+                    "status": "preparing",
+                    "canonical_symbol": canonical_symbol,
+                    "operation_id": active.operation_id,
+                    "message": f"Data operation {active.operation_id} is preparing research data",
+                }
+            # Active operation does not cover target (generic SYNC/BOOTSTRAP with empty targets or different target)
+            return {
+                "status": "waiting_for_data_operation",
+                "canonical_symbol": canonical_symbol,
+                "operation_id": active.operation_id,
+                "message": f"Another data operation ({active.operation_id}) is currently active",
+            }
+
+        # 3. No active operation: Launch ENABLE_SYMBOL operation
+        try:
+            op_id, auth = self.sync_service.create_operation_and_capability(
+                operation_type=InstalledOperationType.ENABLE_SYMBOL.value,
+                target_symbols=[canonical_symbol],
+            )
+        except OperationActiveConflict:
+            active_after = self.operations_repo.get_active_operation()
+            op_id_after = active_after.operation_id if active_after else None
+            return {
+                "status": "waiting_for_data_operation",
+                "canonical_symbol": canonical_symbol,
+                "operation_id": op_id_after,
+                "message": "Another data operation is currently active",
+            }
+
+        deadline_monotonic = time.monotonic() + GLOBAL_OPERATION_DEADLINE_SECONDS
+        sync_svc = self.sync_service
+        stop_event = threading.Event()
+
+        def _run_bg():
+            try:
+                if self.runner_fn is not None:
+                    self.runner_fn(op_id, auth, deadline_monotonic)
+                else:
+                    sync_svc.run_symbol_enablement_pipeline(
+                        op_id,
+                        auth,
+                        canonical_symbol,
+                        deadline_monotonic,
+                        stop_event=stop_event,
+                    )
+            except OperationCancelled as exc:
+                logger.info("Background bootstrap operation %s cancelled/interrupted: %s", op_id, exc)
+                try:
+                    auth.revoke()
+                    sync_svc.operation_repo.finalize_operation(
+                        op_id,
+                        status=InstalledOperationStatus.INTERRUPTED.value,
+                        error_detail=str(exc),
+                    )
+                except Exception:
+                    pass
+            except Exception as exc:
+                logger.exception("Background bootstrap operation %s failed: %s", op_id, exc)
+                try:
+                    auth.revoke()
+                    err_msg = str(exc)
+                    is_partial = (
+                        "not an authorized trading session" in err_msg
+                        or "calendar proof missing" in err_msg
+                        or "proof missing" in err_msg
+                    )
+                    status = (
+                        InstalledOperationStatus.PARTIAL.value
+                        if is_partial
+                        else InstalledOperationStatus.FAILED.value
+                    )
+                    sync_svc.operation_repo.finalize_operation(
+                        op_id,
+                        status=status,
+                        error_detail=err_msg,
+                    )
+                except Exception:
+                    pass
+
+        worker = BackgroundWorkerThread(
+            target=_run_bg,
+            name=f"bootstrap-{op_id}",
+            operation_id=op_id,
+            auth=auth,
+            stop_event=stop_event,
+            daemon=True,
+        )
+        self.worker_threads.append(worker)
+        if self.worker_registry is not None:
+            self.worker_registry.append(worker)
+        worker.start()
+
+        return {
+            "status": "preparing",
+            "canonical_symbol": canonical_symbol,
+            "operation_id": op_id,
+            "message": f"Bootstrap operation {op_id} started for {canonical_symbol}",
+        }
+
+
+__all__ = ["ResearchBootstrapService"]

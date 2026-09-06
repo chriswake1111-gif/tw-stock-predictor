@@ -2,6 +2,8 @@ import os
 import sys
 import logging
 import inspect
+import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -20,10 +22,12 @@ from src.api.routes.v2_valuation import router as v2_valuation_router
 from src.api.routes.research_workflow import router as research_workflow_router
 from src.api.routes.daily_research import router as daily_research_router
 from src.api.routes.v2_universe import router as v2_universe_router
+from src.api.routes.v2_universe_search import router as v2_universe_search_router
 from src.api.routes.v2_eod_close import router as v2_eod_close_router
 from src.api.routes.v2_eod_coverage import router as v2_eod_coverage_router
 from src.api.routes.v2_market_context import router as v2_market_context_router
 from src.api.routes.installed_data_operations import router as data_operations_router
+from src.api.routes.v2_research import router as v2_research_router
 from src.api.routes.runtime import router as runtime_router
 from src.api.workflow_security import ResearchBoundaryMiddleware
 from src.api.workflow_security import ResearchSecurityConfig, parse_research_origin
@@ -122,6 +126,48 @@ def create_app(
             scheduler.stop()
             if scheduler_instance is scheduler:
                 scheduler_instance = None
+        # Deterministic worker shutdown and bounded quiescence contract
+        if hasattr(app.state, "worker_shutdown_event"):
+            app.state.worker_shutdown_event.set()
+
+        workers = list(getattr(app.state, "background_worker_threads", []))
+        for t in workers:
+            if hasattr(t, "request_stop"):
+                t.request_stop()
+
+        try:
+            from src.domain.installed_data_operations import InstalledOperationStatus
+            from src.repositories.installed_data_operations_repository import (
+                InstalledDataOperationsRepository,
+            )
+
+            db_path = str(runtime_settings.paths.database_path)
+            op_repo = InstalledDataOperationsRepository(db_path)
+            active = op_repo.get_active_operation()
+            if active is not None:
+                op_repo.finalize_operation(
+                    active.operation_id,
+                    status=InstalledOperationStatus.INTERRUPTED.value,
+                    error_detail="Operation interrupted by application shutdown",
+                )
+        except Exception as exc:
+            logger.warning("Failed to mark active operation interrupted on shutdown: %s", exc)
+
+        shutdown_timeout = float(os.getenv("WORKER_SHUTDOWN_TIMEOUT_SECONDS", "10.0"))
+        join_deadline = time.monotonic() + shutdown_timeout
+        alive_workers = []
+        for t in workers:
+            if t.is_alive():
+                remaining = max(0.05, join_deadline - time.monotonic())
+                t.join(timeout=remaining)
+                if t.is_alive():
+                    alive_workers.append(t)
+
+        if alive_workers:
+            alive_names = [getattr(t, "name", str(t)) for t in alive_workers]
+            raise RuntimeError(
+                f"Deterministic shutdown failed: background workers {alive_names} did not quiesce within deadline"
+            )
 
     app = FastAPI(
         title="台股市場研究與決策支援 API",
@@ -130,6 +176,8 @@ def create_app(
     )
     app.state.runtime_settings = runtime_settings
     app.state.runtime_readiness = _readiness_state(runtime_settings, startup_result)
+    app.state.background_worker_threads = []
+    app.state.worker_shutdown_event = threading.Event()
 
     app.add_middleware(
         CORSMiddleware,
@@ -147,9 +195,11 @@ def create_app(
     app.include_router(research_workflow_router)
     app.include_router(daily_research_router)
     app.include_router(v2_universe_router)
+    app.include_router(v2_universe_search_router)
     app.include_router(v2_eod_close_router)
     app.include_router(v2_eod_coverage_router)
     app.include_router(v2_market_context_router)
+    app.include_router(v2_research_router)
     app.include_router(data_operations_router)
     app.include_router(runtime_router)
     app.include_router(core_router)

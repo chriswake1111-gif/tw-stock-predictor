@@ -137,9 +137,9 @@ class InstalledDataSyncService:
             authorization.revoke()
             raise OperationNotFound(f"Operation {operation_id} not found")
 
-        if row.status in ("cancelling", "cancelled"):
+        if row.status in ("cancelling", "cancelled", "interrupted"):
             authorization.revoke()
-            raise OperationCancelled(f"Operation {operation_id} was cancelled")
+            raise OperationCancelled(f"Operation {operation_id} was {row.status}")
 
         if row.status != InstalledOperationStatus.RUNNING.value:
             authorization.revoke()
@@ -371,7 +371,7 @@ class InstalledDataSyncService:
                     received_at=now,
                     ingested_at=now,
                     raw_payload_sha256=raw_hash,
-                    parser_version="1",
+                    parser_version="2.0.0",
                     schema_fingerprint=sha256_text("phase13"),
                     storage_policy=StoragePolicy.ARCHIVE_RAW,
                     quality_status=DataHealthStatus.FRESH,
@@ -389,6 +389,19 @@ class InstalledDataSyncService:
             twse_accepted = 0
             twse_rejected = 0
             twse_errors: list[str] = []
+            twse_prev_by_key: dict[str, dict[str, Any]] = {}
+            with universe_repo._connect() as conn:
+                for p_row in conn.execute(
+                    """
+                    SELECT logical_revision_key, universe_revision_id, revision_number
+                    FROM universe_revisions
+                    WHERE resource_id = ?
+                    ORDER BY revision_number ASC
+                    """,
+                    ("twse-universe-master",),
+                ).fetchall():
+                    twse_prev_by_key[str(p_row["logical_revision_key"])] = dict(p_row)
+
             for idx, r in enumerate(rows):
                 if idx % 50 == 0:
                     self._extend_lease_if_needed(operation_id, authorization)
@@ -407,6 +420,11 @@ class InstalledDataSyncService:
                     or r.get("CompanyName")
                     or ""
                 ).strip()
+                short_n = str(r.get("short_name") or r.get("公司簡稱") or "").strip()
+                logical_rev_key = f"twse:{c}:master"
+                prev_rev = twse_prev_by_key.get(logical_rev_key)
+                payload_supersedes_id = str(prev_rev["universe_revision_id"]) if prev_rev else None
+                next_univ_rev_number = int(prev_rev["revision_number"]) + 1 if prev_rev else 1
                 try:
                     anchor = identity_repo.get_or_create(
                         venue="TWSE",
@@ -418,18 +436,19 @@ class InstalledDataSyncService:
                     )
                     universe_ingestion.ingest_revision(
                         context=u_ctx_twse,
-                        idempotency_key=f"univ-twse-{c}-{raw['raw_resource_revision_id']}",
+                        idempotency_key=f"univ-twse-v2-{c}-{raw['raw_resource_revision_id']}",
                         raw_resource_revision_id=raw["raw_resource_revision_id"],
                         raw_payload_sha256=raw_hash,
                         instrument_id=anchor["instrument_id"],
                         resource_id="twse-universe-master",
-                        logical_revision_key=f"twse:{c}:master",
-                        revision_number=1,
+                        logical_revision_key=logical_rev_key,
+                        revision_number=next_univ_rev_number,
                         payload={
                             "venue": "TWSE",
                             "official_code": c,
                             "canonical_symbol": f"{c}.TW",
                             "display_name": n,
+                            "short_name": short_n,
                             "security_type": "股票",
                             "fetched_at": now,
                             "received_at": now,
@@ -443,6 +462,8 @@ class InstalledDataSyncService:
                             "coverage_complete": True,
                             "raw_resource_revision_id": raw["raw_resource_revision_id"],
                             "raw_payload_sha256": raw_hash,
+                            "parser_version": "2.0.0",
+                            "supersedes_revision_id": payload_supersedes_id,
                         },
                     )
                     listing_d = _parse_source_listing_date(
@@ -508,7 +529,7 @@ class InstalledDataSyncService:
                     status=twse_item_status,
                     quality_status=DataHealthStatus.FRESH if twse_rejected == 0 else DataHealthStatus.PARTIAL,
                     raw_payload_sha256=raw_hash,
-                    parser_version="1",
+                    parser_version="2.0.0",
                     schema_fingerprint=sha256_text("phase13"),
                     record_count=len(rows),
                     accepted_count=twse_accepted,
@@ -600,7 +621,7 @@ class InstalledDataSyncService:
                     received_at=now,
                     ingested_at=now,
                     raw_payload_sha256=raw_hash,
-                    parser_version="1",
+                    parser_version="2.0.0",
                     schema_fingerprint=sha256_text("phase13"),
                     storage_policy=StoragePolicy.ARCHIVE_RAW,
                     quality_status=DataHealthStatus.FRESH,
@@ -618,6 +639,19 @@ class InstalledDataSyncService:
             tpex_accepted = 0
             tpex_rejected = 0
             tpex_errors: list[str] = []
+            tpex_prev_by_key: dict[str, dict[str, Any]] = {}
+            with universe_repo._connect() as conn:
+                for p_row in conn.execute(
+                    """
+                    SELECT logical_revision_key, universe_revision_id, revision_number
+                    FROM universe_revisions
+                    WHERE resource_id = ?
+                    ORDER BY revision_number ASC
+                    """,
+                    ("tpex-universe-master",),
+                ).fetchall():
+                    tpex_prev_by_key[str(p_row["logical_revision_key"])] = dict(p_row)
+
             for idx, r in enumerate(rows):
                 if idx % 50 == 0:
                     self._extend_lease_if_needed(operation_id, authorization)
@@ -636,6 +670,11 @@ class InstalledDataSyncService:
                     or r.get("公司名稱")
                     or ""
                 ).strip()
+                short_n = str(r.get("short_name") or r.get("CompanyAbbreviation") or "").strip()
+                logical_rev_key = f"tpex:{c}:master"
+                prev_rev = tpex_prev_by_key.get(logical_rev_key)
+                payload_supersedes_id = str(prev_rev["universe_revision_id"]) if prev_rev else None
+                next_univ_rev_number = int(prev_rev["revision_number"]) + 1 if prev_rev else 1
                 try:
                     anchor = identity_repo.get_or_create(
                         venue="TPEX",
@@ -647,18 +686,19 @@ class InstalledDataSyncService:
                     )
                     universe_ingestion.ingest_revision(
                         context=u_ctx_tpex,
-                        idempotency_key=f"univ-tpex-{c}-{raw['raw_resource_revision_id']}",
+                        idempotency_key=f"univ-tpex-v2-{c}-{raw['raw_resource_revision_id']}",
                         raw_resource_revision_id=raw["raw_resource_revision_id"],
                         raw_payload_sha256=raw_hash,
                         instrument_id=anchor["instrument_id"],
                         resource_id="tpex-universe-master",
-                        logical_revision_key=f"tpex:{c}:master",
-                        revision_number=1,
+                        logical_revision_key=logical_rev_key,
+                        revision_number=next_univ_rev_number,
                         payload={
                             "venue": "TPEX",
                             "official_code": c,
                             "canonical_symbol": f"{c}.TWO",
                             "display_name": n,
+                            "short_name": short_n,
                             "security_type": "股票",
                             "fetched_at": now,
                             "received_at": now,
@@ -672,6 +712,8 @@ class InstalledDataSyncService:
                             "coverage_complete": True,
                             "raw_resource_revision_id": raw["raw_resource_revision_id"],
                             "raw_payload_sha256": raw_hash,
+                            "parser_version": "2.0.0",
+                            "supersedes_revision_id": payload_supersedes_id,
                         },
                     )
                     listing_d_tpex = _parse_source_listing_date(
@@ -737,7 +779,7 @@ class InstalledDataSyncService:
                     status=tpex_item_status,
                     quality_status=DataHealthStatus.FRESH if tpex_rejected == 0 else DataHealthStatus.PARTIAL,
                     raw_payload_sha256=raw_hash,
-                    parser_version="1",
+                    parser_version="2.0.0",
                     schema_fingerprint=sha256_text("phase13"),
                     record_count=len(rows),
                     accepted_count=tpex_accepted,
@@ -1793,12 +1835,21 @@ class InstalledDataSyncService:
         authorization: InstalledWriteAuthorization,
         symbol: str,
         deadline_monotonic: float | None = None,
+        stop_event: threading.Event | None = None,
     ) -> None:
         """Executes the full approved symbol enablement flow:
 
         classify -> refetch exact official venue EOD -> validate session ->
         reload identity/classification -> governed EOD materialization (Phase 14) -> readiness refresh
         """
+        def _check_cancelled() -> None:
+            if stop_event is not None and stop_event.is_set():
+                authorization.revoke()
+                raise OperationCancelled(f"Operation {operation_id} was interrupted by server shutdown")
+            if authorization.revoked:
+                raise OperationAuthorizationRevoked("capability_revoked_or_missing")
+
+        _check_cancelled()
         clean_sym = symbol.strip().upper()
         code = clean_sym.split(".")[0]
         venue = "TPEX" if clean_sym.endswith(".TWO") else "TWSE"
@@ -1814,6 +1865,7 @@ class InstalledDataSyncService:
         self._require_live_write_authorization(
             operation_id, authorization, TWSE_ISIN_CLASSIFICATION_RESOURCE_ID
         )
+        _check_cancelled()
         isin_item = f"item_{uuid4().hex}"
         self.operation_repo.create_item(
             item_id=isin_item,
@@ -1850,6 +1902,7 @@ class InstalledDataSyncService:
             raw_resource_revision_id=ingest_res.get("raw_resource_revision_id"),
         )
 
+        _check_cancelled()
         # 2. Refetch exact official venue EOD
         eod_url = (
             "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
@@ -1942,6 +1995,7 @@ class InstalledDataSyncService:
                 f"state={classification_context.get('classification_state') if classification_context else 'missing'}"
             )
 
+        _check_cancelled()
         # 5. Governed EOD materialization using approved Phase 14 path with bound contexts
         self._require_live_write_authorization(operation_id, authorization, venue_resource)
         eod_item = f"item_{uuid4().hex}"
@@ -1996,6 +2050,7 @@ class InstalledDataSyncService:
             )
             raise ValueError(f"symbol {code} did not become publicly eligible after eod materialization")
 
+        _check_cancelled()
         # 6. Readiness refresh & completion
         self.run_stage_projection(operation_id, authorization)
 

@@ -1,0 +1,569 @@
+"""Tests for Phase 20 Research Summary and Human Decision Queue (WP05)."""
+
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from src.api.main import create_app
+from src.domain.technical_anchor import (
+    AnchorPoint,
+    AnchorRevisionStatus,
+    AnchorRole,
+    ManualAnchorSetRevision,
+    TechnicalAnchorApproval,
+)
+from src.domain.valuation import (
+    ApprovalResourceType,
+    ApprovalStatus,
+    ForwardEPSObservation,
+    ForwardEPSSourceType,
+    ValuationApproval,
+)
+from src.repositories.forward_eps_repository import ForwardEPSRepository
+from src.repositories.technical_anchor_repository import TechnicalAnchorRepository
+from src.repositories.migration_runner import apply_valuation_migration
+from src.runtime.paths import RuntimePaths
+from src.runtime.settings import RuntimeSettings
+from src.services.current_research_service import CurrentResearchService
+
+
+def _setup_db(tmp_path: Path) -> tuple[Path, CurrentResearchService]:
+    db_file = tmp_path / "test_research_summary.db"
+    apply_valuation_migration(str(db_file))
+    service = CurrentResearchService(str(db_file))
+    return db_file, service
+
+
+def _insert_universe_instrument(
+    conn: sqlite3.Connection,
+    *,
+    venue: str = "TWSE",
+    official_code: str = "2330",
+    display_name: str = "台灣積體電路製造股份有限公司",
+    short_name: str = "台積電",
+):
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO universe_instruments (
+            instrument_id, venue, official_code, identity_epoch, identity_binding_fingerprint,
+            first_observed_at, first_source_reference, source_identity, display_name, created_at
+        ) VALUES (?, ?, ?, 1, ?, '2026-09-01T00:00:00Z', 'twse', '2330', ?, '2026-09-01T00:00:00Z')
+        """,
+        (f"inst_{venue}_{official_code}", venue, official_code, f"fp_{venue}_{official_code}", display_name),
+    )
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO universe_revisions (
+            universe_revision_id, resource_id, logical_revision_key, revision_number,
+            fetched_at, received_at, available_at, ingested_at, status
+        ) VALUES ('rev_univ_1', 'twse-universe-master', 'twse:master', 1,
+                  '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', 'accepted')
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO universe_instrument_revisions (
+            instrument_revision_id, instrument_id, universe_revision_id, resource_id,
+            revision_number, venue, official_code, canonical_symbol, security_type,
+            display_name, short_name, listing_status, trading_state, membership_state,
+            received_at, fetched_at, available_at, ingested_at, availability_mode, freshness_mode,
+            freshness_status, current_complete, coverage_complete, status
+        ) VALUES (
+            ?, ?, 'rev_univ_1', 'twse-universe-master',
+            1, ?, ?, ?, '股票',
+            ?, ?, 'listed', 'normal', 'active',
+            '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z',
+            'official_timestamp', 'official_cadence_window',
+            'current', 1, 1, 'accepted'
+        )
+        """,
+        (
+            f"ir_{venue}_{official_code}",
+            f"inst_{venue}_{official_code}",
+            venue,
+            official_code,
+            f"{official_code}.TW",
+            display_name,
+            short_name,
+        ),
+    )
+
+
+def _insert_snapshot_and_observation(
+    conn: sqlite3.Connection,
+    *,
+    date: str = "2026-09-04",
+    official_code: str = "2330",
+    close: str | None = "980.0",
+    turnover: float = 300000000000.0,
+    revision_number: int = 1,
+    status: str = "available",
+    snapshot_id: str | None = None,
+):
+    import hashlib
+
+    raw_id = f"raw_snap_{date}_{revision_number}"
+    raw_hash = hashlib.sha256(raw_id.encode()).hexdigest()
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO raw_resource_revisions VALUES (
+            ?, 'id-1', 'twse-official', 'twse.eod.stock_day_all', 'fix',
+            '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z',
+            '2026-09-01T00:00:00Z', ?, '1', 'schema_fp', 'hash_only',
+            NULL, 'fresh', 'eligible', NULL, 'fixture'
+        )
+        """,
+        (raw_id, raw_hash),
+    )
+    snap_id = snapshot_id or f"snap_{date}_rev_{revision_number}"
+    snap_fp = hashlib.sha256(f"snap:{date}:{snap_id}".encode()).hexdigest()
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO eod_close_source_snapshots (
+            source_snapshot_id, resource_id, raw_resource_revision_id, logical_revision_key,
+            revision_number, source_trade_date, source_trade_date_status, status,
+            coverage_state, coverage_proof_type, coverage_proof_reference, row_count,
+            source_date_min, source_date_max, source_published_at, fetched_at, received_at,
+            available_at, ingested_at, source_url, http_method, response_format, contract_version,
+            parser_version, schema_fingerprint, raw_payload_sha256, normalized_payload_sha256,
+            query_dimensions_json, source_record_reference, source_scope, reason,
+            supersedes_source_snapshot_id, revocation_reference, identity_fingerprint
+        ) VALUES (
+            ?, 'twse.eod.stock_day_all', ?, 'key',
+            ?, ?, 'valid', ?,
+            'complete', NULL, NULL, 1,
+            ?, ?, NULL, '2026-09-04T13:35:00Z', '2026-09-04T13:35:00Z',
+            '2026-09-04T13:35:00Z', '2026-09-04T13:36:00Z', 'http://url', 'GET', 'json', 'v1',
+            '1', 'fp', ?, ?,
+            '{}', 'ref', 'scope', NULL,
+            NULL, NULL, ?
+        )
+        """,
+        (snap_id, raw_id, revision_number, date, status, date, date, raw_hash, raw_hash, snap_fp),
+    )
+
+    if close is not None:
+        obs_id = f"obs_{date}_{official_code}_{revision_number}"
+        obs_fp = hashlib.sha256(f"obs:{official_code}:{date}".encode()).hexdigest()
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO eod_close_observations (
+                close_observation_id, resource_id, raw_resource_revision_id, source_snapshot_id,
+                classification_evidence_id, instrument_id, instrument_revision_id,
+                venue, official_code, trade_date, trade_date_status, revision_number,
+                supersedes_observation_id, raw_close_text, close_value, raw_volume_text, volume_value,
+                raw_trade_indication_text, trade_indication_value, currency, unit,
+                price_semantics_version, product_scope, observation_status, public_eligibility_status,
+                quality_status, quality_flags_json, row_fingerprint, raw_payload_sha256,
+                normalized_payload_sha256, source_trading_scope, available_at, ingested_at,
+                source_record_reference, source_note, identity_fingerprint
+            ) VALUES (
+                ?, 'twse.eod.stock_day_all', ?, ?,
+                NULL, NULL, NULL,
+                'TWSE', ?, ?, 'valid', 1,
+                NULL, ?, ?, '1000', '1000',
+                '+', 'up', 'TWD', 'TWD_per_share',
+                'phase14_v1', 'supported_stock', 'available', 'eligible',
+                'fresh', '[]', 'rfp', ?,
+                ?, 'regular', '2026-09-04T13:35:00Z', '2026-09-04T13:36:00Z',
+                'ref', NULL, ?
+            )
+            """,
+            (obs_id, raw_id, snap_id, official_code, date, close, float(close), raw_hash, raw_hash, obs_fp),
+        )
+
+    # Market turnover
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO market_turnover_daily (
+            id, trade_date, twse_turnover_twd, tpex_turnover_twd, total_turnover_twd,
+            twse_source, tpex_source, twse_dataset, tpex_dataset, twse_payload_hash,
+            tpex_payload_hash, available_at, fetched_at, ingested_at, revision, status, quality_note
+        ) VALUES (
+            ?, ?, ?, 0, ?,
+            'twse', 'tpex', 'twse_to', 'tpex_to', 'hash1',
+            'hash2', '2026-09-04T13:35:00Z', '2026-09-04T13:35:00Z', '2026-09-04T13:36:00Z', 1, 'available', NULL
+        )
+        """,
+        (f"to_{date}", date, turnover, turnover),
+    )
+
+
+def test_research_summary_composition(tmp_path):
+    """Summary returns correct stock metadata, settled context, and non-synthetic placeholders."""
+    db, service = _setup_db(tmp_path)
+    with sqlite3.connect(db) as conn:
+        _insert_universe_instrument(conn, official_code="2330", display_name="台積電公司", short_name="台積電")
+        _insert_snapshot_and_observation(conn, date="2026-09-04", official_code="2330", close="980.0")
+
+    summary = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert summary is not None
+    assert summary["canonical_symbol"] == "2330.TW"
+    assert summary["official_code"] == "2330"
+    assert summary["venue"] == "TWSE"
+    assert summary["company_name"] == "台積電公司"
+    assert summary["short_name"] == "台積電"
+
+    m_ctx = summary["market_context"]
+    assert m_ctx["settled_trade_date"] == "2026-09-04"
+    assert m_ctx["official_close"] == 980.0
+    assert m_ctx["close_status"] == "available"
+    assert m_ctx["currency"] == "TWD"
+    assert m_ctx["unit"] == "TWD_per_share"
+    assert m_ctx["market_turnover_total"] == 300000000000.0
+    assert m_ctx["market_turnover_status"] == "available"
+    assert m_ctx["cbc_status"] == "insufficient_data"  # non-blocking
+
+
+def test_human_decision_queue_and_no_fabrication(tmp_path):
+    """Missing Forward EPS and wave anchors must yield needs_human_judgment and enter decision queue."""
+    db, service = _setup_db(tmp_path)
+    with sqlite3.connect(db) as conn:
+        _insert_universe_instrument(conn, official_code="2330")
+        _insert_snapshot_and_observation(conn, date="2026-09-04", official_code="2330", close="980.0")
+
+    summary = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert summary is not None
+
+    # Objective fact remains visible
+    assert summary["market_context"]["official_close"] == 980.0
+
+    # Valuation context
+    val_ctx = summary["valuation_context"]
+    assert val_ctx["status"] == "needs_human_judgment"
+    assert val_ctx["reason_code"] == "forward_eps_missing_at_knowledge_cutoff"
+    assert val_ctx["target_matrix"] == []
+
+    # Technical context
+    tech_ctx = summary["technical_context"]
+    assert tech_ctx["status"] == "needs_human_judgment"
+    assert tech_ctx["reason_code"] == "manual_anchor_required"
+    assert tech_ctx["targets"] is None
+
+    # Decision Queue
+    queue = summary["human_decision_queue"]
+    assert len(queue) == 2
+    rule_ids = {q["rule_id"] for q in queue}
+    assert "VAL-02" in rule_ids
+    assert "FB-03/FB-04" in rule_ids
+
+    # Screening metrics: zero egress, unavailable status
+    screening = summary["screening_context"]
+    assert screening["pe"]["status"] == "unavailable"
+    assert screening["pe"]["value"] is None
+    assert screening["pe"]["ui_copy"] == "尚無可用資料"
+    assert screening["pb"]["status"] == "unavailable"
+    assert screening["dividend_yield"]["status"] == "unavailable"
+
+
+def test_summary_fail_closed_anti_fallback(tmp_path):
+    """If snapshot exists on date D but observation is missing, close is null with insufficient_data, never falling back."""
+    db, service = _setup_db(tmp_path)
+    with sqlite3.connect(db) as conn:
+        _insert_universe_instrument(conn, official_code="2330")
+        _insert_snapshot_and_observation(conn, date="2026-09-03", official_code="2330", close="970.0")
+        # 2026-09-04 snapshot exists but without observation for 2330
+        _insert_snapshot_and_observation(conn, date="2026-09-04", official_code="2330", close=None)
+
+    summary = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert summary is not None
+    m_ctx = summary["market_context"]
+    assert m_ctx["settled_trade_date"] == "2026-09-04"
+    assert m_ctx["official_close"] is None
+    assert m_ctx["close_status"] == "insufficient_data"
+    assert m_ctx["close_reason"] == "symbol_observation_not_yet_materialized_for_settled_session"
+
+
+def test_summary_api_endpoint(tmp_path, monkeypatch):
+    """GET /api/v2/research/summary/{canonical_symbol} returns 200 with complete summary."""
+    db, _ = _setup_db(tmp_path)
+    with sqlite3.connect(db) as conn:
+        _insert_universe_instrument(conn, official_code="2330", display_name="台積電", short_name="台積電")
+        _insert_snapshot_and_observation(conn, date="2026-09-04", official_code="2330", close="980.0")
+
+    environ = {
+        "TW_STOCK_PREDICTOR_ENV": "development",
+        "DATABASE_PATH": str(db),
+        "UNIVERSE_DB_PATH": str(db),
+        "RESEARCH_APPLICATION_ORIGIN": "http://127.0.0.1:8000",
+    }
+    monkeypatch.setenv("DATABASE_PATH", str(db))
+    monkeypatch.setenv("RESEARCH_APPLICATION_ORIGIN", "http://127.0.0.1:8000")
+    paths = RuntimePaths.from_environment(environ)
+    settings = RuntimeSettings.from_environment(environ, paths=paths)
+    settings.paths.ensure_user_dirs()
+    app = create_app(settings)
+    client = TestClient(app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
+
+    resp = client.get("/api/v2/research/summary/2330.TW?as_of=2026-09-04T16:00:00Z")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["canonical_symbol"] == "2330.TW"
+    assert data["market_context"]["official_close"] == 980.0
+    assert len(data["human_decision_queue"]) == 2
+
+    # 404 on unlisted symbol
+    resp404 = client.get("/api/v2/research/summary/9999.TW")
+    assert resp404.status_code == 404
+
+
+def test_summary_latest_settled_revoked_revision_fails_closed(tmp_path):
+    """P1-4 regression: When date D has rev 1 (available) and rev 2 (revoked), latest is rev 2.
+    It must fail closed (insufficient_data), and NOT resurrect rev 1 or fall back to D-1.
+    """
+    db, service = _setup_db(tmp_path)
+    with sqlite3.connect(db) as conn:
+        _insert_universe_instrument(conn, official_code="2330")
+        # Older date D-1 (2026-09-03) available
+        _insert_snapshot_and_observation(conn, date="2026-09-03", official_code="2330", close="970.0")
+        # Date D (2026-09-04) revision 1 available
+        _insert_snapshot_and_observation(
+            conn, date="2026-09-04", official_code="2330", close="980.0", revision_number=1, status="available"
+        )
+        # Date D (2026-09-04) revision 2 revoked!
+        _insert_snapshot_and_observation(
+            conn, date="2026-09-04", official_code="2330", close=None, revision_number=2, status="revoked"
+        )
+
+    summary = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert summary is not None
+    m_ctx = summary["market_context"]
+    assert m_ctx["settled_trade_date"] == "2026-09-04"
+    assert m_ctx["official_close"] is None
+    assert m_ctx["close_status"] == "insufficient_data"
+    assert m_ctx["close_reason"] == "snapshot_revoked_without_replacement"
+
+
+def test_summary_governed_forward_eps_and_technical_anchor_as_of(tmp_path):
+    """P1-3 regression: Forward EPS and Technical Anchor evaluation must use governed effective-as-of repositories."""
+    db, service = _setup_db(tmp_path)
+    with sqlite3.connect(db) as conn:
+        _insert_universe_instrument(conn, official_code="2330")
+        _insert_snapshot_and_observation(conn, date="2026-09-04", official_code="2330", close="980.0")
+
+    eps_repo = ForwardEPSRepository(str(db), auto_migrate=False)
+    obs = ForwardEPSObservation(
+        logical_series_id="2330-2027-series",
+        revision_number=1,
+        revision_of=None,
+        symbol="2330.TW",
+        fiscal_year=2027,
+        eps_base=52.0,
+        source_name="Analyst A",
+        source_type=ForwardEPSSourceType.BROKER_REPORT,
+        published_at="2026-09-01",
+        available_at="2026-09-01T08:00:00Z",
+        unit="TWD_per_share",
+    )
+    added = eps_repo.add_forward_eps(obs, "idemp-eps-1", ingested_at="2026-09-01T08:00:00Z")
+
+    # Before approval, summary valuation_context requires human judgment
+    summary_before = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert summary_before["valuation_context"]["status"] == "needs_human_judgment"
+    assert any(item["rule_id"] == "VAL-02" for item in summary_before["human_decision_queue"])
+
+    # Approve with VAL-02
+    eps_repo.add_approval(
+        ValuationApproval(
+            approval_id="app-1",
+            resource_type=ApprovalResourceType.FORWARD_EPS,
+            resource_id=added["id"],
+            decision=ApprovalStatus.APPROVED,
+            rule_id="VAL-02",
+            evidence_level="A",
+            project_operationalization=False,
+            approved_by="lead_analyst",
+            rationale="Approved forward EPS based on validated reports",
+            available_at="2026-09-02T08:00:00Z",
+        ),
+        idempotency_key="idemp-app-1",
+        ingested_at="2026-09-02T08:00:00Z",
+    )
+
+    # After approval, summary valuation_context is available, VAL-02 not in decision queue
+    summary_after = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert summary_after["valuation_context"]["status"] == "available"
+    assert not any(item["rule_id"] == "VAL-02" for item in summary_after["human_decision_queue"])
+
+    # If approval is revoked, it reverts to needs_human_judgment
+    eps_repo.add_approval(
+        ValuationApproval(
+            approval_id="app-2",
+            resource_type=ApprovalResourceType.FORWARD_EPS,
+            resource_id=added["id"],
+            decision=ApprovalStatus.REVOKED,
+            rule_id="VAL-02",
+            evidence_level="A",
+            project_operationalization=False,
+            approved_by="compliance_officer",
+            rationale="Revoked due to outdated assumption",
+            available_at="2026-09-03T08:00:00Z",
+        ),
+        idempotency_key="idemp-app-2",
+        ingested_at="2026-09-03T08:00:00Z",
+    )
+    summary_revoked = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert summary_revoked["valuation_context"]["status"] == "needs_human_judgment"
+    assert any(item["rule_id"] == "VAL-02" for item in summary_revoked["human_decision_queue"])
+
+
+def test_summary_governed_technical_anchor_as_of(tmp_path):
+    """P1-B: Technical anchor approved path must become available, revoked/cutoff must fail closed."""
+    db, service = _setup_db(tmp_path)
+    with sqlite3.connect(db) as conn:
+        _insert_universe_instrument(conn, official_code="2330", display_name="台積電", short_name="台積電")
+        _insert_snapshot_and_observation(conn, date="2026-09-04", official_code="2330", close="980.0")
+
+    anchor_repo = TechnicalAnchorRepository(str(db), auto_migrate=False)
+
+    # 1. Before any technical anchor: needs human judgment, FB-03/FB-04 in queue
+    s_init = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert s_init["technical_context"]["status"] == "needs_human_judgment"
+    assert any(item["rule_id"] == "FB-03/FB-04" for item in s_init["human_decision_queue"])
+
+    # 2. Add available anchor revision (FB-04)
+    rev1 = anchor_repo.add_anchor_revision(
+        ManualAnchorSetRevision(
+            logical_anchor_set_id="2330-fb04-1",
+            revision_number=1,
+            revision_of=None,
+            symbol="2330",
+            evidence_basis_rule_id="FB-04",
+            anchors=(
+                AnchorPoint(AnchorRole.ORIGIN, 800.0, "2026-01-10"),
+                AnchorPoint(AnchorRole.SWING_END, 950.0, "2026-01-20"),
+            ),
+            available_at="2026-09-01T08:00:00Z",
+            created_by="reviewer",
+            source="manual_research",
+            status=AnchorRevisionStatus.AVAILABLE,
+        ),
+        idempotency_key="idemp-anchor-1",
+        ingested_at="2026-09-01T08:00:00Z",
+    )
+
+    # Before approval: still needs human judgment
+    s_unapproved = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert s_unapproved["technical_context"]["status"] == "needs_human_judgment"
+    assert any(item["rule_id"] == "FB-03/FB-04" for item in s_unapproved["human_decision_queue"])
+
+    # 3. Add approved approval (effective as of 2026-09-02)
+    anchor_repo.add_approval(
+        TechnicalAnchorApproval(
+            approval_id="app-anchor-1",
+            anchor_revision_id=rev1["id"],
+            decision=ApprovalStatus.APPROVED,
+            rule_id="FB-04",
+            rule_version="2.0.0",
+            evidence_level="A",
+            implementation_mode="verified_core",
+            project_operationalization=False,
+            approved_by="lead_technical_analyst",
+            rationale="Approved FB-04 wave anchor geometry",
+            approved_at="2026-09-02T08:00:00Z",
+        ),
+        idempotency_key="idemp-app-anchor-1",
+        ingested_at="2026-09-02T08:00:00Z",
+    )
+
+    # Query before approval cutoff: cutoff isolation, needs judgment
+    s_before_app = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-01T12:00:00Z")
+    assert s_before_app["technical_context"]["status"] == "needs_human_judgment"
+    assert any(item["rule_id"] == "FB-03/FB-04" for item in s_before_app["human_decision_queue"])
+
+    # Query after approval cutoff: available, FB item removed from decision queue
+    s_approved = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert s_approved["technical_context"]["status"] == "available"
+    assert s_approved["technical_context"]["reason_code"] is None
+    assert not any(item["rule_id"] == "FB-03/FB-04" for item in s_approved["human_decision_queue"])
+
+    # 4. Later approval is revoked: reverts to needs_human_judgment
+    anchor_repo.add_approval(
+        TechnicalAnchorApproval(
+            approval_id="app-anchor-2",
+            anchor_revision_id=rev1["id"],
+            decision=ApprovalStatus.REVOKED,
+            rule_id="FB-04",
+            rule_version="2.0.0",
+            evidence_level="A",
+            implementation_mode="verified_core",
+            project_operationalization=False,
+            approved_by="compliance_officer",
+            rationale="Revoked due to structural break",
+            approved_at="2026-09-03T08:00:00Z",
+        ),
+        idempotency_key="idemp-app-anchor-2",
+        ingested_at="2026-09-03T08:00:00Z",
+    )
+    s_revoked_app = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert s_revoked_app["technical_context"]["status"] == "needs_human_judgment"
+    assert any(item["rule_id"] == "FB-03/FB-04" for item in s_revoked_app["human_decision_queue"])
+
+    # 5. New logical anchor set where rev 1 is approved, but rev 2 is revoked
+    rev2_1 = anchor_repo.add_anchor_revision(
+        ManualAnchorSetRevision(
+            logical_anchor_set_id="2330-fb03-set2",
+            revision_number=1,
+            revision_of=None,
+            symbol="2330.TW",
+            evidence_basis_rule_id="FB-03",
+            anchors=(
+                AnchorPoint(AnchorRole.ORIGIN, 820.0, "2026-01-10"),
+                AnchorPoint(AnchorRole.SWING_END, 960.0, "2026-01-20"),
+                AnchorPoint(AnchorRole.PROJECTION_ORIGIN, 880.0, "2026-01-25"),
+            ),
+            available_at="2026-09-03T09:00:00Z",
+            created_by="reviewer",
+            source="manual_research",
+            status=AnchorRevisionStatus.AVAILABLE,
+        ),
+        idempotency_key="idemp-anchor-set2-r1",
+        ingested_at="2026-09-03T09:00:00Z",
+    )
+    anchor_repo.add_approval(
+        TechnicalAnchorApproval(
+            approval_id="app-anchor-set2-1",
+            anchor_revision_id=rev2_1["id"],
+            decision=ApprovalStatus.APPROVED,
+            rule_id="FB-03",
+            rule_version="2.0.0",
+            evidence_level="A",
+            implementation_mode="verified_core",
+            project_operationalization=False,
+            approved_by="lead_technical_analyst",
+            rationale="Approved FB-03 wave anchor",
+            approved_at="2026-09-03T10:00:00Z",
+        ),
+        idempotency_key="idemp-app-set2-1",
+        ingested_at="2026-09-03T10:00:00Z",
+    )
+    s_set2_app = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-03T12:00:00Z")
+    assert s_set2_app["technical_context"]["status"] == "available"
+
+    # Add rev 2 with revoked status
+    anchor_repo.add_anchor_revision(
+        ManualAnchorSetRevision(
+            logical_anchor_set_id="2330-fb03-set2",
+            revision_number=2,
+            revision_of=rev2_1["id"],
+            symbol="2330.TW",
+            evidence_basis_rule_id="FB-03",
+            anchors=(
+                AnchorPoint(AnchorRole.ORIGIN, 820.0, "2026-01-10"),
+                AnchorPoint(AnchorRole.SWING_END, 960.0, "2026-01-20"),
+                AnchorPoint(AnchorRole.PROJECTION_ORIGIN, 880.0, "2026-01-25"),
+            ),
+            available_at="2026-09-03T14:00:00Z",
+            created_by="reviewer",
+            source="manual_research",
+            status=AnchorRevisionStatus.REVOKED,
+        ),
+        idempotency_key="idemp-anchor-set2-r2",
+        ingested_at="2026-09-03T14:00:00Z",
+    )
+    s_set2_revoked = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert s_set2_revoked["technical_context"]["status"] == "needs_human_judgment"
+    assert any(item["rule_id"] == "FB-03/FB-04" for item in s_set2_revoked["human_decision_queue"])

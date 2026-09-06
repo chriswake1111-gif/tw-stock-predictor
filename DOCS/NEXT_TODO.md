@@ -1,5 +1,208 @@
 # 專案進度與下階段待辦 (NEXT_TODO.md)
 
+## 2026-09-06 交班：Phase 20 Fifth Code Review 修正完成，提請 Sixth Code Review (LUK-79)
+
+### 當前狀態與成果
+
+- [x] **Phase 20 Fifth Code Review 三大核心審查項全部修正完畢 (P1-1, P1-2, P1-3)**:
+  - **P1-1 (Bootstrap delegates directly to `run_symbol_enablement_pipeline`)**:
+    - 修正 `src/services/research_bootstrap_service.py`：
+      - `bootstrap_symbol()` 中的背景 worker 徹底改為直接呼叫 `sync_svc.run_symbol_enablement_pipeline(op_id, auth, canonical_symbol, deadline_monotonic, stop_event=stop_event)`。
+      - 徹底杜絕 bootstrap 重複觸發全域 sync 六大階段（Prerequisites, Universe, Classification, EOD, Turnover, CBC），避免 Universe idempotency key 重複或 turnover 全量複查導致失敗。
+    - 於 `tests/test_phase20_research_bootstrap_orchestrator.py` 新增 P1-1 回歸測試 `test_bootstrap_symbol_delegates_to_run_symbol_enablement_pipeline`，驗證 `run_symbol_enablement_pipeline` 被精確呼叫且通用階段從未被調用。
+  - **P1-2 (Truly Deterministic Worker Shutdown & Bounded Quiescence Contract)**:
+    - 於 `src/domain/installed_data_operations.py` 實作專用 `BackgroundWorkerThread`，綁定 `operation_id`、`auth`、`stop_event`，並具備 `request_stop()` 協作中斷與自動撤銷 capability。
+    - 於 `src/services/installed_data_sync_service.py`：
+      - `_require_live_write_authorization` 納入 `"interrupted"` 作為中止狀態。
+      - `run_symbol_enablement_pipeline` 支援 `stop_event` 參數，於每一主要階段（ISIN classification、官方 venue EOD、Phase 14 materialization、readiness refresh）檢查取消狀態，並在停止時撤銷授權且拋出 `OperationCancelled`。
+    - 於 `src/services/research_bootstrap_service.py` 與 `src/api/routes/installed_data_operations.py`：
+      - 全面使用 `BackgroundWorkerThread`，捕獲 `OperationCancelled` 後以 `InstalledOperationStatus.INTERRUPTED` 終止作業，並撤銷寫入授權。
+      - `/cancel` 端點增加向註冊之 worker 發出 `t.request_stop()`，實現即時協同取消。
+    - 於 `src/api/main.py` lifespan 實作確定性關閉契約：
+      - 依序：1) 發出全域 `worker_shutdown_event`；2) 呼叫所有 worker 的 `request_stop()` 協同停止；3) 於 DB 將進行中的 active operation 標記為真實狀態 `INTERRUPTED`；4) 依 deadline 進行 bounded join。若有 worker 未能在時限內停止，拋出 `RuntimeError`，杜絕任何 worker 或 DB lock 殘留。
+    - 於 `tests/test_phase20_research_bootstrap_orchestrator.py` 新增 P1-2 回歸測試：
+      - `test_deterministic_worker_quiescence_on_app_shutdown`：驗證協作關閉、active operation 狀態持久化為 `interrupted`、Windows 下即時執行 `VACUUM` 零 lock 衝突。
+      - `test_deterministic_worker_quiescence_raises_when_worker_fails_to_stop`：驗證未在 deadline 內停止之 worker 確實引發 `RuntimeError`。
+  - **P1-3 (Clean-Machine Packaging & Smoke Pipeline Verification)**:
+    - GitHub Actions CI 雙工作流全數通過 (All Green)：
+      - Anti-Gravity TU Predictor CI (Run `34021562683`)：**Success in 4m0s**。
+      - TW Stock Predictor Windows Productization (Run `34021562736`)：**Success in 10m1s**。
+    - Windows Clean-Machine Smoke 測試 22 項檢核全綠通過 (`"status": "passed"`，包括 `phase20_universe_coverage`, `phase20_local_search`, `phase20_bootstrap_ready`, `phase20_summary_ready`, `phase20_zero_egress`, `runtime_dependencies` 等)。
+    - Installer Review Artifact 成功上傳並封存：
+      - Artifact 名稱：`tw-stock-predictor-windows-f4a4214f249e6b76d59a526c060c3b453813b794`
+      - Artifact ID：`9985808331`
+      - 大小：127,821,155 bytes (~121.9 MB)
+      - SHA256 Digest：`73ee8073cf3f994a29b6a52a75a34701656edf655ec403ec5d9f70b3d7144023`
+      - 下載 URL：`https://github.com/chriswake1111-gif/tw-stock-predictor/actions/runs/34021562736/artifacts/9985808331`
+
+- [x] **全量自動化驗證與測試狀態**:
+  - Python 全量回歸測試：**915 passed, 0 failed, 1 warning** in 219.92s (3m 39s)。
+  - Phase 20 專項後端測試：**39 passed, 0 failed** in 8.74s。
+  - Phase 19 專項後端測試：**59 passed, 0 failed** in 16.34s。
+  - Vitest 前端單元與元件測試：**9 files passed, 48 tests passed** in 4.96s。
+  - 前端 ESLint 審查：`npm run lint` 通過，零錯誤、零警告。
+  - 前端 TypeScript 型別審查：`npx tsc -b` 通過，零錯誤。
+  - 前端靜態資源打包：`npm run build` 通過，`production_bundle_admin_secret_gate=PASS assets=2`。
+  - Playwright 視覺回歸測試：`npm run test:visual` 通過，6 個測試全部通過。
+  - Git hygiene：`git diff --check` 通過，零空白行尾或換行違規。
+
+### 核心安全與邊界聲明
+- 本系統持續嚴格遵守 `DOCS/PRODUCT_BOUNDARY.md`：無券商 API、無真實帳號連線、無自動交易或跟單功能。
+- 本地股票搜尋與啟動輸入過程 100% 於本機 SQLite 執行，零外部網路發送 (Zero Egress)。
+- 杜金龍分析核心語意維持不變；嚴禁合成 Forward EPS 或推造波浪錨點，所有未驗證項目完整保留於人工決策隊列。
+- Merge Gate: `NOT AUTHORIZED`；自動合併 / 部署：`NOT AUTHORIZED`。依規範僅開立 Draft PR。
+
+### 下一步待辦
+- 保持停止於 **READY FOR PHASE 20 SIXTH CODE REVIEW**，提請 Lukas Chiu 進行 Phase 20 第六輪代碼審查。
+
+---
+
+## 2026-09-06 交班：Phase 20 Fourth Code Review 修正完成，提請 Fifth Code Review (LUK-79)
+
+### 當前狀態與成果
+
+- [x] **Phase 20 Fourth Code Review 所有審查項全部修正完畢 (P1-1, P1-2, P1-3, P1-4, P2)**:
+  - **P1-1 (SC-14 Packaging Smoke Test Ordering Validation)**:
+    - 查證 `.github/scripts/windows-packaging-smoke.ps1`：確認執行順序嚴格符合規格要求：
+      `launch -> zero-egress -> explicit global prep (sync) -> local search 2330 -> Phase20 bootstrap -> waiting/poll/re-enter if needed -> governed target ENABLE_SYMBOL -> terminal -> Phase 14 BC-2 EOD proof -> BC-3 analysis -> Phase 20 summary/decision queue/audit`。
+    - CI run 34018586263 在 line 397 中斷之主因為後端未返回 `target_symbols`（見 P1-2），順序本身已符合要求。
+  - **P1-2 (Expose Target Symbols in Data Operations API)**:
+    - 修正 `src/api/routes/installed_data_operations.py`：
+      - 在 `GET /api/v2/data-operations/operations/{operation_id}` 回應字典中，自 `op.target_symbols_json` 解析並暴露向下相容之唯讀欄位 `"target_symbols"`。
+      - 在 `GET /api/v2/data-operations/status` 的 `active_operation` 字典中，同步暴露 `"target_symbols"`。
+    - 於 `tests/test_phase19_api_endpoints.py` 中更新 `test_get_operation_by_id_404_and_200`，斷言傳回之 `data["target_symbols"] == ["2330.TW"]`。
+  - **P1-3 (Strict Fail-Closed Launcher Handshake Validation in Research Bootstrap)**:
+    - 修正 `src/api/routes/v2_research.py`：
+      - 徹底移除偽造之 `instance_id = "installed-runtime"` fallback，改為自 `src.api.routes.installed_data_operations` 引用 Phase 19 既有 `_get_instance_id(request)`。
+      - 當 `request.app.state.launch_handshake` 缺失或未經由 launcher 驗證時，在建立任何作業、發行能力權杖或寫入資料庫之前，立即拋出 HTTP 503 `launch_handshake_missing_or_unvalidated`。
+    - 於 `tests/test_phase20_research_bootstrap_orchestrator.py` 新增回歸測試 `test_bootstrap_missing_handshake_fails_closed_503`，驗證 503 拋出且未建立任何作業或背景執行緒。
+  - **P1-4 (FastAPI Lifespan Background Worker Thread Registration & Join)**:
+    - 修正 `src/services/research_bootstrap_service.py`：
+      - `__init__` 擴充接受 `worker_registry: list[threading.Thread] | None = None`。
+      - 在 `bootstrap_symbol()` 啟動背景工作執行緒時，自動註冊至 `self.worker_registry`。
+    - 修正 `src/api/routes/v2_research.py`：
+      - 在 `_bootstrap_service()` 中傳入 `worker_registry=getattr(request.app.state, "background_worker_threads", None)`。
+    - 結合 `src/api/main.py` 的 lifespan shutdown，確保應用程式關閉時確定性 join/wait 殘留之 bootstrap 背景執行緒。
+    - 於 `tests/test_phase20_research_bootstrap_orchestrator.py` 新增回歸測試 `test_bootstrap_worker_registered_in_app_state_and_joined_on_shutdown`，驗證 thread 在 shutdown 後均已 terminate/join。
+  - **P2 (Strict Scoped App Cleanup in Phase 19 Tests Without Global Thread Scanning)**:
+    - 修正 `tests/test_phase19_api_endpoints.py`：
+      - 移除 `tempfile.TemporaryDirectory(ignore_cleanup_errors=True)`，改回嚴格之 `tempfile.TemporaryDirectory()`。
+      - 移除 `threading.enumerate()` 全域執行緒掃描，僅嚴格依賴 `app.state.background_worker_threads` 之 join。
+      - 證實檔案系統釋放不再發生衝突，完全由 app-owned 生命周期乾淨釋放。
+- [x] **全量自動化驗證與測試狀態**:
+  - Python 全量回歸測試：**912 passed, 0 failed, 1 warning** in 223.20s (3m 43s)。
+  - Phase 20 專項後端測試：**36 passed, 0 failed** in 7.84s。
+  - Phase 19 專項後端測試：**59 passed, 0 failed** in 16.33s。
+  - Vitest 前端單元與元件測試：**9 files passed, 48 tests passed** in 4.72s。
+  - 前端 ESLint 審查：`npm run lint` 通過，零錯誤、零警告。
+  - 前端 TypeScript 型別審查：`npx tsc -b` 通過，零錯誤。
+  - 前端靜態資源打包：`npm run build` 通過，`production_bundle_admin_secret_gate=PASS assets=2`。
+  - Playwright 視覺回歸測試：`npm run test:visual` 通過，6 個測試全部通過。
+  - Git hygiene：`git diff --check` 通過，零空白行尾或換行違規。
+
+### 核心安全與邊界聲明
+- 本系統持續嚴格遵守 `DOCS/PRODUCT_BOUNDARY.md`：無券商 API、無真實帳號連線、無自動交易或跟單功能。
+- 本地股票搜尋與啟動輸入過程 100% 於本機 SQLite 執行，零外部網路發送 (Zero Egress)。
+- 杜金龍分析核心語意維持不變；嚴禁合成 Forward EPS 或推造波浪錨點，所有未驗證項目完整保留於人工決策隊列。
+- Merge Gate: `NOT AUTHORIZED`；自動合併 / 部署：`NOT AUTHORIZED`。依規範僅開立 Draft PR。
+
+### 下一步待辦
+- 保持停止於 **READY FOR PHASE 20 FOURTH CODE REVIEW**，等待 Lukas Chiu 進行 Phase 20 第四輪代碼審查。
+
+---
+
+## 2026-09-06 交班：Phase 20 Second Code Review 修正完成，提請 Third Code Review (LUK-79)
+
+### 當前狀態與成果
+
+- [x] **Phase 20 Second Code Review 所有審查項全部修正完畢 (P1-A, P1-B, P1-C)**:
+  - **P1-A (Waiting for Data Operation & Target-Aware Bootstrap Re-evaluation)**:
+    - 修正前端 `StockResearchPage.tsx`：區分標的專屬之 `preparing` 與全域或無關之 `waiting_for_data_operation`。當全域/無關作業達到終態 (`succeeded` 或 `partial`) 時，自動重新呼叫 `bootstrapSymbol` 重新評估，使後端能啟動帶有標的之 `ENABLE_SYMBOL` 作業，並輪詢該專屬作業完成後才載入研究摘要。
+    - 輪詢機制設定 180 秒總體截止防護 (`Date.now() > deadline`)，避免在無進展狀態下無限循環。
+    - 新增後端回歸測試 `test_generic_sync_terminal_triggers_second_bootstrap_enable_symbol` 於 `tests/test_phase20_research_bootstrap_orchestrator.py`。
+    - 新增前端 Vitest 測試 `P1-A: StockResearchPage re-evaluates bootstrap when unrelated waiting_for_data_operation terminates` 於 `frontend/src/test/phase20-usability.test.tsx`。
+  - **P1-B (Governed Technical Anchor Approval & Status Alignment)**:
+    - 修正 `CurrentResearchService.get_summary()`：修訂版狀態檢查由非領域規範的 `"active"` 改為標準之 `state.get("status") == "available"`，且審批紀錄必須為 `approval.get("decision") == "approved"`，且 `evidence_basis_rule_id in ("FB-03", "FB-04")`。
+    - 若審批為 approved 且修訂版為 available，則將 `fb_wave_anchor` 從人工決策隊列移除，並將波浪技術摘要狀態設為 `available`；若審批或修訂版為 `revoked`，嚴格 fail-closed 標記為 `needs_human_judgment` 並列入人工決策隊列。
+    - 修正符號比對 fallback，相容 `2330.TW` 與 `2330` 標的。
+    - 透過真實領域模型與 `TechnicalAnchorRepository` 撰寫完整狀態轉換與歷史隔離回歸測試 `test_summary_governed_technical_anchor_as_of` 於 `tests/test_phase20_research_summary_and_queue.py`。
+  - **P1-C (Windows Packaging Smoke Script Zero-Egress Timing & Contract Alignment)**:
+    - 修正 `.github/scripts/windows-packaging-smoke.ps1`：
+      1. 將作業系統等級的 `netstat -ano` 零外部連線 (Zero Egress) 檢查調整至伺服器 `/api/ready` 就緒後、且在任何使用者同步或啟動請求發生前立即執行，證明未提示啟動時零連線。
+      2. 搜尋回傳契約對齊真實欄位：使用 `$searchRes.results` 遍歷，斷言 `official_code`、`canonical_symbol` 與 `short_name`（非不存在的 `items` 或 `symbol`）。
+      3. 移除研究摘要中不存在的 `contract_version` 斷言，對齊真實領域模型。
+      4. 保留搜尋與摘要載入後的二次零外部連線斷言。
+- [x] **全量自動化驗證與測試狀態**:
+  - Python 全量回歸測試：**910 passed, 0 failed** in 223.14s (3m 43s)。
+  - Phase 20 專項後端測試：**34 passed, 0 failed** in 8.05s。
+  - Vitest 前端單元與元件測試：**9 files passed, 47 tests passed** in 5.02s。
+  - 前端 ESLint 審查：`npm run lint` 通過，零錯誤、零警告。
+  - 前端 TypeScript 型別審查：`npx tsc -b` 通過，零錯誤。
+  - 前端靜態資源打包：`npm run build` 通過，`production_bundle_admin_secret_gate=PASS assets=2`。
+  - Playwright 視覺回歸測試：`npm run test:visual` 通過，6 個測試全部通過。
+  - Git hygiene：`git diff --check` 通過，零空白行尾或換行違規。
+
+### 核心安全與邊界聲明
+- 本系統持續嚴格遵守 `DOCS/PRODUCT_BOUNDARY.md`：無券商 API、無真實帳號連線、無自動交易或跟單功能。
+- 本地股票搜尋與啟動輸入過程 100% 於本機 SQLite 執行，零外部網路發送 (Zero Egress)。
+- 杜金龍分析核心語意維持不變；嚴禁合成 Forward EPS 或推造波浪錨點，所有未驗證項目完整保留於人工決策隊列。
+- Merge Gate: `NOT AUTHORIZED`；自動合併 / 部署：`NOT AUTHORIZED`。依規範僅開立 Draft PR。
+
+### 下一步待辦
+- 保持停止於 **READY FOR PHASE 20 THIRD CODE REVIEW**，等待 Lukas Chiu 進行 Phase 20 第三輪代碼審查。
+
+---
+
+## 2026-09-06 交班：Phase 20 First Code Review 修正完成，提請 Second Code Review (LUK-79)
+
+### 當前狀態與成果
+
+- [x] **Phase 20 First Code Review 所有審查項全部修正完畢 (P1-1 ~ P1-7, P2-1 ~ P2-2)**:
+  - **P1-1 (Parent Operation Status & Polling Latency)**:
+    - 修正前端所有輪詢元件（`FirstRunPrepCard.tsx`、`ShortNameUpgradeBanner.tsx`、`StockResearchPage.tsx`）映射 Phase 19 父層作業終態 (`succeeded`, `partial`, `failed`, `cancelled`, `interrupted`)，不再依賴不存在的 `completed`。
+    - 輪詢機制加入初始即時檢查 (`checkStatus()`)，終態或快取立即可得時零延遲返回，消除 1.5 秒無效等待。
+    - 補齊 Vitest 單元測試 `frontend/src/test/phase20-usability.test.tsx` 覆蓋 5 種終態。
+  - **P1-2 (Generic Sync Target Scoping)**:
+    - 修正 `ResearchBootstrapService`：泛用 `SYNC` 或 `BOOTSTRAP` 作業在 `targets` 為空且目標標的 EOD 數據不足時，正確回傳 `waiting_for_data_operation`，僅在目標標的明確包含於 `targets` 或本機已有足夠日行情時才進入 `preparing`。
+    - 新增回歸測試於 `tests/test_phase20_research_bootstrap_orchestrator.py`。
+  - **P1-3 (Authoritative As-Of Domain Repositories)**:
+    - 移除 `CurrentResearchService` 中 bypass 領域模型的手寫 SQL 證據查詢，改為統一復用權威性 as-of 方法：`ForwardEPSRepository.forward_eps_as_of_with_connection` 與 `TechnicalAnchorRepository.states_as_of_with_connection`。
+    - 新增回歸測試於 `tests/test_phase20_research_summary_and_queue.py`。
+  - **P1-4 (Latest-Settled Fail-Closed Resolver)**:
+    - 修正 `CurrentResearchRepository` 結算解析器：CTE 於排序 `date_rev_rank` 時不再預先以 `status IN ('available', 'partial')` 過濾，改為優先選取結算日 D 之最新修訂版；若最新修訂版為非 available/partial，嚴格 fail-closed 回傳 `insufficient_data` (`snapshot_{status}_without_replacement`)，絕不復活舊修訂版或倒退至 D-1。
+    - 新增同日修訂版作廢與撤銷測試於 `tests/test_phase20_research_summary_and_queue.py`。
+  - **P1-5 (Windows Packaged Loopback Human Flow & Zero Egress Smoke)**:
+    - 擴充 `.github/scripts/windows-packaging-smoke.ps1` 與 `.github/workflows/windows-packaging.yml`，於真實安裝打包環境下驗證 Phase 20 端到端迴圈流程（靜態前端首頁 HTML、標的涵蓋率、本地搜尋 2330、研究啟動、官方結算日收盤價、人工決策隊列與審計抽屜）。
+    - 加入基於 `netstat -ano` 之作業系統等級零外部連線 (Zero Egress) 斷言，並於 `smoke-summary.json` 產出 Phase 20 驗證金鑰。
+  - **P1-6 (Strict Post-Migration Universe Parser Version Gate)**:
+    - 修正 `UniverseRepository._provenance()` 寫入防護閘門：移除相容舊版的 `allowed_parser_versions.update({"1", "2.0.0"})`；遷移完成後的新寫入嚴格強制登錄 `2.0.0`，拒絕舊版 `1`，歷史 v1 紀錄仍維持唯讀相容。
+    - 新增回歸測試於 `tests/test_phase20_universe_short_name_migration.py`。
+  - **P1-7 (Removed Unproven Claims)**:
+    - 移除 `ResearchSummaryCard.tsx` 中未經核准的宣稱「每日收盤 14:30 正式結算」，對齊真實 EOD 觀察值。
+  - **P2-1 (Jargon Elimination)**:
+    - 移除介面上的工程術語（如「材料化」改為「整理完成/準備完成」），並將生硬的 ISO-8601 時間戳轉換為易讀之繁體中文格式。
+  - **P2-2 (Dynamic Local Search History)**:
+    - 移除 `SearchHomePage.tsx` 中硬編碼且帶有主觀評論的「推薦關注標的」（如「權值龍頭」），改以使用者本機 `localStorage` 最近搜尋紀錄動態呈現，保護 Local-First 隱私。
+- [x] **全量自動化驗證與測試狀態**:
+  - Python 全量回歸測試：**908 passed, 0 failed** in 265.87s (4m 25s)。
+  - Phase 20 專項後端測試：**32 passed, 0 failed** in 10.52s。
+  - Vitest 前端單元與元件測試：**9 files passed, 46 tests passed** in 6.41s。
+  - 前端 ESLint 審查：`npm run lint` 通過，零錯誤、零警告。
+  - 前端 TypeScript 型別審查：`npx tsc -b` 通過，零錯誤。
+  - 前端靜態資源打包：`npm run build` 通過，`production_bundle_admin_secret_gate=PASS assets=2`。
+  - Git hygiene：`git diff --check` 通過，零空白行尾或換行違規。
+
+### 核心安全與邊界聲明
+- 本系統持續嚴格遵守 `DOCS/PRODUCT_BOUNDARY.md`：無券商 API、無真實帳號連線、無自動交易或跟單功能。
+- 本地股票搜尋與啟動輸入過程 100% 於本機 SQLite 執行，零外部網路發送 (Zero Egress)。
+- 杜金龍分析核心語意維持不變；嚴禁合成 Forward EPS 或推造波浪錨點，所有未驗證項目完整保留於人工決策隊列。
+- Merge Gate: `NOT AUTHORIZED`；自動合併 / 部署：`NOT AUTHORIZED`。依規範僅開立 Draft PR。
+
+### 下一步待辦
+- 保持停止於 **READY FOR PHASE 20 SECOND CODE REVIEW**，等待 Lukas Chiu 進行 Phase 20 第二輪代碼審查。
+
+---
+
 ## 2026-09-04 交班：Phase 19 Fourth Code Review 修正完成，進入 Fifth Review (LUK-75)
 
 ### 當前狀態與成果

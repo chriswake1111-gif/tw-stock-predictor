@@ -77,7 +77,7 @@ async function mockApi(page: Page) {
 test("captures deterministic Phase 9 acceptance states", async ({ page }, testInfo) => {
   await mockApi(page);
   const captures = [
-    ["/stocks/2330.TW", "stock-partial", "2330.TW"],
+    ["/legacy/stocks/2330.TW", "stock-partial", "2330.TW"],
     ["/market", "market-quality-warning", "市場概況"],
     ["/snapshots/snapshot-1", "historical-reconstruction", "保存的分析輸出"],
     ["/validation/runs/run-1", "historical-validation", "7 / 10"],

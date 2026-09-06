@@ -321,6 +321,19 @@ try {
     $ready = Invoke-RestMethod -Uri "$($descriptor.origin)/api/ready" -UseBasicParsing -TimeoutSec 15
     Assert-True ($ready.contract_version -eq "tw_stock_ready_v1") "readiness contract mismatch"
     Assert-True ($ready.ready -eq $true) "packaged server did not become ready"
+
+    # Assert zero external egress on packaged startup prior to any explicit user action (P1-C)
+    Write-Host "Smoke assertion: Zero external egress on startup before explicit user action"
+    $startupNetstat = netstat -ano | Select-String "\s+$serverPid$"
+    foreach ($line in $startupNetstat) {
+        $parts = ($line.Line.Trim() -split '\s+')
+        if ($parts.Length -ge 3) {
+            $remote = $parts[2]
+            Assert-True ($remote -match '^(127\.0\.0\.1|0\.0\.0\.0|\[::1?\]|\*):' -or $remote -eq "*:*") `
+                "External socket connection detected on server process before explicit user action: $remote"
+        }
+    }
+
     $daily = Invoke-WebRequest -Uri "$($descriptor.origin)/research/daily" -UseBasicParsing -TimeoutSec 15
     Assert-True ($daily.StatusCode -eq 200) "research/daily did not return HTTP 200"
 
@@ -336,28 +349,88 @@ try {
         "X-CSRF-Token" = $csrfRes.csrf_token
         "Content-Type" = "application/json"
     }
-    # 1. Trigger sync and poll to terminal completed state
+    # 1. Explicit global preparation (sync) if needed by clean installation
+    Write-Host "Smoke scenario: Phase 19 explicit global preparation (sync)"
     $syncRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/sync" -Method POST -Headers $syncHeaders -Body "{}" -WebSession $smokeSession -TimeoutSec 15
     Assert-True ($syncRes.status -in @("running", "succeeded")) "sync did not start"
     $syncOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $syncRes.operation_id -TimeoutSeconds 180 -WebSession $smokeSession
     $syncItemsJson = if ($syncOp.items) { ($syncOp.items | ConvertTo-Json -Compress) } else { "none" }
     Assert-True ($syncOp.status -in @("succeeded", "partial")) "sync operation failed: $($syncOp.status), error: $($syncOp.error_detail), items: $syncItemsJson"
 
-    # 2. Trigger on-demand symbol enablement and poll to terminal completed state
-    $enableRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/symbols/2330.TW/enable" -Method POST -Headers $syncHeaders -Body "{}" -WebSession $smokeSession -TimeoutSec 15
-    Assert-True ($enableRes.status -in @("running", "succeeded")) "enable symbol did not start"
-    $enableOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $enableRes.operation_id -TimeoutSeconds 120 -WebSession $smokeSession
-    $enableItemsJson = if ($enableOp.items) { ($enableOp.items | ConvertTo-Json -Compress) } else { "none" }
-    Assert-True ($enableOp.status -in @("succeeded", "partial")) "enable symbol operation failed: $($enableOp.status), error: $($enableOp.error_detail), items: $enableItemsJson"
+    # 2. Phase 20 Installed Loopback Human Flow & Egress Assertions (P1-1, P1-5)
+    Write-Host "Smoke scenario: Phase 20 loopback product flow"
+    # 2a. Verify static frontend root returns HTTP 200 and loads HTML
+    $frontendRoot = Invoke-WebRequest -Uri "$($descriptor.origin)/" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($frontendRoot.StatusCode -eq 200) "Frontend root did not return HTTP 200"
+    Assert-True ($frontendRoot.Content -match 'tw-stock-evidence-workspace|<div id="root">') "Frontend root HTML structure missing"
 
-    # 3. Assert BC-2: Authoritative Phase 14 EOD context proof
+    # 2b. Check universe coverage and perform local universe search for 2330
+    $coverageRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/universe/coverage" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($null -ne $coverageRes.universe_status) "universe coverage status missing"
+
+    $searchRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/universe/search?q=2330" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($searchRes.results.Count -ge 1) "Local search for 2330 returned no results"
+    Assert-True ($searchRes.results[0].official_code -eq "2330") "First search item official_code is not 2330"
+    Assert-True ($searchRes.results[0].canonical_symbol -eq "2330.TW") "First search item canonical_symbol is not 2330.TW"
+    Assert-True ($null -ne $searchRes.results[0].short_name) "First search item missing short_name"
+
+    # 2c. Phase 20 one-step bootstrap for 2330.TW without manual pre-enablement (P1-1)
+    Write-Host "Smoke scenario: Phase 20 one-step symbol bootstrap"
+    $bootstrapBody = @{ canonical_symbol = "2330.TW" } | ConvertTo-Json
+    $bootstrapRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/bootstrap" -Method POST -Headers $syncHeaders -Body $bootstrapBody -WebSession $smokeSession -TimeoutSec 15
+    Assert-True ($bootstrapRes.canonical_symbol -eq "2330.TW") "Bootstrap canonical_symbol mismatch"
+
+    # If bootstrap returns waiting_for_data_operation, wait for unrelated operation and re-enter
+    if ($bootstrapRes.status -eq "waiting_for_data_operation" -and $bootstrapRes.operation_id) {
+        $waitOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $bootstrapRes.operation_id -TimeoutSeconds 180 -WebSession $smokeSession
+        Assert-True ($waitOp.status -in @("succeeded", "partial")) "Unrelated data operation failed: $($waitOp.status)"
+        $bootstrapRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/bootstrap" -Method POST -Headers $syncHeaders -Body $bootstrapBody -WebSession $smokeSession -TimeoutSec 15
+        Assert-True ($bootstrapRes.canonical_symbol -eq "2330.TW") "Second bootstrap canonical_symbol mismatch"
+    }
+
+    # Prove target-aware ENABLE_SYMBOL was launched
+    Assert-True ($bootstrapRes.status -in @("preparing", "ready")) "Bootstrap status unexpected: $($bootstrapRes.status)"
+    if ($bootstrapRes.status -eq "preparing") {
+        Assert-True ($null -ne $bootstrapRes.operation_id) "Bootstrap preparing status missing operation_id"
+        $opDetails = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/data-operations/operations/$($bootstrapRes.operation_id)" -UseBasicParsing -TimeoutSec 15
+        Assert-True ($opDetails.operation_type -eq "enable_symbol") "Bootstrap operation_type must be enable_symbol: $($opDetails.operation_type)"
+        Assert-True ($opDetails.target_symbols -contains "2330.TW") "Bootstrap operation target_symbols must contain 2330.TW"
+
+        $bootOp = Wait-ForDataOperation -Origin $descriptor.origin -OperationId $bootstrapRes.operation_id -TimeoutSeconds 180 -WebSession $smokeSession
+        $bootItemsJson = if ($bootOp.items) { ($bootOp.items | ConvertTo-Json -Compress) } else { "none" }
+        Assert-True ($bootOp.status -in @("succeeded", "partial")) "Bootstrap enable_symbol operation failed: $($bootOp.status), error: $($bootOp.error_detail), items: $bootItemsJson"
+    }
+
+    # 2d. Assert BC-2: Authoritative Phase 14 EOD context proof
     $cutoff = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
     $eodRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/market-context/eod-close/as-of/2330.TW?knowledge_cutoff_at=$cutoff" -UseBasicParsing -TimeoutSec 15
     Assert-True ($null -ne $eodRes) "BC-2: EOD market context not returned"
 
-    # 4. Assert BC-3: General V2 analysis regression
+    # 2e. Assert BC-3: General V2 analysis regression
     $analysisRes = Invoke-WebRequest -Uri "$($descriptor.origin)/api/v2/analysis/2330.TW?knowledge_cutoff_at=$cutoff" -UseBasicParsing -TimeoutSec 15
     Assert-True ($analysisRes.StatusCode -eq 200) "BC-3: GET /api/v2/analysis/2330.TW did not return HTTP 200"
+
+    # 2f. Research summary verification (settled close, decision queue, audit reference)
+    $summaryRes = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/summary/2330.TW" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($summaryRes.canonical_symbol -eq "2330.TW") "Research summary canonical_symbol mismatch"
+    Assert-True ($summaryRes.official_code -eq "2330") "Research summary official_code mismatch"
+    Assert-True ($null -ne $summaryRes.market_context) "Research summary missing market_context"
+    Assert-True ($null -ne $summaryRes.valuation_context) "Research summary missing valuation_context"
+    Assert-True ($null -ne $summaryRes.technical_context) "Research summary missing technical_context"
+    Assert-True ($null -ne $summaryRes.human_decision_queue) "Research summary missing human_decision_queue"
+    Assert-True ($null -ne $summaryRes.audit_reference) "Research summary missing audit_reference"
+    Assert-True ($null -ne $summaryRes.knowledge_cutoff_at) "Research summary missing knowledge_cutoff_at"
+
+    # 2g. Zero external egress assertion for server process after local search & summary
+    $netstatOut = netstat -ano | Select-String "\s+$serverPid$"
+    foreach ($line in $netstatOut) {
+        $parts = ($line.Line.Trim() -split '\s+')
+        if ($parts.Length -ge 3) {
+            $remote = $parts[2]
+            Assert-True ($remote -match '^(127\.0\.0\.1|0\.0\.0\.0|\[::1?\]|\*):' -or $remote -eq "*:*") `
+                "External socket connection detected on server process during local search/summary: $remote"
+        }
+    }
 
     $second = New-ProductProcess -FilePath $launcher
     Write-Host "Smoke scenario: single-instance rejection"
@@ -574,6 +647,11 @@ try {
         active_writer_rejection = $true
         bounded_log_retention = $true
         uninstall_preserved_user_data = $true
+        phase20_universe_coverage = $true
+        phase20_local_search = $true
+        phase20_bootstrap_ready = $true
+        phase20_summary_ready = $true
+        phase20_zero_egress = $true
         runtime_dependencies = "installed_onedir_executables_with_minimal_system_path_only"
     }
     $summary | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $smokeSummaryPath -Encoding UTF8

@@ -696,3 +696,110 @@ export interface EnableSymbolResponse {
   status: string;
   current_stage: string;
 }
+
+// Phase 20: Installed Product Usability & Research Bootstrap V1
+
+export interface UniverseCoverage {
+  universe_status: "not_initialized" | "short_names_uninitialized" | "short_names_partial" | "ready";
+  total_instruments: number;
+  phase20_materialized_count: number;
+  coverage_ratio: number;
+  degraded_search_mode: boolean;
+}
+
+export interface UniverseSearchResultItem {
+  canonical_symbol: string;
+  official_code: string;
+  venue: string;
+  short_name: string | null;
+  display_name: string;
+  security_type: string;
+  has_short_name: boolean;
+}
+
+export interface UniverseSearchResponse {
+  query: string;
+  total_matches: number;
+  results: UniverseSearchResultItem[];
+  coverage: UniverseCoverage;
+}
+
+export interface ResearchBootstrapResponse {
+  status: "ready" | "preparing" | "waiting_for_data_operation";
+  operation_id: string | null;
+  canonical_symbol: string;
+  message?: string;
+}
+
+export interface ScreeningMetricSummary {
+  status: "unavailable" | "available" | "insufficient_data";
+  value: number | null;
+  label: string;
+  ui_copy: string;
+}
+
+export interface ScreeningContextSummary {
+  pe: ScreeningMetricSummary;
+  pb: ScreeningMetricSummary;
+  dividend_yield: ScreeningMetricSummary;
+}
+
+export interface HumanDecisionItem {
+  item_id: string;
+  title: string;
+  rule_id: string;
+  evidence_level: string;
+  description: string;
+  suggested_action: string;
+  status: "pending" | "completed" | "needs_human_judgment";
+}
+
+export interface MarketContextSummary {
+  settled_trade_date: string | null;
+  official_close: number | null;
+  close_status: "available" | "insufficient_data";
+  close_reason: string | null;
+  currency: string;
+  unit: string;
+  is_market_closed: boolean;
+  market_status_label: string;
+  market_turnover_total: number | null;
+  market_turnover_status: "available" | "insufficient_data";
+  cbc_m1b_ratio: number | null;
+  cbc_status: "available" | "insufficient_data";
+}
+
+export interface ValuationContextSummary {
+  status: "needs_human_judgment" | "available" | "insufficient_data";
+  reason_code: string | null;
+  target_matrix: unknown[];
+}
+
+export interface TechnicalContextSummary {
+  status: "needs_human_judgment" | "available" | "insufficient_data";
+  reason_code: string | null;
+  targets: Record<string, unknown> | null;
+}
+
+export interface AuditReferenceSummary {
+  source_snapshot_id: string | null;
+  available_at: string | null;
+  ingested_at: string | null;
+  model_version: string;
+  rule_traces: string[];
+}
+
+export interface ResearchSummaryResponse {
+  canonical_symbol: string;
+  official_code: string;
+  venue: string;
+  company_name: string | null;
+  short_name: string | null;
+  market_context: MarketContextSummary;
+  valuation_context: ValuationContextSummary;
+  technical_context: TechnicalContextSummary;
+  screening_context: ScreeningContextSummary;
+  human_decision_queue: HumanDecisionItem[];
+  audit_reference: AuditReferenceSummary;
+  knowledge_cutoff_at: string;
+}

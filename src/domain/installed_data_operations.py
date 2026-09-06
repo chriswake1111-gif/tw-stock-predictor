@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+import threading
 from typing import Any, Sequence
 
 from src.domain.data_foundation import normalize_utc_timestamp
@@ -173,3 +174,41 @@ class InstalledItemRow:
     completed_at: str | None = None
     error_code: str | None = None
     error_detail: str | None = None
+
+
+class BackgroundWorkerThread(threading.Thread):
+    """Governed background worker thread for installed data operations.
+
+    Supports cooperative cancellation and authorization revocation.
+    """
+
+    def __init__(
+        self,
+        group=None,
+        target=None,
+        name=None,
+        args=(),
+        kwargs=None,
+        *,
+        daemon=True,
+        operation_id: str | None = None,
+        auth: InstalledWriteAuthorization | None = None,
+        stop_event: threading.Event | None = None,
+    ):
+        super().__init__(
+            group=group,
+            target=target,
+            name=name,
+            args=args,
+            kwargs=kwargs,
+            daemon=daemon,
+        )
+        self.operation_id = operation_id
+        self.auth = auth
+        self.stop_event = stop_event or threading.Event()
+
+    def request_stop(self) -> None:
+        """Cooperatively requests the worker to stop and revokes write authorization."""
+        self.stop_event.set()
+        if self.auth is not None and hasattr(self.auth, "revoke"):
+            self.auth.revoke()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
@@ -16,10 +17,12 @@ from pydantic import BaseModel, Field
 
 from src.api.workflow_security import CSRF_COOKIE_NAME, CsrfSessionStore
 from src.domain.installed_data_operations import (
+    BackgroundWorkerThread,
     InstalledOperationStatus,
     InstalledOperationType,
     InstalledReadiness,
     OperationActiveConflict,
+    OperationCancelled,
 )
 from src.repositories.installed_data_operations_repository import (
     InstalledDataOperationsRepository,
@@ -107,6 +110,11 @@ def get_data_operations_status(request: Request) -> dict[str, Any]:
             {
                 "operation_id": active.operation_id,
                 "operation_type": active.operation_type,
+                "target_symbols": (
+                    json.loads(active.target_symbols_json)
+                    if active.target_symbols_json
+                    else []
+                ),
                 "status": active.status,
                 "current_stage": active.current_stage,
                 "lease_expires_at": active.lease_expires_at,
@@ -132,10 +140,18 @@ def get_operation_details(operation_id: str, request: Request) -> dict[str, Any]
     if op is None:
         raise HTTPException(status_code=404, detail=f"Operation {operation_id} not found")
 
+    target_symbols: list[str] = []
+    if op.target_symbols_json:
+        try:
+            target_symbols = json.loads(op.target_symbols_json)
+        except Exception:
+            target_symbols = []
+
     items = repo.list_items_by_operation(operation_id)
     return {
         "operation_id": op.operation_id,
         "operation_type": op.operation_type,
+        "target_symbols": target_symbols,
         "status": op.status,
         "current_stage": op.current_stage,
         "lease_owner_id": op.lease_owner_id,
@@ -183,15 +199,35 @@ def trigger_sync_operation(
 
     deadline_sec = min(body.deadline_seconds, GLOBAL_OPERATION_DEADLINE_SECONDS)
     deadline_monotonic = time.monotonic() + deadline_sec
+    stop_event = threading.Event()
 
     def _run_bg():
         try:
             sync_svc.run_stage_prerequisites_calendar(op_id, auth, deadline_monotonic)
+            if stop_event.is_set():
+                raise OperationCancelled(f"Operation {op_id} interrupted by shutdown")
             sync_svc.run_stage_universe(op_id, auth, deadline_monotonic)
+            if stop_event.is_set():
+                raise OperationCancelled(f"Operation {op_id} interrupted by shutdown")
             sync_svc.run_stage_classification(op_id, auth, body.target_symbols, deadline_monotonic)
+            if stop_event.is_set():
+                raise OperationCancelled(f"Operation {op_id} interrupted by shutdown")
             sync_svc.run_stage_eod(op_id, auth, deadline_monotonic)
+            if stop_event.is_set():
+                raise OperationCancelled(f"Operation {op_id} interrupted by shutdown")
             sync_svc.run_stage_turnover_and_cbc(op_id, auth, deadline_monotonic)
+            if stop_event.is_set():
+                raise OperationCancelled(f"Operation {op_id} interrupted by shutdown")
             sync_svc.run_stage_projection(op_id, auth, deadline_monotonic)
+        except OperationCancelled as exc:
+            logger.info("Background sync operation %s interrupted: %s", op_id, exc)
+            try:
+                auth.revoke()
+                sync_svc.operation_repo.finalize_operation(
+                    op_id, status=InstalledOperationStatus.INTERRUPTED.value, error_detail=str(exc)
+                )
+            except Exception:
+                pass
         except Exception as exc:
             logger.exception("Background sync operation %s failed: %s", op_id, exc)
             try:
@@ -202,7 +238,16 @@ def trigger_sync_operation(
             except Exception:
                 pass
 
-    worker_thread = threading.Thread(target=_run_bg, name=f"data-ops-sync-{op_id}", daemon=True)
+    worker_thread = BackgroundWorkerThread(
+        target=_run_bg,
+        name=f"data-ops-sync-{op_id}",
+        operation_id=op_id,
+        auth=auth,
+        stop_event=stop_event,
+        daemon=True,
+    )
+    if hasattr(request.app.state, "background_worker_threads"):
+        request.app.state.background_worker_threads.append(worker_thread)
     worker_thread.start()
 
     return {
@@ -221,6 +266,11 @@ def cancel_active_operation(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="No active operation to cancel")
 
     repo.request_cancel(active.operation_id)
+    if hasattr(request.app.state, "background_worker_threads"):
+        for t in request.app.state.background_worker_threads:
+            if getattr(t, "operation_id", None) == active.operation_id:
+                if hasattr(t, "request_stop"):
+                    t.request_stop()
     return {
         "operation_id": active.operation_id,
         "status": "cancelling",
@@ -248,11 +298,26 @@ def enable_symbol(
 
     deadline_sec = GLOBAL_OPERATION_DEADLINE_SECONDS
     deadline_monotonic = time.monotonic() + deadline_sec
+    stop_event = threading.Event()
 
     def _run_bg():
         try:
-            sync_svc.run_symbol_enablement_pipeline(op_id, auth, clean_sym, deadline_monotonic)
+            sync_svc.run_symbol_enablement_pipeline(
+                op_id, auth, clean_sym, deadline_monotonic, stop_event=stop_event
+            )
+        except OperationCancelled as exc:
+            logger.info("Background enable_symbol operation %s cancelled/interrupted: %s", op_id, exc)
+            try:
+                auth.revoke()
+                sync_svc.operation_repo.finalize_operation(
+                    op_id,
+                    status=InstalledOperationStatus.INTERRUPTED.value,
+                    error_detail=str(exc),
+                )
+            except Exception:
+                pass
         except Exception as exc:
+            logger.exception("Background enable_symbol operation %s failed: %s", op_id, exc)
             try:
                 auth.revoke()
                 err_msg = str(exc)
@@ -272,7 +337,16 @@ def enable_symbol(
             except Exception:
                 pass
 
-    worker_thread = threading.Thread(target=_run_bg, name=f"data-ops-enable-{clean_sym}-{op_id}", daemon=True)
+    worker_thread = BackgroundWorkerThread(
+        target=_run_bg,
+        name=f"data-ops-enable-{clean_sym}-{op_id}",
+        operation_id=op_id,
+        auth=auth,
+        stop_event=stop_event,
+        daemon=True,
+    )
+    if hasattr(request.app.state, "background_worker_threads"):
+        request.app.state.background_worker_threads.append(worker_thread)
     worker_thread.start()
 
     return {
