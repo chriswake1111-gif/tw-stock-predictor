@@ -10,6 +10,7 @@
 
 - `src/services/research_bootstrap_service.py`、`src/api/routes/v2_research.py`：bootstrap 新增可選 `refresh`（預設 false，相容原呼叫）。明確更新要求不再因舊本機 close available 而直接 ready；仍使用既有 enable_symbol 作業與授權。
 - `src/services/installed_data_sync_service.py`：當指定日期沒有有效交易日證據，使用既有白名單的對應市場成交端點，驗證唯一指定日期、有限且正值的成交金額。僅追加對應 venue 的已觀察交易日證據；保留來源、SHA-256、日期、TWD 單位、取得時間與作業 lineage。既有休市、撤銷或衝突不被覆蓋，不從星期或假日表缺席推算交易日。抓取仍受既有 deadline、capability 與 resource lock 控制。
+- `src/services/installed_data_sync_service.py`：EOD 寫入成功後追加一次唯讀 Phase 16 佇列品質檢查；若標的仍為 `identity_unresolved` 或其他非 `available` 狀態，作業完成狀態改為 `partial` 並保留原因，避免把可用行情誤報為完整研究就緒。
 - `frontend/src/api/phase20Client.ts`、`frontend/src/api/dataOperationsClient.ts`：傳遞 refresh 與 AbortSignal，包括 CSRF、bootstrap、operation read。
 - `frontend/src/pages/StockResearchPage.tsx`：更新操作明確連線檢查；partial 停止自動重新啟動；只有無關作業成功後才允許標的專屬接續。HTTP 等待受總期限約束，輪詢採序列等待；換標的／離頁中止舊請求並忽略遲到結果。更新失敗保留已讀取的本機摘要並標示失敗。
 - `frontend/src/components/ResearchSummaryCard.tsx`：以「本機行情日期」呈現資料日期，不暗示官方來源一定已提供今日行情。
@@ -29,8 +30,8 @@ API request 僅增加可選 `refresh: boolean = false`；無 schema migration、
 
 | 驗證 | 結果 |
 |---|---|
-| 新後端回歸：日期精確比對、非正／非有限金額、重複日期、HTML、撤銷／休市、PIT、市場隔離、取消、逾時、舊行情 refresh | 15 passed |
-| `python -m pytest -q --basetemp=.tmp_refresh_full_01 -o cache_dir=.tmp_refresh_cache --tb=short` | 930 passed，1 既有 Starlette deprecation warning，165.00 秒 |
+| 新後端回歸：日期精確比對、非正／非有限金額、重複日期、HTML、撤銷／休市、PIT、市場隔離、取消、逾時、舊行情 refresh、Phase 16 partial gate | 17 passed |
+| `python -m pytest -q --basetemp=.tmp_packaging_followup_pytest -o cache_dir=.tmp_packaging_followup_cache` | 932 passed，1 既有 Starlette deprecation warning，177.10 秒 |
 | `npm.cmd test -- --reporter=dot` | 10 files / 54 tests passed |
 | `npm.cmd run lint` | PASS |
 | `npm.cmd run build`（含 TypeScript） | PASS；production_bundle_admin_secret_gate=PASS assets=2 |

@@ -70,8 +70,12 @@ from src.collectors.eod_close_collectors import (
     parse_twse_snapshot,
 )
 from src.domain.liquidity import MarketTurnoverObservation, M1BMonthlyObservation
+from src.domain.neutral_batch_market_context import NeutralBatchMarketContextRequest
 from src.repositories.eod_close_repository import EodCloseRepository
 from src.repositories.liquidity_repository import LiquidityRepository
+from src.repositories.neutral_batch_market_context_repository import (
+    NeutralBatchMarketContextRepository,
+)
 from src.repositories.universe_repository import (
     UniverseIdentityRepository,
     UniverseRepository,
@@ -1801,6 +1805,7 @@ class InstalledDataSyncService:
         operation_id: str,
         authorization: InstalledWriteAuthorization,
         deadline_monotonic: float | None = None,
+        partial_reason: str | None = None,
     ) -> None:
         self.operation_repo.transition_stage(
             operation_id,
@@ -1824,13 +1829,81 @@ class InstalledDataSyncService:
 
         if has_failed or readiness_enum == InstalledReadiness.NOT_INITIALIZED:
             final_status = InstalledOperationStatus.FAILED.value
-        elif has_partial or readiness_enum == InstalledReadiness.PARTIAL:
+        elif partial_reason or has_partial or readiness_enum == InstalledReadiness.PARTIAL:
             final_status = InstalledOperationStatus.PARTIAL.value
         else:
             final_status = InstalledOperationStatus.SUCCEEDED.value
 
-        self.operation_repo.finalize_operation(operation_id, status=final_status)
+        self.operation_repo.finalize_operation(
+            operation_id,
+            status=final_status,
+            error_detail=partial_reason,
+        )
         authorization.revoke()
+
+    def _phase16_enablement_quality(
+        self,
+        *,
+        canonical_symbol: str,
+        market_date: str,
+        knowledge_cutoff_at: str,
+    ) -> tuple[str | None, str | None]:
+        """Read the target's Phase 16 state after EOD materialization.
+
+        The EOD row can be valid while the downstream neutral-batch context
+        remains unresolved (for example, when an operational event has no
+        publication instant).  Keep the operation fail-closed in that case:
+        callers may use the fresh EOD row, but must see a partial operation
+        rather than an unqualified success.
+        """
+        request = NeutralBatchMarketContextRequest(
+            market_date=market_date,
+            knowledge_cutoff_at=knowledge_cutoff_at,
+            venue_scope="TWSE_TPEX",
+            limit=50,
+        )
+        storage = EodCloseRepository(self.db_path)
+        repository = NeutralBatchMarketContextRepository(
+            self.db_path,
+            storage=storage,
+        )
+        with storage.read_transaction() as conn:
+            projection = repository.read_for_symbols_with_connection(
+                conn,
+                request,
+                canonical_symbols=[canonical_symbol],
+            )
+
+        candidates = [
+            dict(item)
+            for item in projection.items
+            if item.get("canonical_symbol") == canonical_symbol
+        ]
+        candidates.sort(
+            key=lambda item: (
+                0 if item.get("item_kind") == "denominator_candidate" else 1,
+                str(item.get("item_kind") or ""),
+                str(item.get("source_record_reference") or ""),
+            )
+        )
+        item = candidates[0] if candidates else None
+        if item is None:
+            return (
+                None,
+                f"symbol {canonical_symbol} Phase16 context has no projected item for {market_date}",
+            )
+
+        item_state = str(item.get("item_state") or "unknown")
+        if item_state == "available":
+            return item_state, None
+
+        reason_codes = item.get("reason_codes")
+        reason = ", ".join(str(value) for value in reason_codes) if isinstance(reason_codes, list) else ""
+        suffix = f" ({reason})" if reason else ""
+        return (
+            item_state,
+            f"symbol {canonical_symbol} Phase16 context is {item_state} for {market_date}{suffix}",
+        )
 
     def ensure_official_session(
         self, operation_id: str, authorization: InstalledWriteAuthorization,
@@ -2137,8 +2210,19 @@ class InstalledDataSyncService:
             raise ValueError(f"symbol {code} did not become publicly eligible after eod materialization")
 
         _check_cancelled()
-        # 6. Readiness refresh & completion
-        self.run_stage_projection(operation_id, authorization)
+        # 6. Readiness refresh & completion.  A valid EOD row is not enough to
+        # claim a complete research queue item; preserve a truthful partial
+        # operation when Phase 16 applicability remains unresolved.
+        _, phase16_partial_reason = self._phase16_enablement_quality(
+            canonical_symbol=canonical_sym,
+            market_date=trade_date,
+            knowledge_cutoff_at=utc_now_timestamp(),
+        )
+        self.run_stage_projection(
+            operation_id,
+            authorization,
+            partial_reason=phase16_partial_reason,
+        )
 
     def execute_sync(
         self,

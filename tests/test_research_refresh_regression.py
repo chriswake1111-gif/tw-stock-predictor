@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.collectors.installed_egress_client import DeadlineExhaustedError
-from src.domain.installed_data_operations import OperationAuthorizationRevoked
+from src.domain.installed_data_operations import InstalledReadiness, OperationAuthorizationRevoked
 from src.repositories.data_foundation_repository import DataFoundationRepository
 from src.repositories.migration_runner import apply_valuation_migration
 from src.services.installed_data_sync_service import InstalledDataSyncService
@@ -110,3 +110,59 @@ def test_explicit_refresh_does_not_accept_old_local_price(tmp_path):
         worker.join(5)
     assert result["status"] == "preparing"
     assert calls == [result["operation_id"]]
+
+
+def test_projection_keeps_phase16_degradation_partial_when_readiness_is_ready(service, monkeypatch):
+    """A valid EOD row must not turn an unresolved Phase 16 queue into success."""
+    monkeypatch.setattr(
+        "src.services.installed_data_sync_service.evaluate_installed_readiness",
+        lambda conn: (InstalledReadiness.READY, {}),
+    )
+    op, auth = service.create_operation_and_capability()
+
+    service.run_stage_projection(
+        op,
+        auth,
+        partial_reason="symbol 2330.TW Phase16 context is identity_unresolved",
+    )
+
+    row = service.operation_repo.get_operation_by_id(op)
+    assert row is not None
+    assert row.status == "partial"
+    assert row.error_detail == "symbol 2330.TW Phase16 context is identity_unresolved"
+
+
+def test_phase16_enablement_quality_reports_unresolved_item(service, monkeypatch):
+    """The target item state and reason are propagated without fabricating data."""
+    class FakeProjection:
+        items = (
+            {
+                "canonical_symbol": "2330.TW",
+                "item_kind": "denominator_candidate",
+                "item_state": "identity_unresolved",
+                "reason_codes": ["identity_unresolved", "publication_instant_unproven"],
+            },
+        )
+
+    class FakeRepository:
+        def __init__(self, db_path, *, storage):
+            self.storage = storage
+
+        def read_for_symbols_with_connection(self, conn, request, *, canonical_symbols):
+            assert canonical_symbols == ["2330.TW"]
+            return FakeProjection()
+
+    monkeypatch.setattr(
+        "src.services.installed_data_sync_service.NeutralBatchMarketContextRepository",
+        FakeRepository,
+    )
+
+    state, reason = service._phase16_enablement_quality(
+        canonical_symbol="2330.TW",
+        market_date="2026-09-07",
+        knowledge_cutoff_at="2026-09-08T00:00:00Z",
+    )
+
+    assert state == "identity_unresolved"
+    assert reason is not None
+    assert "publication_instant_unproven" in reason
