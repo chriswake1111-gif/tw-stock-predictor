@@ -41,6 +41,16 @@ API request 僅增加可選 `refresh: boolean = false`；無 schema migration、
 
 首輪 Python 的預設暫存目錄出現 Windows 權限問題，獨立 basetemp 重跑成功；未削弱測試。
 
+## Windows packaging follow-up（2026-09-09）
+
+首輪 workflow `34243215007` 已完成安裝程式建置，但乾淨機器煙霧測試發現：EOD 可用而 Phase 16 尚未完整時，作業被誤報為 `succeeded`。`bf49645` 將這個情況改為帶原因的 `partial`，再重新執行 workflow `34287455859`。
+
+- Windows onedir、安裝程式、package manifest、runtime tests 與 clean-machine smoke 全部通過。
+- Artifact：`tw-stock-predictor-windows-bf496453059172a665c8a6ed1fce777bff8131f1`
+- Installer：`tw-stock-predictor-setup.exe`，128,443,125 bytes，SHA-256 `8f1cf003cab119778b9c5e59f41b913a8abc422da2beb6675921ee91135346fe`
+- Artifact zip SHA-256：`e67982dc214aaabfbd3ce36920a924619c548ce733fda7e2555551845a956acc`
+- Artifact 保留期限：2026-09-22（GitHub Actions artifact policy）
+
 ### 真實官方連線，獨立安裝資料副本
 
 使用安裝版 2026-09-08 19:39 的 pre-upgrade backup 複製到專案診斷目錄；不修改原安裝資料。副本的舊 active operation 以既有 repository API 標記 interrupted 後測試。受限環境 initially WinError 10013，經允許執行同一受治理流程後連線成功。
@@ -70,7 +80,7 @@ API request 僅增加可選 `refresh: boolean = false`；無 schema migration、
 
 ## Remaining Limitations / Rollback
 
-- 本次完成原始碼及驗證，未重新產生或安裝 Windows installer，未 commit、push 或部署。
+- 原始碼修正已提交為 `bf49645` 並推送至 `origin/main`；Windows installer 已由 workflow 建置，且在乾淨機器煙霧測試通過。未在本機直接安裝 runner 產物。
 - 真實外部連線僅驗證上述 TWSE 兩檔；TPEx 以可重現 fixture 驗證，未宣稱 live TPEx 通過。
 - 官方端點未提供該日期、日期衝突或連線失敗時仍停止並揭露原因，不能保證每次操作都可取得新資料。
 - 切換頁面取消的是前端請求／輪詢；已授權的後端作業仍遵守既有 lease/deadline 或顯式取消流程，不因前端離頁而取消其他使用者操作。
