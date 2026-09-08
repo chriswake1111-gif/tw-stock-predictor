@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/v2/research", tags=["research-v2"])
 
 class BootstrapRequestBody(BaseModel):
     canonical_symbol: str
+    refresh: bool = False
 
 
 def _service(request: Request | None = None) -> CurrentResearchService:
@@ -96,7 +97,7 @@ def bootstrap(
     request: Request,
 ):
     try:
-        return _bootstrap_service(request).bootstrap_symbol(body.canonical_symbol)
+        return _bootstrap_service(request).bootstrap_symbol(body.canonical_symbol, refresh=body.refresh)
     except HTTPException:
         raise
     except Exception as exc:

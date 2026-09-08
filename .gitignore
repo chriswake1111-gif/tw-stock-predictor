@@ -26,3 +26,7 @@ reports/backtest/**/windows.csv
 reports/backtest/**/data/
 reports/backtest/**/official_gap_adjustments.csv
 reports/backtest/**/zero_volume_reconciliation.csv
+
+# Local research-refresh verification artifacts (rebuildable; may contain copied user data).
+/.tmp_refresh*
+/reports/diagnostics/research-refresh-local/

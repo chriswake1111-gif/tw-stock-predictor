@@ -65,7 +65,7 @@ class ResearchBootstrapService:
             if t.is_alive():
                 t.join(timeout=timeout)
 
-    def bootstrap_symbol(self, canonical_symbol: str) -> dict[str, Any]:
+    def bootstrap_symbol(self, canonical_symbol: str, *, refresh: bool = False) -> dict[str, Any]:
         """Bootstrap research readiness for canonical_symbol.
 
         Evaluates installed readiness, active data operations, and target coverage.
@@ -76,7 +76,7 @@ class ResearchBootstrapService:
         # 1. Check if current settled research is already available
         context = self.current_research_service.get_context(canonical_symbol)
         official_close = context.get("official_close") or {}
-        if official_close.get("status") == "available":
+        if official_close.get("status") == "available" and not refresh:
             return {
                 "status": "ready",
                 "canonical_symbol": canonical_symbol,

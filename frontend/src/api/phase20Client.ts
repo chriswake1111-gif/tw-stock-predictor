@@ -63,16 +63,19 @@ export async function getResearchSummary(
 }
 
 export async function bootstrapSymbol(
-  canonicalSymbol: string
+  canonicalSymbol: string,
+  refresh = false,
+  signal?: AbortSignal
 ): Promise<ResearchBootstrapResponse> {
-  const token = await getCsrfToken();
+  const token = await getCsrfToken(signal);
   const res = await fetch("/api/v2/research/bootstrap", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-CSRF-Token": token,
     },
-    body: JSON.stringify({ canonical_symbol: canonicalSymbol }),
+    body: JSON.stringify({ canonical_symbol: canonicalSymbol, refresh }),
+    signal,
   });
   if (!res.ok) {
     const errorBody = await res.json().catch(() => ({}));

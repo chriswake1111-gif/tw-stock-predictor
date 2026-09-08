@@ -480,7 +480,7 @@ describe("Phase 20 Usability & Bootstrap Tests", () => {
     renderWithProviders(<App />, "/stocks/2330.TW");
 
     await waitFor(() => {
-      expect(bootstrapCallCount).toBe(4);
+      expect(bootstrapCallCount).toBe(3);
       expect(screen.getByText(/980.00 元/)).toBeInTheDocument();
     });
   });

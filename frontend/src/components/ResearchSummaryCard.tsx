@@ -84,7 +84,7 @@ export function ResearchSummaryCard({
                 color: m.is_market_closed ? "#92400e" : "#0369a1",
               }}
             >
-              {m.market_status_label}
+              {m.is_market_closed ? m.market_status_label : `本機行情日期：${m.settled_trade_date || "尚無資料"}`}
             </span>
           </div>
           {summary.company_name && summary.short_name && summary.company_name !== summary.short_name && (
@@ -152,13 +152,13 @@ export function ResearchSummaryCard({
         <div style={{ padding: "0.75rem 1rem", background: "var(--color-bg-subtle, #f8fafc)", borderRadius: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", color: "var(--color-muted, #64748b)", fontSize: "0.85rem", marginBottom: "0.25rem" }}>
             <Calendar size={15} />
-            <span>最新結算交易日</span>
+            <span>本機行情交易日</span>
           </div>
           <div style={{ fontSize: "1.3rem", fontWeight: 700, color: "var(--color-foreground, #0f172a)" }}>
             {m.settled_trade_date || "尚未結算"}
           </div>
           <div style={{ fontSize: "0.8rem", color: "var(--color-muted, #64748b)", marginTop: "0.3rem" }}>
-            經官方核實之結算日期
+            已取得的官方行情日期，不代表來源已發布最新資料
           </div>
         </div>
 

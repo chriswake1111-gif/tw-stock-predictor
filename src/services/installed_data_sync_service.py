@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from decimal import Decimal, InvalidOperation
+from dataclasses import replace
 import sqlite3
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -1829,6 +1832,125 @@ class InstalledDataSyncService:
         self.operation_repo.finalize_operation(operation_id, status=final_status)
         authorization.revoke()
 
+    def ensure_official_session(
+        self, operation_id: str, authorization: InstalledWriteAuthorization,
+        venue: str, trade_date: str, deadline_monotonic: float | None = None,
+    ) -> None:
+        """Use exact venue turnover as positive session evidence, never weekday inference.
+
+        Holiday schedules are sparse. Missing dates require observed official activity;
+        an explicit closure or revoked revision remains blocking. Proof is venue-scoped
+        and becomes known only at retrieval time, not at the historic trade date.
+        """
+        now = utc_now_timestamp()
+        with self.operation_repo._get_connection() as conn:
+            rows = conn.execute(
+                """SELECT * FROM trading_calendar_revisions
+                   WHERE market IN (?, 'TW') AND trade_date = ?
+                     AND available_at <= ? AND ingested_at <= ?
+                   ORDER BY revision_number DESC, available_at DESC,
+                            ingested_at DESC, calendar_revision_id DESC""",
+                (venue, trade_date, now, now),
+            ).fetchall()
+        latest = {}
+        for row in rows:
+            latest.setdefault(row["market"], row)
+        if any(row["status"] != "available" or row["session_status"] not in ("trading", "special")
+               for row in latest.values()):
+            raise ValueError(f"source session {trade_date} is not an authorized trading session: calendar conflict or revoked proof")
+        if latest:
+            return
+
+        provider = "tpex" if venue == "TPEX" else "twse"
+        resource = f"{provider}.market-turnover"
+        url = (MarketTurnoverCollector.TPEX_OPENAPI_URL if venue == "TPEX"
+               else MarketTurnoverCollector.TWSE_OPENAPI_URL)
+        field = "TradeAmount" if venue == "TPEX" else "TradeValue"
+        self._require_live_write_authorization(operation_id, authorization, resource)
+        item_id = f"item_{uuid4().hex}"
+        self.operation_repo.create_item(
+            item_id=item_id, operation_id=operation_id,
+            stage=InstalledOperationStage.PREREQUISITES_CALENDAR.value, resource_id=resource,
+        )
+        foundation = ProductionIngestionService(self.db_path).foundation
+        run = IngestionRun(
+            ingestion_run_id=f"session_{uuid4().hex}", started_at=now,
+            trigger_type=TriggerType.MANUAL, runner_version="observed-session-v1",
+            requested_resources=(resource,), actor_id=authorization.actor_id,
+        )
+        foundation.add_run(run)
+        locked = False
+        try:
+            foundation.acquire_resource_lock(resource, run.ingestion_run_id, now)
+            locked = True
+            _, body, _ = self.egress_client.fetch(url, deadline_monotonic=deadline_monotonic)
+            payload = json.loads(body.decode("utf-8-sig"))
+            if not isinstance(payload, list) or not payload:
+                raise ValueError("official activity payload must be a non-empty list")
+            matches = []
+            for row in payload:
+                if not isinstance(row, dict) or "Date" not in row or field not in row:
+                    raise ValueError("official activity schema missing date or traded amount")
+                day = MarketTurnoverCollector._iso_date(row["Date"])
+                date.fromisoformat(day)
+                if day == trade_date:
+                    matches.append(row)
+            if len(matches) != 1:
+                raise ValueError("exact session missing or duplicated in official activity")
+            amount = Decimal(str(matches[0][field]).replace(",", ""))
+            if not amount.is_finite() or amount <= 0:
+                raise ValueError("official session requires positive finite traded amount")
+            observed = utc_now_timestamp()
+            if date.fromisoformat(trade_date) > datetime.now(timezone(timedelta(hours=8))).date():
+                raise ValueError("official session date is in the future")
+            self._require_live_write_authorization(operation_id, authorization, resource)
+            raw = foundation.add_raw_revision(RawResourceRevision(
+                raw_resource_revision_id=f"raw_session_{uuid4().hex}",
+                provider_id=provider, resource_id=resource,
+                logical_revision_key=f"observed-session:{venue}:{trade_date}",
+                received_at=observed, ingested_at=observed, available_at=observed,
+                raw_payload_sha256=hashlib.sha256(body).hexdigest(), parser_version="1",
+                schema_fingerprint=sha256_text(f"Date,{field}"),
+                storage_policy=StoragePolicy.HASH_ONLY,
+                quality_status=DataHealthStatus.FRESH, eligibility_status=EligibilityStatus.ELIGIBLE,
+                reason=f"Observed session evidence: {url}; Date={matches[0]['Date']}; {field}={amount}; unit=TWD",
+            ))
+            self._require_live_write_authorization(operation_id, authorization, "twse.trading-calendar")
+            foundation.add_calendar_revision(
+                calendar_revision_id=f"calendar_{uuid4().hex}",
+                raw_resource_revision_id=raw["raw_resource_revision_id"], market=venue,
+                trade_date=trade_date, session_status="trading", available_at=observed,
+                ingested_at=observed, note=f"Observed positive market turnover: {url}; {field}={amount} TWD",
+            )
+            child_item = f"session_item_{uuid4().hex}"
+            foundation.add_run_item(IngestionRunItem(
+                ingestion_run_item_id=child_item, ingestion_run_id=run.ingestion_run_id,
+                provider_id=provider, resource_id=resource, started_at=now, completed_at=observed,
+                status=IngestionItemStatus.ACCEPTED, quality_status=DataHealthStatus.FRESH,
+                raw_payload_sha256=hashlib.sha256(body).hexdigest(), parser_version="1",
+                schema_fingerprint=sha256_text(f"Date,{field}"), record_count=len(payload),
+                accepted_count=1, rejected_count=0,
+            ))
+            foundation.complete_run(replace(run, completed_at=observed, status=IngestionRunStatus.SUCCEEDED))
+            self.operation_repo.update_item(
+                item_id=item_id, status=InstalledItemStatus.ACCEPTED.value,
+                ingestion_run_id=run.ingestion_run_id, ingestion_run_item_id=child_item,
+                raw_resource_revision_id=raw["raw_resource_revision_id"],
+            )
+        except Exception as exc:
+            foundation.complete_run(replace(run, completed_at=utc_now_timestamp(), status=IngestionRunStatus.FAILED))
+            self.operation_repo.update_item(
+                item_id=item_id, status=InstalledItemStatus.PARTIAL.value,
+                error_detail=f"calendar proof missing for {venue} {trade_date}: {exc}",
+                ingestion_run_id=run.ingestion_run_id,
+            )
+            if isinstance(exc, (ValueError, InvalidOperation)):
+                raise ValueError(f"source session {trade_date} is not an authorized trading session: calendar proof missing ({exc})") from exc
+            raise
+        finally:
+            if locked:
+                foundation.release_resource_lock(resource, run.ingestion_run_id)
+
     def run_symbol_enablement_pipeline(
         self,
         operation_id: str,
@@ -1921,55 +2043,19 @@ class InstalledDataSyncService:
         if not trade_date:
             raise ValueError(f"eod payload trade date could not be determined: status={parsed_snap.status}, reason={parsed_snap.reason}")
 
-        with self.operation_repo._get_connection() as conn:
-            year_prefix = f"{trade_date[:4]}%"
-            cal_year_row = conn.execute(
-                "SELECT COUNT(*) FROM trading_calendar_revisions WHERE trade_date LIKE ? AND status = 'available'",
-                (year_prefix,),
-            ).fetchone()
-            cal_year_count = cal_year_row[0] if cal_year_row else 0
-            if cal_year_count == 0:
-                eod_item = f"item_{uuid4().hex}"
-                self.operation_repo.create_item(
-                    item_id=eod_item,
-                    operation_id=operation_id,
-                    stage=InstalledOperationStage.EOD.value,
-                    resource_id=venue_resource,
-                )
-                self.operation_repo.update_item(
-                    item_id=eod_item,
-                    status=InstalledItemStatus.PARTIAL.value,
-                    error_detail=f"source session {trade_date} is not an authorized trading session: calendar proof missing for year {trade_date[:4]}",
-                )
-                raise ValueError(
-                    f"source session {trade_date} is not an authorized trading session: "
-                    f"calendar proof missing for year {trade_date[:4]}"
-                )
-
-            cal_row = conn.execute(
-                """
-                SELECT session_status FROM trading_calendar_revisions
-                WHERE trade_date = ? AND status = 'available'
-                """,
-                (trade_date,),
-            ).fetchone()
-            if not cal_row or cal_row[0] not in ("trading", "special"):
-                eod_item = f"item_{uuid4().hex}"
-                self.operation_repo.create_item(
-                    item_id=eod_item,
-                    operation_id=operation_id,
-                    stage=InstalledOperationStage.EOD.value,
-                    resource_id=venue_resource,
-                )
-                self.operation_repo.update_item(
-                    item_id=eod_item,
-                    status=InstalledItemStatus.PARTIAL.value,
-                    error_detail=f"source session {trade_date} is not an authorized trading session: status={cal_row[0] if cal_row else 'missing'}",
-                )
-                raise ValueError(
-                    f"source session {trade_date} is not an authorized trading session: "
-                    f"status={cal_row[0] if cal_row else 'missing'}"
-                )
+        try:
+            self.ensure_official_session(operation_id, authorization, venue, trade_date, deadline_monotonic)
+        except ValueError as exc:
+            item_id = f"item_{uuid4().hex}"
+            self.operation_repo.create_item(
+                item_id=item_id, operation_id=operation_id,
+                stage=InstalledOperationStage.EOD.value, resource_id=venue_resource,
+            )
+            self.operation_repo.update_item(
+                item_id=item_id, status=InstalledItemStatus.PARTIAL.value, error_detail=str(exc),
+            )
+            raise
+        _check_cancelled()
 
         # 4. Reload persisted identity and classification proof
         now = utc_now_timestamp()

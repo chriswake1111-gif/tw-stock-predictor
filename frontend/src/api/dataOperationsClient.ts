@@ -6,19 +6,21 @@ import type {
 
 let cachedCsrfToken: string | null = null;
 
-export async function getCsrfToken(): Promise<string> {
+export async function getCsrfToken(signal?: AbortSignal): Promise<string> {
   if (cachedCsrfToken) {
     return cachedCsrfToken;
   }
   const res = await fetch("/api/v2/data-operations/csrf-token", {
     method: "GET",
     headers: { Accept: "application/json" },
+    signal,
   });
   if (!res.ok) {
     // fallback
     const fallbackRes = await fetch("/api/v2/research/csrf-token", {
       method: "GET",
       headers: { Accept: "application/json" },
+      signal,
     });
     if (!fallbackRes.ok) {
       throw new Error(`Failed to fetch CSRF token: ${res.status}`);
@@ -42,9 +44,10 @@ export async function getDataOperationsStatus(): Promise<DataOperationsStatusRes
   return res.json();
 }
 
-export async function getOperationDetails(operationId: string): Promise<Record<string, unknown>> {
+export async function getOperationDetails(operationId: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
   const res = await fetch(`/api/v2/data-operations/operations/${encodeURIComponent(operationId)}`, {
     headers: { Accept: "application/json" },
+    signal,
   });
   if (!res.ok) {
     throw new Error(`Failed to fetch operation details: ${res.status}`);

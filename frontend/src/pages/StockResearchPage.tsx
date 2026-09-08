@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useSearchParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
@@ -31,96 +31,112 @@ export function StockResearchPage() {
   const [historicalInput, setHistoricalInput] = useState(asOf || "");
   const [showTimeMachine, setShowTimeMachine] = useState(Boolean(asOf));
 
+  const requestRef = useRef<AbortController | null>(null);
+  const [updateNotice, setUpdateNotice] = useState<string | null>(null);
+
   const loadData = useCallback(async () => {
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    const { signal } = controller;
+    const timeout = setTimeout(() => controller.abort(), 180000);
+    const isCurrent = () => requestRef.current === controller;
+    const checkCurrent = () => {
+      if (!isCurrent() || signal.aborted) throw new Error("資料準備逾時，請重試更新。");
+    };
+    const pause = () => new Promise<void>((resolve, reject) => {
+      const abort = () => {
+        clearTimeout(timer);
+        reject(new Error("資料準備已停止。"));
+      };
+      const timer = setTimeout(() => {
+        signal.removeEventListener("abort", abort);
+        resolve();
+      }, 1500);
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) abort();
+    });
+    const operationReason = (op: Record<string, unknown>) => {
+      const items = (op.items || []) as { error_detail?: string }[];
+      const reason = String(op.error_detail || items.find(item => item.error_detail)?.error_detail || "");
+      if (/calendar|authorized trading session/i.test(reason)) {
+        return "缺少官方交易日證據或證據衝突，行情尚未完成更新。請稍後重試；持續失敗時可至進階與審計查看資料作業。";
+      }
+      return reason ? `資料更新未完成：${reason}` : "部分資料尚未就緒，請至進階與審計查看資料作業。";
+    };
     try {
       setLoading(true);
+      setSummary(null);
       setError(null);
-
-      // In current mode (no as_of), trigger bootstrap readiness check
+      setUpdateNotice(null);
       if (!asOf) {
-        setBootstrapStatus("正在檢查資料就緒狀態...");
-        const bootstrapStartTime = Date.now();
-
-        const pollOperation = async (opId: string, statusMessage: string): Promise<void> => {
-          setBootstrapStatus(statusMessage);
-          const startTime = Date.now();
-          const checkOp = async (): Promise<boolean> => {
-            if (Date.now() - startTime > 90000 || Date.now() - bootstrapStartTime > 180000) {
-              throw new Error("資料準備逾時，請稍後重試。");
-            }
-            const op = await getOperationDetails(opId);
-            const opStatus = (op as { status?: string }).status;
-            if (opStatus === "succeeded" || opStatus === "partial") {
-              return true;
-            } else if (opStatus === "failed" || opStatus === "cancelled" || opStatus === "interrupted") {
-              throw new Error(`行情資料準備已中斷或失敗（狀態：${opStatus}）。`);
-            }
-            return false;
-          };
-
-          const isDone = await checkOp();
-          if (!isDone) {
-            await new Promise<void>((resolve, reject) => {
-              const timer = setInterval(async () => {
-                try {
-                  const done = await checkOp();
-                  if (done) {
-                    clearInterval(timer);
-                    resolve();
-                  }
-                } catch (err) {
-                  clearInterval(timer);
-                  reject(err);
-                }
-              }, 1500);
-            });
+        // Preserve readable local data when a user-requested update fails.
+        const local = await getResearchSummary(canonicalSymbol, undefined, signal).catch(() => null);
+        checkCurrent();
+        if (local) setSummary(local);
+        setBootstrapStatus("正在向官方來源檢查並更新行情...");
+        const seenOperations = new Set<string>();
+        while (true) {
+          checkCurrent();
+          const result = await bootstrapSymbol(canonicalSymbol, true, signal);
+          checkCurrent();
+          if (result.status === "ready") break;
+          if (!result.operation_id || !["preparing", "waiting_for_data_operation"].includes(result.status)) {
+            throw new Error("資料準備未能啟動，請至進階與審計查看資料作業。");
           }
-        };
-
-        const MAX_BOOTSTRAP_TIME_MS = 180000;
-
-        while (Date.now() - bootstrapStartTime < MAX_BOOTSTRAP_TIME_MS) {
-          const currentBootstrap = await bootstrapSymbol(canonicalSymbol);
-
-          if (currentBootstrap.status === "ready") {
-            break;
-          } else if (currentBootstrap.status === "waiting_for_data_operation" && currentBootstrap.operation_id) {
-            await pollOperation(currentBootstrap.operation_id, "正在等待既有背景資料作業完成...");
-            setBootstrapStatus("背景資料作業已完成，正在為目標標的準備行情...");
-          } else if (currentBootstrap.status === "preparing" && currentBootstrap.operation_id) {
-            await pollOperation(currentBootstrap.operation_id, "正在準備最新已結算行情資料...");
-          } else {
+          if (seenOperations.has(result.operation_id)) {
+            throw new Error("既有資料作業已結束但標的尚未就緒，請重試更新。");
+          }
+          seenOperations.add(result.operation_id);
+          setBootstrapStatus(result.status === "preparing"
+            ? "正在取得並驗證官方行情資料..." : "正在等待既有資料作業完成...");
+          const pollDeadline = Date.now() + 90000;
+          let op: Record<string, unknown>;
+          while (true) {
+            checkCurrent();
+            if (Date.now() >= pollDeadline) throw new Error("資料準備逾時，請至進階與審計查看作業狀態。");
+            op = await getOperationDetails(result.operation_id, signal);
+            checkCurrent();
+            if (["succeeded", "partial", "failed", "cancelled", "interrupted"].includes(String(op.status))) break;
+            await pause();
+          }
+          if (["failed", "cancelled", "interrupted"].includes(String(op.status))) {
+            throw new Error(operationReason(op));
+          }
+          if (op.status === "partial") {
+            setUpdateNotice(operationReason(op));
+            break; // Partial is terminal: never automatically create another operation.
+          }
+          if (result.status === "preparing") {
+            setUpdateNotice("已完成官方來源檢查；下列日期為本機已取得的行情日期，來源可能尚未發布下一交易日資料。");
             break;
           }
-        }
-
-        if (Date.now() - bootstrapStartTime >= MAX_BOOTSTRAP_TIME_MS) {
-          throw new Error("資料準備逾時，請稍後重試。");
+          // Only a successful unrelated operation permits a target-specific follow-up.
         }
       }
-
       setBootstrapStatus("正在載入研究資料...");
-      const sum = await getResearchSummary(canonicalSymbol, asOf);
+      const sum = await getResearchSummary(canonicalSymbol, asOf, signal);
+      checkCurrent();
       setSummary(sum);
-      setLoading(false);
-      setBootstrapStatus(null);
     } catch (err) {
-      setLoading(false);
-      setBootstrapStatus(null);
-      setError(err instanceof Error ? err.message : "載入個股研究資料失敗");
+      if (isCurrent()) setError(signal.aborted ? "資料準備逾時，請重試更新。"
+        : err instanceof Error ? err.message : "載入個股研究資料失敗");
+    } finally {
+      clearTimeout(timeout);
+      if (isCurrent()) {
+        setLoading(false);
+        setBootstrapStatus(null);
+      }
     }
   }, [canonicalSymbol, asOf]);
 
   useEffect(() => {
-    let active = true;
-    const timer = setTimeout(() => {
-      if (active) {
-        void loadData();
-      }
-    }, 0);
+    const timer = setTimeout(() => { void loadData(); }, 0);
     return () => {
-      active = false;
       clearTimeout(timer);
+      const request = requestRef.current;
+      requestRef.current = null;
+      request?.abort();
     };
   }, [loadData]);
 
@@ -210,13 +226,13 @@ export function StockResearchPage() {
           <button
             type="button"
             className="button button--secondary"
-            onClick={loadData}
+            onClick={() => { void loadData(); }}
             disabled={loading}
             style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem" }}
-            title="重新檢查最新結算數據"
+            title={asOf ? "重新載入歷史研究" : "連線官方來源更新研究資料"}
           >
             <RefreshCw size={15} className={loading ? "spin" : ""} />
-            <span>重新整理</span>
+            <span>{asOf ? "重新載入" : "更新資料"}</span>
           </button>
         </div>
       </div>
@@ -275,7 +291,7 @@ export function StockResearchPage() {
             {bootstrapStatus || "正在載入個股研究工作區..."}
           </div>
           <div style={{ color: "var(--color-muted, #64748b)", fontSize: "0.9rem" }}>
-            依杜金龍理論模型規範，正在對齊最新官方結算日行情材料。
+            正在檢查來源與交易日證據；若資料不足，將顯示原因。
           </div>
         </div>
       )}
@@ -299,7 +315,7 @@ export function StockResearchPage() {
           <button
             type="button"
             className="button button--primary"
-            onClick={loadData}
+            onClick={() => { void loadData(); }}
             style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}
           >
             <RefreshCw size={15} />
@@ -308,6 +324,8 @@ export function StockResearchPage() {
         </div>
       )}
 
+      {!loading && updateNotice && <p role="status">{updateNotice}</p>}
+      {!loading && error && summary && <p role="status">更新未完成，以下保留本機資料；請留意行情日期。</p>}
       {/* Loaded summary */}
       {!loading && summary && (
         <>
