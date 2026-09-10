@@ -39,6 +39,15 @@ from src.services.evidence_backup_service import EvidenceBackupService
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def isolate_restore_mutex(monkeypatch, tmp_path):
+    """Exercise real OS locks without competing with the user's installed app."""
+    import hashlib
+    from src.runtime.instance import InstanceGuard
+    name = "Local\\TWStockPredictor.TestRestore." + hashlib.sha256(str(tmp_path).encode()).hexdigest()[:20]
+    monkeypatch.setattr("src.runtime.restore.InstanceGuard", lambda runtime: InstanceGuard(runtime, name=name))
+
+
 def _packaged_settings(tmp_path: Path) -> tuple[RuntimeSettings, Path]:
     resource_root = tmp_path / "resource"
     shutil.copytree(REPO_ROOT / "config", resource_root / "config")

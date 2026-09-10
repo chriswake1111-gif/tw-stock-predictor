@@ -32,13 +32,36 @@ describe("installed research refresh", () => {
   });
   afterEach(() => vi.useRealTimers());
 
+  it("shows cached quotes while the update is still pending", async () => {
+    vi.mocked(getOperationDetails).mockImplementation(() => new Promise(() => {}));
+    renderWithProviders(<Harness />, "/stocks/2330.TW");
+    expect(await screen.findByText(/980.00 元/)).toBeInTheDocument();
+    expect(screen.getByText(/可先查閱下方本機資料/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "更新資料" })).toBeDisabled();
+  });
+
+  it("renders calculated model prices and their evidence", async () => {
+    const result = summary("2330.TW");
+    result.valuation_context = { status: "available", reason_code: null, target_matrix: [{
+      target_price: 1040, eps_value: 52, pe_value: 20, pe_label: "基準", fiscal_year: 2027,
+      source_name: "測試研究來源", approval_ids: { "VAL-02": "eps-approval", "VAL-04": "pe-approval" },
+    }] };
+    vi.mocked(getResearchSummary).mockResolvedValue(result);
+    vi.mocked(getOperationDetails).mockResolvedValue({ status: "partial", error_detail: "Phase16 context is identity_unresolved" });
+    renderWithProviders(<Harness />, "/stocks/2330.TW");
+    expect(await screen.findByText(/基準：1,040 元/)).toBeInTheDocument();
+    expect(screen.getByText(/測試研究來源/, { selector: "p" })).toBeInTheDocument();
+    expect(await screen.findByText(/歷史研究的事件時間證據仍待確認/)).toBeInTheDocument();
+    expect(screen.getByText(/980.00 元/)).toBeInTheDocument();
+  });
+
   it("stops on partial and keeps local data with the actual calendar explanation", async () => {
     vi.mocked(getOperationDetails).mockResolvedValue({ status: "partial", error_detail: "calendar proof missing" });
     renderWithProviders(<Harness />, "/stocks/2330.TW");
     expect(await screen.findByText(/缺少官方交易日證據/)).toBeInTheDocument();
     expect(screen.getByText(/980.00 元/)).toBeInTheDocument();
     expect(bootstrapSymbol).toHaveBeenCalledTimes(1);
-    expect(bootstrapSymbol).toHaveBeenCalledWith("2330.TW", true, expect.any(AbortSignal));
+    expect(bootstrapSymbol).toHaveBeenCalledWith("2330.TW", false, expect.any(AbortSignal));
     expect(screen.getByRole("button", { name: "更新資料" })).toBeEnabled();
   });
 
@@ -81,7 +104,17 @@ describe("installed research refresh", () => {
     expect(oldSignal?.aborted).toBe(true);
     await act(async () => finishOld({ status: "failed", error_detail: "old failure" }));
     expect(screen.queryByText(/old failure/)).not.toBeInTheDocument();
-    expect(bootstrapSymbol).toHaveBeenLastCalledWith("2408.TW", true, expect.any(AbortSignal));
+    expect(bootstrapSymbol).toHaveBeenLastCalledWith("2408.TW", false, expect.any(AbortSignal));
+  });
+
+  it("uses an explicit refresh only when the user clicks update", async () => {
+    vi.mocked(bootstrapSymbol).mockResolvedValue({ status: "ready", operation_id: null, canonical_symbol: "2330.TW" });
+    vi.mocked(getOperationDetails).mockResolvedValue({ status: "ready" });
+    renderWithProviders(<Harness />, "/stocks/2330.TW");
+    await screen.findByText("本機行情日期：2026-09-04");
+    await waitFor(() => expect(screen.getByRole("button", { name: "更新資料" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "更新資料" }));
+    await waitFor(() => expect(bootstrapSymbol).toHaveBeenLastCalledWith("2330.TW", true, expect.any(AbortSignal)));
   });
 
   it("the total deadline aborts a stalled HTTP request and restores controls", async () => {

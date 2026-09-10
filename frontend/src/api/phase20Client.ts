@@ -84,7 +84,7 @@ export async function bootstrapSymbol(
   return res.json();
 }
 
-export async function triggerUniversePrep(): Promise<{ operation_id: string }> {
-  const result = await triggerSync(undefined, 90);
+export async function triggerUniversePrep(signal?: AbortSignal): Promise<{ operation_id: string }> {
+  const result = await triggerSync(undefined, 90, signal);
   return { operation_id: result.operation_id };
 }

@@ -367,7 +367,7 @@ class InstalledDataSyncService:
             foundation.add_run(child_run)
             foundation.acquire_resource_lock(twse_storage, child_run_id, child_run.started_at)
             now = utc_now_timestamp()
-            raw = foundation.add_raw_revision(
+            raw = self._append_latest_raw(foundation,
                 RawResourceRevision(
                     raw_resource_revision_id=f"raw_twse_univ_{uuid4().hex[:10]}",
                     provider_id="twse-universe-official",
@@ -617,7 +617,7 @@ class InstalledDataSyncService:
             foundation.add_run(child_run)
             foundation.acquire_resource_lock(tpex_storage, child_run_id, child_run.started_at)
             now = utc_now_timestamp()
-            raw = foundation.add_raw_revision(
+            raw = self._append_latest_raw(foundation,
                 RawResourceRevision(
                     raw_resource_revision_id=f"raw_tpex_univ_{uuid4().hex[:10]}",
                     provider_id="tpex-universe-official",
@@ -1239,7 +1239,7 @@ class InstalledDataSyncService:
             foundation.add_run(child_run_twse)
             foundation.acquire_resource_lock(twse_turnover_res, child_run_twse_id, child_run_twse.started_at)
             now = utc_now_timestamp()
-            raw_twse = foundation.add_raw_revision(
+            raw_twse = self._append_latest_raw(foundation,
                 RawResourceRevision(
                     raw_resource_revision_id=f"raw_twse_turn_{uuid4().hex[:10]}",
                     provider_id="twse",
@@ -1347,7 +1347,7 @@ class InstalledDataSyncService:
             foundation.add_run(child_run_tpex)
             foundation.acquire_resource_lock(tpex_turnover_res, child_run_tpex_id, child_run_tpex.started_at)
             now = utc_now_timestamp()
-            raw_tpex = foundation.add_raw_revision(
+            raw_tpex = self._append_latest_raw(foundation,
                 RawResourceRevision(
                     raw_resource_revision_id=f"raw_tpex_turn_{uuid4().hex[:10]}",
                     provider_id="tpex",
@@ -1662,7 +1662,7 @@ class InstalledDataSyncService:
             foundation.add_run(child_run)
             foundation.acquire_resource_lock(cbc_resource, child_run_id, child_run.started_at)
             now = utc_now_timestamp()
-            raw = foundation.add_raw_revision(
+            raw = self._append_latest_raw(foundation,
                 RawResourceRevision(
                     raw_resource_revision_id=f"raw_cbc_m1b_{uuid4().hex[:10]}",
                     provider_id="cbc",
@@ -1840,6 +1840,30 @@ class InstalledDataSyncService:
             error_detail=partial_reason,
         )
         authorization.revoke()
+
+    @staticmethod
+    def _append_latest_raw(foundation: DataFoundationRepository, revision: RawResourceRevision) -> dict[str, Any]:
+        """Bind a refreshed latest feed to its predecessor without changing old evidence."""
+        conn = foundation._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            previous = conn.execute(
+                """SELECT raw_resource_revision_id FROM raw_resource_revisions
+                   WHERE provider_id=? AND resource_id=? AND logical_revision_key=?
+                   ORDER BY ingested_at DESC, raw_resource_revision_id DESC LIMIT 1""",
+                (revision.provider_id, revision.resource_id, revision.logical_revision_key),
+            ).fetchone()
+            result = foundation.add_raw_revision(
+                replace(revision, supersedes_revision_id=previous[0] if previous else None),
+                connection=conn,
+            )
+            conn.commit()
+            return result
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _phase16_enablement_quality(
         self,

@@ -28,7 +28,7 @@ export function HumanDecisionQueue({
       >
         <CheckCircle size={20} color="#166534" />
         <span style={{ fontSize: "0.95rem", color: "#166534", fontWeight: 600 }}>
-          本標的無待辦人工決策事項，所有模型依核准參數執行。
+          本標的目前無待辦人工決策事項；各模型是否可用請以個別結果為準。
         </span>
       </div>
     );

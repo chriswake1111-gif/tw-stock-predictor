@@ -76,7 +76,7 @@ class ResearchBootstrapService:
         # 1. Check if current settled research is already available
         context = self.current_research_service.get_context(canonical_symbol)
         official_close = context.get("official_close") or {}
-        if official_close.get("status") == "available" and not refresh:
+        if official_close.get("status") == "available" and not refresh and self.operations_repo.has_recent_symbol_check(canonical_symbol):
             return {
                 "status": "ready",
                 "canonical_symbol": canonical_symbol,

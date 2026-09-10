@@ -109,6 +109,8 @@ def _insert_snapshot_and_observation(
 def test_bootstrap_returns_ready_when_eod_available(tmp_path):
     """When target symbol already has settled EOD observation, bootstrap returns status 'ready'."""
     db, cur_svc, ops_repo = _setup_db(tmp_path)
+    ops_repo.create_operation("recent", "enable_symbol", "test", target_symbols=["2330.TW"])
+    ops_repo.finalize_operation("recent", "succeeded")
     with sqlite3.connect(db) as conn:
         _insert_snapshot_and_observation(conn, date="2026-09-04", official_code="2330", close="980.0")
 
@@ -168,6 +170,8 @@ def test_bootstrap_returns_waiting_when_active_operation_does_not_cover_target(t
 def test_api_v2_research_bootstrap_endpoint(tmp_path, monkeypatch):
     """POST /api/v2/research/bootstrap endpoint returns 200 with status and operation_id."""
     db, cur_svc, ops_repo = _setup_db(tmp_path)
+    ops_repo.create_operation("recent", "enable_symbol", "test", target_symbols=["2330.TW"])
+    ops_repo.finalize_operation("recent", "succeeded")
     with sqlite3.connect(db) as conn:
         _insert_snapshot_and_observation(conn, date="2026-09-04", official_code="2330", close="980.0")
 

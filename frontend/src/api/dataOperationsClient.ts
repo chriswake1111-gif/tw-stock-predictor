@@ -57,9 +57,10 @@ export async function getOperationDetails(operationId: string, signal?: AbortSig
 
 export async function triggerSync(
   targetSymbols?: string[],
-  deadlineSeconds?: number
+  deadlineSeconds?: number,
+  signal?: AbortSignal
 ): Promise<SyncTriggerResponse> {
-  const token = await getCsrfToken();
+  const token = await getCsrfToken(signal);
   const effectiveDeadline = Math.min(deadlineSeconds || 90.0, 90.0);
   const res = await fetch("/api/v2/data-operations/sync", {
     method: "POST",
@@ -71,10 +72,11 @@ export async function triggerSync(
       target_symbols: targetSymbols || null,
       deadline_seconds: effectiveDeadline,
     }),
+    signal,
   });
   if (res.status === 403) {
     cachedCsrfToken = null;
-    const retryToken = await getCsrfToken();
+    const retryToken = await getCsrfToken(signal);
     const retryRes = await fetch("/api/v2/data-operations/sync", {
       method: "POST",
       headers: {
@@ -85,6 +87,7 @@ export async function triggerSync(
         target_symbols: targetSymbols || null,
         deadline_seconds: effectiveDeadline,
       }),
+      signal,
     });
     if (!retryRes.ok) {
       throw new Error(`Sync failed: ${retryRes.status}`);

@@ -12,6 +12,7 @@ import { bootstrapSymbol, getResearchSummary } from "../api/phase20Client";
 import { getOperationDetails } from "../api/dataOperationsClient";
 import type { ResearchSummaryResponse } from "../api/types";
 import { ResearchSummaryCard } from "../components/ResearchSummaryCard";
+import { ResearchModelResults } from "../components/ResearchModelResults";
 import { HumanDecisionQueue } from "../components/HumanDecisionQueue";
 import { AuditDrawer } from "../components/evidence/AuditDrawer";
 
@@ -34,7 +35,7 @@ export function StockResearchPage() {
   const requestRef = useRef<AbortController | null>(null);
   const [updateNotice, setUpdateNotice] = useState<string | null>(null);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (forceRefresh = false) => {
     requestRef.current?.abort();
     const controller = new AbortController();
     requestRef.current = controller;
@@ -59,6 +60,9 @@ export function StockResearchPage() {
     const operationReason = (op: Record<string, unknown>) => {
       const items = (op.items || []) as { error_detail?: string }[];
       const reason = String(op.error_detail || items.find(item => item.error_detail)?.error_detail || "");
+      if (/Phase16 context/i.test(reason)) {
+        return "行情取得流程已完成；歷史研究的事件時間證據仍待確認。請查看下方實際行情日期與各模型結果，無需反覆更新來解除此限制。";
+      }
       if (/calendar|authorized trading session/i.test(reason)) {
         return "缺少官方交易日證據或證據衝突，行情尚未完成更新。請稍後重試；持續失敗時可至進階與審計查看資料作業。";
       }
@@ -66,7 +70,6 @@ export function StockResearchPage() {
     };
     try {
       setLoading(true);
-      setSummary(null);
       setError(null);
       setUpdateNotice(null);
       if (!asOf) {
@@ -78,7 +81,7 @@ export function StockResearchPage() {
         const seenOperations = new Set<string>();
         while (true) {
           checkCurrent();
-          const result = await bootstrapSymbol(canonicalSymbol, true, signal);
+          const result = await bootstrapSymbol(canonicalSymbol, forceRefresh, signal);
           checkCurrent();
           if (result.status === "ready") break;
           if (!result.operation_id || !["preparing", "waiting_for_data_operation"].includes(result.status)) {
@@ -226,7 +229,7 @@ export function StockResearchPage() {
           <button
             type="button"
             className="button button--secondary"
-            onClick={() => { void loadData(); }}
+            onClick={() => { void loadData(true); }}
             disabled={loading}
             style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem" }}
             title={asOf ? "重新載入歷史研究" : "連線官方來源更新研究資料"}
@@ -274,7 +277,8 @@ export function StockResearchPage() {
       )}
 
       {/* Loading state */}
-      {loading && (
+      {loading && summary && <p role="status">正在更新資料；可先查閱下方本機資料，請留意行情日期。</p>}
+      {loading && !summary && (
         <div
           className="card"
           style={{
@@ -315,7 +319,7 @@ export function StockResearchPage() {
           <button
             type="button"
             className="button button--primary"
-            onClick={() => { void loadData(); }}
+            onClick={() => { void loadData(true); }}
             style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}
           >
             <RefreshCw size={15} />
@@ -327,19 +331,20 @@ export function StockResearchPage() {
       {!loading && updateNotice && <p role="status">{updateNotice}</p>}
       {!loading && error && summary && <p role="status">更新未完成，以下保留本機資料；請留意行情日期。</p>}
       {/* Loaded summary */}
-      {!loading && summary && (
+      {summary && (
         <>
           <ResearchSummaryCard
             summary={summary}
             onOpenAuditDrawer={() => setAuditDrawerOpen(true)}
           />
 
+          <ResearchModelResults summary={summary} />
           <HumanDecisionQueue
             items={summary.human_decision_queue}
             canonicalSymbol={summary.canonical_symbol}
             onActionClick={(item) => {
-              if (item.rule_id === "VAL-02") {
-                navigate(`/rules?rule=VAL-02`);
+              if (item.rule_id === "VAL-02" || item.rule_id === "VAL-04") {
+                navigate(`/rules?rule=${item.rule_id}`);
               } else if (item.rule_id.includes("FB")) {
                 navigate(`/rules?rule=FB-03`);
               }

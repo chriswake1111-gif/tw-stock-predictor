@@ -18,8 +18,8 @@ from src.domain.research_summary import (
 from src.domain.universe import parse_canonical_symbol, validate_knowledge_cutoff_at
 from src.domain.valuation import utc_now_timestamp
 from src.repositories.current_research_repository import CurrentResearchRepository
-from src.repositories.forward_eps_repository import ForwardEPSRepository
-from src.repositories.technical_anchor_repository import TechnicalAnchorRepository
+from src.services.forward_eps_service import ForwardEPSService
+from src.services.technical_scenario_service import TechnicalScenarioService
 
 
 class CurrentResearchService:
@@ -55,6 +55,8 @@ class CurrentResearchService:
         conn = sqlite3.connect(self.repository.db_path)
         conn.row_factory = sqlite3.Row
         try:
+            conn.execute("PRAGMA query_only = ON")
+            conn.execute("BEGIN")
             tables = {
                 r[0]
                 for r in conn.execute(
@@ -131,89 +133,45 @@ class CurrentResearchService:
 
             decision_queue: list[HumanDecisionItem] = []
 
-            has_approved_forward_eps = False
-            if "forward_eps_observations" in tables and "valuation_approvals" in tables:
-                eps_repo = ForwardEPSRepository(self.db_path, auto_migrate=False)
-                approved_eps = eps_repo.forward_eps_as_of_with_connection(
-                    conn, canonical_symbol, cutoff
+            # Use the existing governed engines on this same read snapshot.
+            # Approved inputs alone never imply that a result was calculated.
+            valuation = ForwardEPSService(self.db_path, auto_migrate=False).analyze_preloaded(
+                conn, canonical_symbol, cutoff
+            )
+            technical = TechnicalScenarioService(self.db_path, auto_migrate=False).analyze_preloaded(
+                conn, canonical_symbol, cutoff
+            )
+            if technical.get("reason") == "manual_anchor_required":
+                technical = TechnicalScenarioService(self.db_path, auto_migrate=False).analyze_preloaded(
+                    conn, official_code, cutoff
                 )
-                if approved_eps:
-                    has_approved_forward_eps = True
-
-            if has_approved_forward_eps:
-                valuation_ctx = ValuationContextSummary(
-                    status="available",
-                    reason_code=None,
-                    target_matrix=[],
-                )
-            else:
-                valuation_ctx = ValuationContextSummary(
-                    status="needs_human_judgment",
-                    reason_code="forward_eps_missing_at_knowledge_cutoff",
-                    target_matrix=[],
-                )
-                decision_queue.append(
-                    HumanDecisionItem(
-                        item_id="val_02_forward_eps",
-                        title="核准預估 EPS（Forward EPS）",
-                        rule_id="VAL-02",
-                        evidence_level="A",
-                        description="依杜金龍估值模型規範，預估 EPS 屬核心假設，系統嚴禁自動合成假值，必須由研究員輸入並核准。",
-                        suggested_action="請至估值決策面板輸入經核准的 Forward EPS 以推算目標價區間。",
-                        status="pending",
-                    )
-                )
-
-            has_approved_anchors = False
-            if (
-                "technical_anchor_revisions" in tables
-                and "technical_anchor_approvals" in tables
-            ):
-                anchor_repo = TechnicalAnchorRepository(self.db_path, auto_migrate=False)
-                candidate_symbols = [canonical_symbol]
-                if "." in canonical_symbol:
-                    candidate_symbols.append(canonical_symbol.split(".")[0])
-                for sym in candidate_symbols:
-                    anchor_states = anchor_repo.states_as_of_with_connection(
-                        conn, sym, cutoff
-                    )
-                    for state in anchor_states:
-                        approval = state.get("approval")
-                        if (
-                            state.get("status") == "available"
-                            and approval is not None
-                            and approval.get("decision") == "approved"
-                            and state.get("evidence_basis_rule_id") in ("FB-03", "FB-04")
-                        ):
-                            has_approved_anchors = True
-                            break
-                    if has_approved_anchors:
-                        break
-
-            if has_approved_anchors:
-                technical_ctx = TechnicalContextSummary(
-                    status="available",
-                    reason_code=None,
-                    targets=None,
-                )
-            else:
-                technical_ctx = TechnicalContextSummary(
-                    status="needs_human_judgment",
-                    reason_code="manual_anchor_required",
-                    targets=None,
-                )
-                decision_queue.append(
-                    HumanDecisionItem(
-                        item_id="fb_wave_anchor",
-                        title="指定波浪理論關鍵轉折錨點",
-                        rule_id="FB-03/FB-04",
-                        evidence_level="A",
-                        description="波浪黃金分割（0.382／等幅）推算需要先確認關鍵高低點錨點，禁止無錨點直接合成目標價。",
-                        suggested_action="請指定經核准之波浪起算點與轉折錨點以計算目標價。",
-                        status="pending",
-                    )
-                )
-
+            valuation_ctx = ValuationContextSummary(
+                status=valuation["status"],
+                reason_code=valuation.get("reason"),
+                target_matrix=valuation.get("target_matrix", []),
+            )
+            technical_ctx = TechnicalContextSummary(
+                status=technical["status"],
+                reason_code=technical.get("reason"),
+                targets=technical if technical.get("scenarios") else None,
+            )
+            if valuation_ctx.status in {"insufficient_data", "needs_human_input"}:
+                valuation_ctx.status = "needs_human_judgment"
+                missing_pe = valuation.get("reason") == "approved_symbol_pe_missing_at_knowledge_cutoff"
+                decision_queue.append(HumanDecisionItem(
+                    item_id="val_04_pe" if missing_pe else "val_02_forward_eps",
+                    title="補齊估值輸入與核准",
+                    rule_id="VAL-04" if missing_pe else "VAL-02",
+                    evidence_level="A", description="估值需要有效的預估 EPS 與本益比情境核准。",
+                    suggested_action="請檢查估值資料與核准狀態；行情仍可直接查閱。",
+                ))
+            if technical_ctx.status == "needs_human_input":
+                technical_ctx.status = "needs_human_judgment"
+            if technical_ctx.status != "available":
+                decision_queue.append(HumanDecisionItem(
+                    item_id="fb_wave_anchor", title="檢查波浪錨點", rule_id="FB-03/FB-04", evidence_level="A",
+                    description="目前沒有可計算的有效核准錨點。", suggested_action="請確認錨點與核准狀態。",
+                ))
             screening_ctx = ScreeningContextSummary()
 
             snapshot_id = off_close.get("snapshot_id")

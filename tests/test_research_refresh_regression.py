@@ -15,6 +15,22 @@ from src.services.research_bootstrap_service import ResearchBootstrapService
 from tests.test_phase20_research_bootstrap_orchestrator import _setup_db, _insert_snapshot_and_observation
 
 
+def test_latest_feed_refresh_preserves_revision_chain_and_replay(tmp_path):
+    from dataclasses import replace
+    from tests.test_data_foundation_repository import foundation, raw
+
+    repo = foundation(tmp_path)
+    first = InstalledDataSyncService._append_latest_raw(repo, raw("raw.first", "first"))
+    second_revision = replace(raw("raw.second", "corrected"), ingested_at="2026-08-10T06:03:00Z")
+    second = InstalledDataSyncService._append_latest_raw(repo, second_revision)
+    replay = InstalledDataSyncService._append_latest_raw(repo, second_revision)
+    assert first["created"] and second["created"]
+    assert replay["created"] is False
+    with sqlite3.connect(repo.db_path) as conn:
+        stored = conn.execute("SELECT raw_resource_revision_id, supersedes_revision_id FROM raw_resource_revisions ORDER BY ingested_at").fetchall()
+    assert stored == [("raw.first", None), ("raw.second", "raw.first")]
+
+
 @pytest.fixture
 def service(tmp_path):
     db = str(tmp_path / "refresh.db")
@@ -24,6 +40,21 @@ def service(tmp_path):
 
 def activity(venue="TWSE", amount="997944843239", day="1150907"):
     return json.dumps([{"Date": day, "TradeAmount" if venue == "TPEX" else "TradeValue": amount}]).encode()
+
+
+def test_auto_refresh_uses_recent_check_not_merely_existing_quote(service):
+    repo = service.operation_repo
+    assert not repo.has_recent_symbol_check("2330.TW")
+    op, auth = service.create_operation_and_capability(target_symbols=["2330.TW"])
+    repo.finalize_operation(op, "partial", "calendar proof missing")
+    assert not repo.has_recent_symbol_check("2330.TW")
+    repo.finalize_operation(op, "partial", "symbol Phase16 context is identity_unresolved")
+    assert repo.has_recent_symbol_check("2330.TW")
+    assert not repo.has_recent_symbol_check("2408.TW")
+    with sqlite3.connect(service.db_path) as conn:
+        conn.execute("UPDATE installed_data_operations SET completed_at='2000-01-01T00:00:00Z'")
+    assert not repo.has_recent_symbol_check("2330.TW")
+    auth.revoke()
 
 
 @pytest.mark.parametrize("venue", ["TWSE", "TPEX"])
@@ -104,6 +135,8 @@ def test_explicit_refresh_does_not_accept_old_local_price(tmp_path):
         calls.append(op)
         ops.finalize_operation(op, status="succeeded")
     svc = ResearchBootstrapService(str(db), current_research_service=current, operations_repo=ops, runner_fn=runner)
+    ops.create_operation("recent", "enable_symbol", "test", target_symbols=["2330.TW"])
+    ops.finalize_operation("recent", "succeeded")
     assert svc.bootstrap_symbol("2330.TW")["status"] == "ready"
     result = svc.bootstrap_symbol("2330.TW", refresh=True)
     for worker in svc.worker_threads:

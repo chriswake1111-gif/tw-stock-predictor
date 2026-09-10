@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen, waitFor, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, screen, waitFor, fireEvent } from "@testing-library/react";
+import { StrictMode } from "react";
 import App from "../App";
 import { mockReadApi, renderWithProviders } from "./render";
 import { SearchHomePage } from "../pages/SearchHomePage";
@@ -8,10 +9,18 @@ import { FirstRunPrepCard } from "../components/FirstRunPrepCard";
 import { ShortNameUpgradeBanner } from "../components/ShortNameUpgradeBanner";
 
 describe("Phase 20 Usability & Bootstrap Tests", () => {
+  const shortNameCoverage = {
+    universe_status: "short_names_partial" as const,
+    total_instruments: 100,
+    phase20_materialized_count: 50,
+    coverage_ratio: 0.5,
+    degraded_search_mode: true,
+  };
   beforeEach(() => {
     localStorage.clear();
     mockReadApi();
   });
+  afterEach(() => vi.useRealTimers());
 
   it("renders Search-First Home page with search input and recent searches when present", async () => {
     localStorage.setItem(
@@ -201,6 +210,84 @@ describe("Phase 20 Usability & Bootstrap Tests", () => {
         });
       });
     });
+
+    it("completes successfully under React StrictMode", async () => {
+      let statusCalls = 0;
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes("/data-operations/sync")) return new Response(JSON.stringify({ operation_id: "op_strict" }), { status: 200 });
+        if (url.includes("op_strict")) {
+          statusCalls += 1;
+          return new Response(JSON.stringify({ operation_id: "op_strict", status: "succeeded" }), { status: 200 });
+        }
+        if (url.includes("csrf-token")) return new Response(JSON.stringify({ csrf_token: "mock-csrf" }), { status: 200 });
+        return new Response(JSON.stringify({}), { status: 200 });
+      });
+      renderWithProviders(<StrictMode><ShortNameUpgradeBanner coverage={shortNameCoverage} /></StrictMode>);
+      fireEvent.click(screen.getByText("更新股票簡稱清單"));
+      await waitFor(() => expect(screen.getByText("更新完成")).toBeInTheDocument());
+      expect(statusCalls).toBeGreaterThan(0);
+    });
+
+    it("aborts a pending HTTP request at the 90 second deadline and restores retry", async () => {
+      vi.useFakeTimers();
+      let syncSignal: AbortSignal | undefined;
+      vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+        const url = String(input);
+        if (url.includes("/data-operations/sync")) {
+          syncSignal = init?.signal as AbortSignal | undefined;
+          return new Promise((_resolve, reject) => syncSignal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+        }
+        if (url.includes("csrf-token")) return Promise.resolve(new Response(JSON.stringify({ csrf_token: "mock-csrf" }), { status: 200 }));
+        return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
+      });
+      renderWithProviders(<ShortNameUpgradeBanner coverage={shortNameCoverage} />);
+      fireEvent.click(screen.getByText("更新股票簡稱清單"));
+      await act(async () => { await Promise.resolve(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(90001); });
+      await act(async () => { await Promise.resolve(); });
+      expect(syncSignal?.aborted).toBe(true);
+      expect(screen.getByText(/請重試/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "更新股票簡稱清單" })).toBeEnabled();
+    });
+
+    it("aborts the active request when unmounted", async () => {
+      let operationSignal: AbortSignal | undefined;
+      vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+        const url = String(input);
+        if (url.includes("/data-operations/sync")) return Promise.resolve(new Response(JSON.stringify({ operation_id: "op_unmount" }), { status: 200 }));
+        if (url.includes("op_unmount")) {
+          operationSignal = init?.signal as AbortSignal | undefined;
+          return new Promise(() => {});
+        }
+        if (url.includes("csrf-token")) return Promise.resolve(new Response(JSON.stringify({ csrf_token: "mock-csrf" }), { status: 200 }));
+        return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
+      });
+      const view = renderWithProviders(<ShortNameUpgradeBanner coverage={shortNameCoverage} />);
+      fireEvent.click(screen.getByText("更新股票簡稱清單"));
+      await waitFor(() => expect(operationSignal).toBeDefined());
+      view.unmount();
+      expect(operationSignal?.aborted).toBe(true);
+    });
+
+    it("keeps retry available after a partial completion", async () => {
+      let statusCalls = 0;
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes("/data-operations/sync")) return new Response(JSON.stringify({ operation_id: "op_partial_retry" }), { status: 200 });
+        if (url.includes("op_partial_retry")) {
+          statusCalls += 1;
+          return new Response(JSON.stringify({ status: statusCalls === 1 ? "partial" : "succeeded" }), { status: 200 });
+        }
+        if (url.includes("csrf-token")) return new Response(JSON.stringify({ csrf_token: "mock-csrf" }), { status: 200 });
+        return new Response(JSON.stringify({}), { status: 200 });
+      });
+      renderWithProviders(<ShortNameUpgradeBanner coverage={shortNameCoverage} pollIntervalMs={1} />);
+      fireEvent.click(screen.getByText("更新股票簡稱清單"));
+      await waitFor(() => expect(screen.getByText("部分完成，已更新可用簡稱")).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: "更新股票簡稱清單" }));
+      await waitFor(() => expect(screen.getByText("更新完成")).toBeInTheDocument());
+    });
   });
 
   // P1-1: ShortNameUpgradeBanner parent status mapping tests
@@ -245,7 +332,7 @@ describe("Phase 20 Usability & Bootstrap Tests", () => {
 
         await waitFor(() => {
           expect(onUpgrade).toHaveBeenCalled();
-          expect(screen.getByText("更新完成")).toBeInTheDocument();
+          expect(screen.getByText(status === "partial" ? "部分完成，已更新可用簡稱" : "更新完成")).toBeInTheDocument();
         });
       });
     });

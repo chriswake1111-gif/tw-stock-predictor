@@ -121,6 +121,28 @@ class InstalledDataOperationsRepository:
                 error_detail=row["error_detail"],
             )
 
+    def has_recent_symbol_check(self, symbol: str) -> bool:
+        """Throttle repeat visits, never claim that cached quotes are the latest."""
+        now = datetime.now(timezone.utc)
+        since = (now - timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
+        until = now.isoformat().replace("+00:00", "Z")
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """SELECT target_symbols_json, status, error_detail FROM installed_data_operations
+                   WHERE completed_at >= ? AND completed_at <= ?
+                   AND status IN ('succeeded', 'partial') ORDER BY completed_at DESC""",
+                (since, until),
+            ).fetchall()
+        for row in rows:
+            try:
+                targets = json.loads(row["target_symbols_json"] or "[]")
+            except (ValueError, TypeError):
+                continue
+            if symbol in targets and (row["status"] == "succeeded" or
+                                      "Phase16 context" in (row["error_detail"] or "")):
+                return True
+        return False
+
     def get_active_operation(self) -> InstalledOperationRow | None:
         with self._get_connection() as conn:
             row = conn.execute(

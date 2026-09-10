@@ -20,6 +20,8 @@ from src.domain.valuation import (
     ApprovalStatus,
     ForwardEPSObservation,
     ForwardEPSSourceType,
+    PEScenario,
+    PEScope,
     ValuationApproval,
 )
 from src.repositories.forward_eps_repository import ForwardEPSRepository
@@ -383,10 +385,31 @@ def test_summary_governed_forward_eps_and_technical_anchor_as_of(tmp_path):
         ingested_at="2026-09-02T08:00:00Z",
     )
 
-    # After approval, summary valuation_context is available, VAL-02 not in decision queue
+    # EPS approval alone does not supply the required approved PE scenario.
     summary_after = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
-    assert summary_after["valuation_context"]["status"] == "available"
+    assert summary_after["valuation_context"]["status"] == "needs_human_judgment"
+    assert summary_after["valuation_context"]["reason_code"] == "approved_symbol_pe_missing_at_knowledge_cutoff"
+    assert summary_after["valuation_context"]["target_matrix"] == []
     assert not any(item["rule_id"] == "VAL-02" for item in summary_after["human_decision_queue"])
+
+    pe = eps_repo.add_pe_scenario(PEScenario(
+        logical_series_id="2330-pe", revision_number=1, label="base", pe_value=20,
+        rationale="Test approved assumption", evidence_level="A", scope=PEScope.SYMBOL,
+        symbol="2330.TW", available_at="2026-09-02T08:00:00Z",
+        approval_status=ApprovalStatus.DRAFT,
+    ), "pe-1", ingested_at="2026-09-02T08:00:00Z")
+    eps_repo.add_approval(ValuationApproval(
+        approval_id="pe-app", resource_type=ApprovalResourceType.PE_SCENARIO,
+        resource_id=pe["id"], decision=ApprovalStatus.APPROVED, rule_id="VAL-04",
+        evidence_level="A", project_operationalization=False, approved_by="reviewer",
+        rationale="Test assumption", available_at="2026-09-02T08:00:00Z",
+    ), "pe-app-key", ingested_at="2026-09-02T08:00:00Z")
+    complete = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    assert complete["valuation_context"]["status"] == "available"
+    cell = complete["valuation_context"]["target_matrix"][0]
+    assert cell["target_price"] == 1040
+    assert cell["source_name"] == "Analyst A"
+    assert cell["approval_ids"] == {"VAL-02": "app-1", "VAL-04": "pe-app"}
 
     # If approval is revoked, it reverts to needs_human_judgment
     eps_repo.add_approval(
@@ -478,6 +501,7 @@ def test_summary_governed_technical_anchor_as_of(tmp_path):
     s_approved = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
     assert s_approved["technical_context"]["status"] == "available"
     assert s_approved["technical_context"]["reason_code"] is None
+    assert s_approved["technical_context"]["targets"]["scenarios"][0]["calculated_level"] == 892.7
     assert not any(item["rule_id"] == "FB-03/FB-04" for item in s_approved["human_decision_queue"])
 
     # 4. Later approval is revoked: reverts to needs_human_judgment
