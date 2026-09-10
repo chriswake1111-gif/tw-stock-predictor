@@ -54,16 +54,28 @@ jobs:
       - name: Install Inno Setup 6.7.1
         shell: pwsh
         run: |
-          $compiler = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-          $expected = '^6\.7\.1(?:\.0)?$'
-          $version = if (Test-Path -LiteralPath $compiler) { (Get-Item -LiteralPath $compiler).VersionInfo.ProductVersion } else { "" }
-          if ($version -notmatch $expected) {
+          $probe = Join-Path $env:RUNNER_TEMP "inno-version-probe.iss"
+          Set-Content -LiteralPath $probe -Value "" -Encoding UTF8
+          function Find-PinnedCompiler {
+            foreach ($candidate in @("C:\Program Files (x86)\Inno Setup 6\ISCC.exe", "C:\Program Files\Inno Setup 6\ISCC.exe")) {
+              if (!(Test-Path -LiteralPath $candidate)) { continue }
+              # ISCC's PE metadata may be 0.0.0.0.  An empty script loads the
+              # actual compiler engine, prints its version, then exits without output.
+              $banner = (& $candidate $probe 2>&1 | Out-String)
+              Write-Host $banner
+              if ($banner -match '(?m)^Compiler engine version:.*\b6\.7\.1\b') { return $candidate }
+            }
+          }
+          $compiler = Find-PinnedCompiler
+          if (!$compiler) {
             choco install innosetup --version=6.7.1 --force --no-progress --yes
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $compiler = Find-PinnedCompiler
           }
-          $version = (Get-Item -LiteralPath $compiler).VersionInfo.ProductVersion
-          if ($version -notmatch $expected) { throw "Unexpected Inno Setup compiler version: $version" }
-          Write-Host "Verified Inno Setup $version"
+          if (!$compiler) { throw "Verified Inno Setup 6.7.1 compiler not found" }
+          "ISCC_PATH=$compiler" | Add-Content -LiteralPath $env:GITHUB_ENV
+          Write-Host "Verified Inno Setup 6.7.1 at $compiler"
+          exit 0
 
       - name: Install Python dependencies
         shell: pwsh
@@ -89,7 +101,7 @@ jobs:
         run: >-
           python -B tools/build_windows_package.py
           --skip-frontend
-          --iscc "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          --iscc "$env:ISCC_PATH"
 
       - name: Validate finalized package manifests and onedir layout
         shell: pwsh
