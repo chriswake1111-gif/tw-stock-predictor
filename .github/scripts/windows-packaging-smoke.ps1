@@ -506,7 +506,8 @@ try {
     $journalRetry = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/journal/2330.TW" -Method POST -Headers $journalHeaders -Body $journalBody -WebSession $smokeSession -TimeoutSec 15
     Assert-True ($journalEntry.entry_id -eq $journalRetry.entry_id) "journal idempotent retry changed entry id"
     $journalHistory = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/journal/2330.TW" -UseBasicParsing -TimeoutSec 15
-    Assert-True ($journalHistory.entries | Where-Object { $_.note -eq "installed smoke note" }) "journal history missing installed smoke note"
+    $savedNotes = @($journalHistory.entries | Where-Object { $_.note -eq "installed smoke note" })
+    Assert-True ($savedNotes.Count -ge 1) "journal history missing installed smoke note"
 
     $second = New-ProductProcess -FilePath $launcher
     Write-Host "Smoke scenario: single-instance rejection"
