@@ -53,7 +53,17 @@ jobs:
 
       - name: Install Inno Setup 6.7.1
         shell: pwsh
-        run: choco install innosetup --version=6.7.1 --force --no-progress --yes
+        run: |
+          $compiler = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          $expected = '^6\.7\.1(?:\.0)?$'
+          $version = if (Test-Path -LiteralPath $compiler) { (Get-Item -LiteralPath $compiler).VersionInfo.ProductVersion } else { "" }
+          if ($version -notmatch $expected) {
+            choco install innosetup --version=6.7.1 --force --no-progress --yes
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $version = (Get-Item -LiteralPath $compiler).VersionInfo.ProductVersion
+          if ($version -notmatch $expected) { throw "Unexpected Inno Setup compiler version: $version" }
+          Write-Host "Verified Inno Setup $version"
 
       - name: Install Python dependencies
         shell: pwsh
