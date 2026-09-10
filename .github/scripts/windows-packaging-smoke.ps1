@@ -432,6 +432,82 @@ try {
         }
     }
 
+    # 2h. Installed local assumptions and daily journal HTTP smoke.  These
+    # writes remain local, explicit, and approval-gated; response bodies are
+    # assigned only and sensitive session cookies are never printed.
+    Write-Host "Smoke scenario: local assumptions and research journal"
+    $utcSmokeNow = [DateTime]::UtcNow
+    $smokeFiscalYear = $utcSmokeNow.Year
+    $smokeSourceDate = $utcSmokeNow.ToString("yyyy-MM-dd")
+    $assumptionHeaders = @{} + $syncHeaders
+
+    $epsDraftHeaders = @{} + $assumptionHeaders
+    $epsDraftHeaders["Idempotency-Key"] = "installed-smoke-eps-draft-1"
+    $epsBody = @{ values = @{
+        fiscal_year = $smokeFiscalYear
+        eps_base = 42
+        source = "installed smoke fixture"
+        source_date = $smokeSourceDate
+        rationale = "Installed smoke test local EPS assumption"
+    } } | ConvertTo-Json -Depth 4
+    $epsDraft = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/assumptions/2330.TW/eps/draft" -Method POST -Headers $epsDraftHeaders -Body $epsBody -WebSession $smokeSession -TimeoutSec 15
+    Assert-True ($epsDraft.status -eq "draft" -and $null -ne $epsDraft.record.id) "local EPS draft failed"
+
+    $peBefore = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/assumptions/2330.TW" -UseBasicParsing -TimeoutSec 15
+    $pePreviewHeaders = @{} + $assumptionHeaders
+    $pePreviewBody = @{ values = @{ label = "installed smoke base"; pe_value = 20; rationale = "Installed smoke test local PE preview" } } | ConvertTo-Json -Depth 4
+    $pePreview = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/assumptions/2330.TW/pe/preview" -Method POST -Headers $pePreviewHeaders -Body $pePreviewBody -WebSession $smokeSession -TimeoutSec 15
+    Assert-True ($pePreview.status -eq "preview_only" -and $pePreview.approval_required) "local PE preview failed"
+    $peAfterPreview = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/assumptions/2330.TW" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($peAfterPreview.items.Count -eq $peBefore.items.Count) "PE preview unexpectedly wrote a record"
+
+    $peDraftHeaders = @{} + $assumptionHeaders
+    $peDraftHeaders["Idempotency-Key"] = "installed-smoke-pe-draft-1"
+    $peDraft = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/assumptions/2330.TW/pe/draft" -Method POST -Headers $peDraftHeaders -Body $pePreviewBody -WebSession $smokeSession -TimeoutSec 15
+    Assert-True ($peDraft.status -eq "draft" -and $null -ne $peDraft.record.id) "local PE draft failed"
+    $draftSummary = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/summary/2330.TW" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($draftSummary.valuation_context.status -ne "available") "valuation became available before local approvals"
+
+    $epsApproveHeaders = @{} + $assumptionHeaders
+    $epsApproveHeaders["Idempotency-Key"] = "installed-smoke-eps-approve-1"
+    $epsApproval = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/assumptions/2330.TW/eps/$($epsDraft.record.id)/approve" -Method POST -Headers $epsApproveHeaders -Body (@{ rationale = "Installed smoke test EPS approval" } | ConvertTo-Json) -WebSession $smokeSession -TimeoutSec 15
+    $peApproveHeaders = @{} + $assumptionHeaders
+    $peApproveHeaders["Idempotency-Key"] = "installed-smoke-pe-approve-1"
+    $peApproval = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/assumptions/2330.TW/pe/$($peDraft.record.id)/approve" -Method POST -Headers $peApproveHeaders -Body (@{ rationale = "Installed smoke test PE approval" } | ConvertTo-Json) -WebSession $smokeSession -TimeoutSec 15
+    Assert-True ($epsApproval.status -eq "approved" -and $peApproval.status -eq "approved") "local EPS/PE approval failed"
+    $approvedSummary = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/summary/2330.TW" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($approvedSummary.valuation_context.status -eq "available") "valuation unavailable after local EPS/PE approvals"
+    $target840 = $approvedSummary.valuation_context.target_matrix | Where-Object { [double]$_.target_price -eq 840 }
+    Assert-True ($null -ne $target840) "approved valuation target matrix did not include 840"
+
+    $anchorValues = @{ rule_id = "FB-04"; source = "installed smoke fixture"; rationale = "Installed smoke test FB-04 anchor"; anchors = @(
+        @{ role = "origin"; price = 100; market_date = $utcSmokeNow.AddDays(-10).ToString("yyyy-MM-dd") },
+        @{ role = "swing_end"; price = 200; market_date = $utcSmokeNow.AddDays(-5).ToString("yyyy-MM-dd") }
+    ) }
+    $anchorBody = @{ values = $anchorValues } | ConvertTo-Json -Depth 6
+    $anchorPreviewHeaders = @{} + $assumptionHeaders
+    $anchorPreview = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/assumptions/2330.TW/anchor/preview" -Method POST -Headers $anchorPreviewHeaders -Body $anchorBody -WebSession $smokeSession -TimeoutSec 15
+    Assert-True ($anchorPreview.status -eq "preview_only" -and [double]$anchorPreview.calculation.calculated_level -eq 161.8) "FB-04 preview calculation mismatch"
+    $anchorDraftHeaders = @{} + $assumptionHeaders
+    $anchorDraftHeaders["Idempotency-Key"] = "installed-smoke-anchor-draft-1"
+    $anchorDraft = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/assumptions/2330.TW/anchor/draft" -Method POST -Headers $anchorDraftHeaders -Body $anchorBody -WebSession $smokeSession -TimeoutSec 15
+    $anchorApproveHeaders = @{} + $assumptionHeaders
+    $anchorApproveHeaders["Idempotency-Key"] = "installed-smoke-anchor-approve-1"
+    $anchorApproval = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/assumptions/2330.TW/anchor/$($anchorDraft.record.id)/approve" -Method POST -Headers $anchorApproveHeaders -Body (@{ rationale = "Installed smoke test anchor approval" } | ConvertTo-Json) -WebSession $smokeSession -TimeoutSec 15
+    Assert-True ($anchorDraft.status -eq "draft" -and $anchorApproval.status -eq "approved") "local FB-04 draft/approval failed"
+    $approvedSummary = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/summary/2330.TW" -UseBasicParsing -TimeoutSec 15
+    $anchor161 = $approvedSummary.technical_context.targets.scenarios | Where-Object { [double]$_.calculated_level -eq 161.8 }
+    Assert-True ($null -ne $anchor161) "approved anchor scenario was not rendered in summary"
+
+    $journalHeaders = @{} + $assumptionHeaders
+    $journalHeaders["Idempotency-Key"] = "installed-smoke-journal-1"
+    $journalBody = @{ knowledge_cutoff_at = $approvedSummary.knowledge_cutoff_at; note = "installed smoke note" } | ConvertTo-Json
+    $journalEntry = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/journal/2330.TW" -Method POST -Headers $journalHeaders -Body $journalBody -WebSession $smokeSession -TimeoutSec 15
+    $journalRetry = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/journal/2330.TW" -Method POST -Headers $journalHeaders -Body $journalBody -WebSession $smokeSession -TimeoutSec 15
+    Assert-True ($journalEntry.entry_id -eq $journalRetry.entry_id) "journal idempotent retry changed entry id"
+    $journalHistory = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/journal/2330.TW" -UseBasicParsing -TimeoutSec 15
+    Assert-True ($journalHistory.entries | Where-Object { $_.note -eq "installed smoke note" }) "journal history missing installed smoke note"
+
     $second = New-ProductProcess -FilePath $launcher
     Write-Host "Smoke scenario: single-instance rejection"
     $secondResult = Wait-ProductExit -Process $second -Scenario "single-instance rejection"
@@ -652,6 +728,8 @@ try {
         phase20_bootstrap_ready = $true
         phase20_summary_ready = $true
         phase20_zero_egress = $true
+        local_assumptions_verified = $true
+        local_journal_verified = $true
         runtime_dependencies = "installed_onedir_executables_with_minimal_system_path_only"
     }
     $summary | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $smokeSummaryPath -Encoding UTF8

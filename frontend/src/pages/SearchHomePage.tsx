@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Search, ArrowRight, Clock, Sparkles, Building2 } from "lucide-react";
 import { searchUniverse, getUniverseCoverage } from "../api/phase20Client";
 import type { UniverseCoverage, UniverseSearchResultItem } from "../api/types";
@@ -40,7 +40,11 @@ function storeRecentSearch(item: RecentSearchItem) {
 
 export function SearchHomePage() {
   const navigate = useNavigate();
-  const [query, setQuery] = useState("");
+  const [searchParams] = useSearchParams();
+  const searchQuery = searchParams.get("q") || "";
+  const [editedQuery, setEditedQuery] = useState({ origin: searchQuery, value: searchQuery });
+  const query = editedQuery.origin === searchQuery ? editedQuery.value : searchQuery;
+  const setQuery = (value: string) => setEditedQuery({ origin: searchQuery, value });
   const [results, setResults] = useState<UniverseSearchResultItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [coverage, setCoverage] = useState<UniverseCoverage | null>(null);

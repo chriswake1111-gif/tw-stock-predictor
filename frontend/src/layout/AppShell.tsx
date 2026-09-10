@@ -8,7 +8,7 @@ import {
   Search,
   Settings,
 } from "lucide-react";
-import { NavLink, useNavigate } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
 const navigation = [
   { to: "/", label: "首頁 / 搜尋", icon: Home },
@@ -20,14 +20,18 @@ const navigation = [
 
 export function AppShell({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
-  const [symbol, setSymbol] = useState("2330.TW");
+  const location = useLocation();
+  const [search, setSearch] = useState({ path: "", value: "" });
+  const routeSymbol = location.pathname.match(/^\/stocks\/([^/]+)/)?.[1] || "";
+  const symbol = search.path === location.pathname ? search.value : routeSymbol;
   const [mobileOpen, setMobileOpen] = useState(false);
 
   function submit(event: FormEvent) {
     event.preventDefault();
     const candidate = symbol.trim().toUpperCase();
     if (candidate) {
-      navigate(`/stocks/${encodeURIComponent(candidate)}`);
+      navigate(/^\d{4}\.(TW|TWO)$/.test(candidate)
+        ? `/stocks/${encodeURIComponent(candidate)}` : `/?q=${encodeURIComponent(candidate)}`);
       setMobileOpen(false);
     }
   }
@@ -53,8 +57,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           <input
             id="global-symbol-search"
             value={symbol}
-            onChange={(event) => setSymbol(event.target.value)}
-            placeholder="輸入股票代號"
+            onChange={(event) => setSearch({ path: location.pathname, value: event.target.value })}
+            placeholder="輸入股票代號或中文簡稱"
             autoComplete="off"
           />
         </form>

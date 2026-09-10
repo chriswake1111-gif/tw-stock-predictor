@@ -104,3 +104,27 @@ def test_idempotency_same_payload_retries_and_different_payload_conflicts(api):
     different = {"values": {**EPS["values"], "eps_base": 200}}
     conflict = api.post("/api/v2/research/assumptions/2330.TW/eps/draft", headers=headers, json=different)
     assert conflict.status_code == 409
+
+
+def test_packaged_daily_commands_work_without_enabling_other_workflows(tmp_path, monkeypatch):
+    from tests.test_phase19_installed_smoke import _create_packaged_settings
+    settings, coordinator = _create_packaged_settings(tmp_path)
+    startup = coordinator.prepare()
+    monkeypatch.setenv("DATABASE_PATH", str(settings.paths.database_path))
+    monkeypatch.setenv("RESEARCH_WORKFLOW_WRITES_ENABLED", "false")
+    app = create_app(settings=settings, startup_result=startup)
+    with TestClient(app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000)) as client:
+        headers = csrf(client) | {"Idempotency-Key": "installed-only-eps"}
+        path = "/api/v2/research/assumptions/2330.TW/eps/draft"
+        assert client.post(path, headers=headers, json=EPS).status_code == 503
+        app.state.launch_handshake = {"launch_id": "verified-installed-test"}
+        assert client.post(path, headers=headers, json=EPS).status_code == 200
+        assert client.post(path, headers={"Origin": "http://127.0.0.1:8000"}, json=EPS).status_code == 403
+        assert client.post(path, headers={**headers, "Origin": "https://example.com"}, json=EPS).status_code == 403
+        response = client.post("/api/v2/research/queue", headers=headers, json={"symbol": "2330.TW"})
+        assert response.status_code == 201
+        blocked = client.post("/api/v2/research/queue/unknown/snapshot-refresh", headers=headers, json={})
+        assert blocked.status_code == 503
+        assert blocked.json()["detail"] == "research_workflow_writes_disabled"
+    del app
+    gc.collect()

@@ -138,10 +138,12 @@ class ResearchBoundaryMiddleware:
         app,
         config: ResearchSecurityConfig | None = None,
         sessions: CsrfSessionStore | None = None,
+        installed_local_writes: bool = False,
     ):
         self.app = app
         self.config = config or ResearchSecurityConfig.from_environment()
         self.sessions = sessions or CsrfSessionStore()
+        self.installed_local_writes = installed_local_writes
 
     async def _reject(self, send, status: int, detail: str) -> None:
         start, body = _json_response(status, detail)
@@ -197,7 +199,15 @@ class ResearchBoundaryMiddleware:
         if origin is None:
             await self._reject(send, 403, "research_origin_required")
             return
-        if path.startswith(RESEARCH_PREFIX) and path != "/api/v2/research/bootstrap" and os.getenv("RESEARCH_WORKFLOW_WRITES_ENABLED", "false").strip().lower() != "true":
+        application = scope.get("app")
+        handshake = getattr(getattr(application, "state", None), "launch_handshake", None)
+        installed_command = (
+            self.installed_local_writes and isinstance(handshake, dict) and bool(handshake.get("launch_id"))
+            and method == "POST"
+            and (path == "/api/v2/research/queue" or path.startswith("/api/v2/research/assumptions/")
+                 or path.startswith("/api/v2/research/journal/"))
+        )
+        if path.startswith(RESEARCH_PREFIX) and path != "/api/v2/research/bootstrap" and not installed_command and os.getenv("RESEARCH_WORKFLOW_WRITES_ENABLED", "false").strip().lower() != "true":
             await self._reject(send, 503, "research_workflow_writes_disabled")
             return
         content_types = self._header_values(scope, b"content-type")

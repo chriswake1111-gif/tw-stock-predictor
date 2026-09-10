@@ -190,6 +190,7 @@ def create_app(
     )
     app.add_middleware(
         ResearchBoundaryMiddleware,
+        installed_local_writes=runtime_settings.packaged,
         config=_research_security_config(runtime_settings),
     )
 
