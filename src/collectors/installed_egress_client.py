@@ -81,6 +81,23 @@ def validate_egress_url(url: str) -> str:
     if cleaned == CBC_M1B_EXACT_URL:
         return cleaned
 
+    if parsed.netloc == "api.finmindtrade.com" and parsed.path == "/api/v4/data" and not parsed.fragment:
+        from datetime import date
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        required = {"dataset", "data_id", "start_date", "end_date"}
+        if set(params) == required and all(len(v) == 1 for v in params.values()):
+            dataset = params["dataset"][0]
+            code = params["data_id"][0]
+            try:
+                start = date.fromisoformat(params["start_date"][0])
+                end = date.fromisoformat(params["end_date"][0])
+                valid_range = 0 <= (end - start).days <= 800
+            except ValueError:
+                valid_range = False
+            if (dataset in {"TaiwanStockPrice", "TaiwanStockPER", "TaiwanStockFinancialStatements"}
+                    and re.fullmatch(r"[0-9]{4}", code) and valid_range):
+                return cleaned
+
     # ISIN validation: must match exact host and path, and contain ONLY owncode parameter
     if (
         parsed.netloc.lower() == "isin.twse.com.tw"

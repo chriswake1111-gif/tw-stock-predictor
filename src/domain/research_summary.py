@@ -42,6 +42,8 @@ class HumanDecisionItem(BaseModel):
 
 
 class MarketContextSummary(BaseModel):
+    market_turnover_date: Optional[str] = None
+    cbc_period: Optional[str] = None
     model_config = ConfigDict(extra="ignore")
 
     settled_trade_date: Optional[str] = None
@@ -101,6 +103,8 @@ class ResearchSummaryResponse(BaseModel):
     human_decision_queue: List[HumanDecisionItem]
     audit_reference: AuditReferenceSummary
     knowledge_cutoff_at: str
+    public_data: dict[str, Any] = Field(default_factory=dict)
+    market_data: dict[str, Any] = Field(default_factory=dict)
 
 
 __all__ = [

@@ -133,7 +133,7 @@ export async function enableSymbol(symbol: string): Promise<EnableSymbolResponse
   return res.json();
 }
 
-export async function cancelOperation(): Promise<{ operation_id: string; status: string }> {
+export async function cancelOperation(expectedOperationId?: string): Promise<{ operation_id: string; status: string }> {
   const token = await getCsrfToken();
   const res = await fetch("/api/v2/data-operations/cancel", {
     method: "POST",
@@ -141,7 +141,7 @@ export async function cancelOperation(): Promise<{ operation_id: string; status:
       "Content-Type": "application/json",
       "X-CSRF-Token": token,
     },
-    body: JSON.stringify({}),
+    body: JSON.stringify(expectedOperationId ? { expected_operation_id: expectedOperationId } : {}),
   });
   if (!res.ok) {
     throw new Error(`Cancel failed: ${res.status}`);

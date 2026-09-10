@@ -126,13 +126,14 @@ describe("Daily Research Context", () => {
     const calls: string[] = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       calls.push(String(input));
+      if (String(input).includes("/api/v2/research/journal")) return new Response(JSON.stringify({ server_time: "2026-08-31T09:00:00Z", next_symbol: null, items: [] }), { status: 200 });
       return new Response(JSON.stringify(dailyResponse()), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
     });
     renderWithProviders(<DailyResearchPage />, "/research");
-    expect(calls).toHaveLength(0);
+    expect(calls.filter((url) => url.includes("/api/v2/research/daily-context"))).toHaveLength(0);
     submitContext();
     expect(await screen.findByRole("heading", { name: "2330.TW" })).toBeInTheDocument();
     expect(calls.some((url) => url.includes("/api/v2/research/daily-context"))).toBe(true);
@@ -146,6 +147,9 @@ describe("Daily Research Context", () => {
       const url = String(input);
       const method = init?.method ?? "GET";
       calls.push({ url, method, body: String(init?.body ?? "") });
+      if (url.includes("/api/v2/research/journal")) {
+        return new Response(JSON.stringify({ server_time: "2026-08-31T09:00:00Z", next_symbol: null, items: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
       if (url.endsWith("/csrf-token")) {
         return new Response(JSON.stringify({ csrf_token: "csrf-token" }), {
           status: 200,

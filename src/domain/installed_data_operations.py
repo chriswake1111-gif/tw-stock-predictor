@@ -25,6 +25,9 @@ INSTALLED_OPERATIONS_ALLOWED_RESOURCES = frozenset({
     "twse.market-turnover",
     "tpex.market-turnover",
     "cbc.m1b",
+    "finmind.TaiwanStockPrice",
+    "finmind.TaiwanStockPER",
+    "finmind.TaiwanStockFinancialStatements",
 })
 
 

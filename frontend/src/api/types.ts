@@ -755,6 +755,8 @@ export interface HumanDecisionItem {
 }
 
 export interface MarketContextSummary {
+  market_turnover_date?: string | null;
+  cbc_period?: string | null;
   settled_trade_date: string | null;
   official_close: number | null;
   close_status: "available" | "insufficient_data";
@@ -790,6 +792,8 @@ export interface AuditReferenceSummary {
 }
 
 export interface ResearchSummaryResponse {
+  public_data?: Record<string, import("../components/DailyPublicDataPanel").DailyPublicData["TaiwanStockPrice"]>;
+  market_data?: Record<string, {source?: string; observed_at?: string; last_checked_at?: string | null; last_update_status?: string; last_update_reason?: string | null; rows?: {date: string; value: number; period?: string}[]}>;
   canonical_symbol: string;
   official_code: string;
   venue: string;

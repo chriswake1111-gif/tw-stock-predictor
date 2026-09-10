@@ -21,6 +21,8 @@ from src.analysis_service import analyze_symbol, normalize_symbol
 from src.api.routes.v2_valuation import router as v2_valuation_router
 from src.api.routes.research_workflow import router as research_workflow_router
 from src.api.routes.daily_research import router as daily_research_router
+from src.api.routes.local_assumptions import router as local_assumptions_router
+from src.api.routes.daily_journal import router as daily_journal_router
 from src.api.routes.v2_universe import router as v2_universe_router
 from src.api.routes.v2_universe_search import router as v2_universe_search_router
 from src.api.routes.v2_eod_close import router as v2_eod_close_router
@@ -194,6 +196,8 @@ def create_app(
     app.include_router(v2_valuation_router)
     app.include_router(research_workflow_router)
     app.include_router(daily_research_router)
+    app.include_router(local_assumptions_router)
+    app.include_router(daily_journal_router)
     app.include_router(v2_universe_router)
     app.include_router(v2_universe_search_router)
     app.include_router(v2_eod_close_router)

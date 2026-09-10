@@ -172,7 +172,7 @@ export function ResearchSummaryCard({
             {formatTurnover(m.market_turnover_total)}
           </div>
           <div style={{ fontSize: "0.8rem", color: "var(--color-muted, #64748b)", marginTop: "0.3rem" }}>
-            TWSE＋TPEx 官方總和
+            TWSE＋TPEx 官方總和 {m.market_turnover_date || ""}
           </div>
         </div>
 
@@ -186,7 +186,7 @@ export function ResearchSummaryCard({
             {m.cbc_status === "available" ? formatRatioPercent(m.cbc_m1b_ratio) : "尚無最新貨幣資料"}
           </div>
           <div style={{ fontSize: "0.8rem", color: "var(--color-muted, #64748b)", marginTop: "0.3rem" }}>
-            {m.cbc_status === "available" ? "央行貨幣供給對比" : "補充指標（不影響個股研究）"}
+            {m.cbc_status === "available" ? `央行貨幣供給對比 ${m.cbc_period || ""}` : "補充指標（不影響個股研究）"}
           </div>
         </div>
       </div>
@@ -237,12 +237,12 @@ export function ResearchSummaryCard({
 
         <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
           <span style={{ color: "var(--color-muted, #64748b)" }}>本益比 (PE)：</span>
-          <span style={{ color: "var(--color-muted, #94a3b8)" }}>尚無可用資料</span>
+          <span title={summary.screening_context.pe?.ui_copy}>{summary.screening_context.pe?.value ?? "尚無可用資料"}</span>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
           <span style={{ color: "var(--color-muted, #64748b)" }}>淨值比 (PB)：</span>
-          <span style={{ color: "var(--color-muted, #94a3b8)" }}>尚無可用資料</span>
+          <span title={summary.screening_context.pb?.ui_copy}>{summary.screening_context.pb?.value ?? "尚無可用資料"}</span>
         </div>
       </div>
     </div>

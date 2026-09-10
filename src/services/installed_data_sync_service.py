@@ -2234,6 +2234,21 @@ class InstalledDataSyncService:
             raise ValueError(f"symbol {code} did not become publicly eligible after eod materialization")
 
         _check_cancelled()
+        # Independent, explicitly labelled third-party sections cannot suppress
+        # the governed official close if a supplemental source is unavailable.
+        from src.services.daily_public_data_service import DailyPublicDataService
+        def authorize_public(resource):
+            _check_cancelled()
+            self._extend_lease_if_needed(operation_id, authorization)
+            self._require_live_write_authorization(operation_id, authorization, resource)
+        public_errors = DailyPublicDataService(self.db_path).refresh(
+            canonical_sym, operation_id, self.egress_client, authorize_public, deadline_monotonic,
+        )
+        from src.services.daily_market_data_service import DailyMarketDataService
+        public_errors.extend(DailyMarketDataService(self.db_path).refresh(
+            "MARKET", operation_id, self.egress_client, authorize_public, deadline_monotonic,
+        ))
+        _check_cancelled()
         # 6. Readiness refresh & completion.  A valid EOD row is not enough to
         # claim a complete research queue item; preserve a truthful partial
         # operation when Phase 16 applicability remains unresolved.
@@ -2242,6 +2257,8 @@ class InstalledDataSyncService:
             market_date=trade_date,
             knowledge_cutoff_at=utc_now_timestamp(),
         )
+        if public_errors:
+            phase16_partial_reason = "; ".join(filter(None, [phase16_partial_reason, "supplemental_data_incomplete: " + ", ".join(public_errors)]))
         self.run_stage_projection(
             operation_id,
             authorization,

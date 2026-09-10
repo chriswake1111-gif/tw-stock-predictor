@@ -68,10 +68,11 @@ jobs:
         run: |
           npm ci
           npm run build
+          npm test -- --run
 
-      - name: Run Phase 18, Phase 19, and Phase 20 runtime tests on Windows
+      - name: Run full regression suite on Windows
         shell: pwsh
-        run: python -B -m pytest tests/test_phase18_runtime.py tests/test_phase19_installed_smoke.py tests/test_phase20_installed_smoke.py -q -p no:cacheprovider
+        run: python -B -m pytest -q -p no:cacheprovider --basetemp="${{ runner.temp }}/daily-research-pytest"
 
       - name: Build Windows onedir package and installer
         shell: pwsh

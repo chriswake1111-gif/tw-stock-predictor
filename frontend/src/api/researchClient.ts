@@ -20,7 +20,7 @@ async function ensureResearchCsrf(): Promise<string> {
   return researchCsrfToken;
 }
 
-async function researchMutation<T>(path: string, payload: unknown, idempotencyKey?: string): Promise<T> {
+export async function researchMutation<T>(path: string, payload: unknown, idempotencyKey?: string): Promise<T> {
   const token = await ensureResearchCsrf();
   const headers: Record<string, string> = {
     Accept: "application/json",

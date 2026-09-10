@@ -9,10 +9,13 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { bootstrapSymbol, getResearchSummary } from "../api/phase20Client";
-import { getOperationDetails } from "../api/dataOperationsClient";
+import { cancelOperation, getOperationDetails } from "../api/dataOperationsClient";
 import type { ResearchSummaryResponse } from "../api/types";
 import { ResearchSummaryCard } from "../components/ResearchSummaryCard";
 import { ResearchModelResults } from "../components/ResearchModelResults";
+import { DailyPublicDataPanel } from "../components/DailyPublicDataPanel";
+import { LocalAssumptionEditor } from "../components/LocalAssumptionEditor";
+import { ResearchJournalPanel } from "../components/DailyResearchJournal";
 import { HumanDecisionQueue } from "../components/HumanDecisionQueue";
 import { AuditDrawer } from "../components/evidence/AuditDrawer";
 
@@ -33,12 +36,15 @@ export function StockResearchPage() {
   const [showTimeMachine, setShowTimeMachine] = useState(Boolean(asOf));
 
   const requestRef = useRef<AbortController | null>(null);
+  const ownedOperation = useRef<string | null>(null);
   const [updateNotice, setUpdateNotice] = useState<string | null>(null);
+  const [selectedPrice, setSelectedPrice] = useState<{date: string; price: number; symbol: string} | undefined>();
 
   const loadData = useCallback(async (forceRefresh = false) => {
     requestRef.current?.abort();
     const controller = new AbortController();
     requestRef.current = controller;
+    ownedOperation.current = null;
     const { signal } = controller;
     const timeout = setTimeout(() => controller.abort(), 180000);
     const isCurrent = () => requestRef.current === controller;
@@ -91,6 +97,7 @@ export function StockResearchPage() {
             throw new Error("既有資料作業已結束但標的尚未就緒，請重試更新。");
           }
           seenOperations.add(result.operation_id);
+          if (result.status === "preparing") ownedOperation.current = result.operation_id;
           setBootstrapStatus(result.status === "preparing"
             ? "正在取得並驗證官方行情資料..." : "正在等待既有資料作業完成...");
           const pollDeadline = Date.now() + 90000;
@@ -122,11 +129,16 @@ export function StockResearchPage() {
       checkCurrent();
       setSummary(sum);
     } catch (err) {
+      if (isCurrent() && !signal.aborted) {
+        const available = await getResearchSummary(canonicalSymbol, asOf, signal).catch(() => null);
+        if (isCurrent() && available) setSummary(available);
+      }
       if (isCurrent()) setError(signal.aborted ? "資料準備逾時，請重試更新。"
         : err instanceof Error ? err.message : "載入個股研究資料失敗");
     } finally {
       clearTimeout(timeout);
       if (isCurrent()) {
+        ownedOperation.current = null;
         setLoading(false);
         setBootstrapStatus(null);
       }
@@ -276,7 +288,20 @@ export function StockResearchPage() {
         </form>
       )}
 
+      <nav aria-label="個股研究操作" style={{display:"flex",gap:12,marginBottom:16}}><a href="#local-assumptions">設定估值假設／波浪錨點</a><a href="#daily-journal">保存研究與筆記</a></nav>
       {/* Loading state */}
+      {loading && <button type="button" onClick={async () => {
+        const operation = ownedOperation.current;
+        if (operation) {
+          try { await cancelOperation(operation); }
+          catch { setUpdateNotice("取消未完成，作業可能已結束；已停止等待，既有資料仍可查閱。"); }
+        }
+        const request = requestRef.current;
+        requestRef.current = null;
+        request?.abort();
+        setLoading(false); setBootstrapStatus(null);
+        setUpdateNotice(operation ? "已送出取消要求；保留已取得資料。" : "已停止等待；共用資料作業可能仍在執行。");
+      }}>取消本次更新／停止等待</button>}
       {loading && summary && <p role="status">正在更新資料；可先查閱下方本機資料，請留意行情日期。</p>}
       {loading && !summary && (
         <div
@@ -331,18 +356,32 @@ export function StockResearchPage() {
       {!loading && updateNotice && <p role="status">{updateNotice}</p>}
       {!loading && error && summary && <p role="status">更新未完成，以下保留本機資料；請留意行情日期。</p>}
       {/* Loaded summary */}
-      {summary && (
+      {summary && summary.canonical_symbol === canonicalSymbol && (
         <>
           <ResearchSummaryCard
             summary={summary}
             onOpenAuditDrawer={() => setAuditDrawerOpen(true)}
           />
 
-          <ResearchModelResults summary={summary} />
+          <DailyPublicDataPanel key={`prices-${canonicalSymbol}`} data={summary.public_data || {}} onSelectPrice={!asOf ? (date, price) => setSelectedPrice({date, price, symbol: canonicalSymbol}) : undefined} />
+          <details><summary>查看模型情境與成立條件</summary><ResearchModelResults summary={summary} /></details>
+          {!asOf && <div id="local-assumptions"><LocalAssumptionEditor key={canonicalSymbol} symbol={canonicalSymbol}
+            selectedPrice={selectedPrice?.symbol === canonicalSymbol ? selectedPrice : undefined}
+            onChanged={() => { void getResearchSummary(canonicalSymbol).then(setSummary).catch(() => setError("假設已保存，研究畫面讀取失敗，請重試。")); }} /></div>}
+          {!asOf && <div id="daily-journal"><ResearchJournalPanel key={`journal-${canonicalSymbol}`} symbol={canonicalSymbol} cutoff={summary.knowledge_cutoff_at} /></div>}
+          <details><summary>市場資料更新與來源</summary>
+            {Object.entries(summary.market_data || {}).map(([key, data]) => <p key={key}>
+              {key === "CBC_M1B" ? "M1B 貨幣供給" : key === "TWSE_TURNOVER" ? "上市成交額" : "上櫃成交額"}：
+              {data.rows?.at(-1)?.date || "尚無資料"}；來源 {data.source || "待取得"}；
+              最近檢查 {data.last_checked_at || "尚未檢查"}
+              {data.last_update_status === "failed" && "；本次來源更新失敗，保留已有資料"}
+            </p>)}
+          </details>
           <HumanDecisionQueue
             items={summary.human_decision_queue}
             canonicalSymbol={summary.canonical_symbol}
             onActionClick={(item) => {
+              if (!asOf) { document.getElementById("local-assumptions")?.scrollIntoView({ behavior: "smooth" }); return; }
               if (item.rule_id === "VAL-02" || item.rule_id === "VAL-04") {
                 navigate(`/rules?rule=${item.rule_id}`);
               } else if (item.rule_id.includes("FB")) {

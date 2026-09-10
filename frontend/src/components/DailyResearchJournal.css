@@ -1,0 +1,8 @@
+.daily-journal-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+.daily-journal-table th, .daily-journal-table td { padding: .65rem .8rem; text-align: left; border-bottom: 1px solid #e2e8f0; }
+.daily-journal-table th { background: #f1f5f9; }
+[aria-label="每日研究複核"] article { margin: 1rem 0; display: block; }
+[aria-label="每日研究複核"] article p { margin: .8rem 0; }
+[aria-label="本地研究假設編輯器"] input, [aria-label="本地研究假設編輯器"] select { margin-left: .65rem; padding: .4rem; max-width: 100%; }
+[aria-label="本地研究假設編輯器"] fieldset { border: 1px solid #cbd5e1; display: flex; flex-wrap: wrap; gap: .6rem; }
+[aria-label="本地研究假設編輯器"] button, [aria-label="保存當次研究"] button, [aria-label="每日研究複核"] button { padding: .5rem .8rem; margin: .35rem .35rem .35rem 0; border: 1px solid #94a3b8; border-radius: .35rem; background: #f8fafc; color: #12335a; cursor: pointer; }

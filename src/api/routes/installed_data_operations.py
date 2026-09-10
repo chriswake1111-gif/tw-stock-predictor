@@ -12,7 +12,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from src.api.workflow_security import CSRF_COOKIE_NAME, CsrfSessionStore
@@ -258,14 +258,17 @@ def trigger_sync_operation(
 
 
 @router.post("/cancel")
-def cancel_active_operation(request: Request) -> dict[str, Any]:
+def cancel_active_operation(request: Request, expected_operation_id: str | None = Body(default=None, embed=True)) -> dict[str, Any]:
     db_path = _get_db_path(request)
     repo = InstalledDataOperationsRepository(db_path)
     active = repo.get_active_operation()
     if active is None:
         raise HTTPException(status_code=404, detail="No active operation to cancel")
+    if expected_operation_id is not None and active.operation_id != expected_operation_id:
+        raise HTTPException(status_code=409, detail="active_operation_changed")
 
-    repo.request_cancel(active.operation_id)
+    if not repo.request_cancel(active.operation_id):
+        raise HTTPException(status_code=409, detail="operation_already_finished_or_cancelling")
     if hasattr(request.app.state, "background_worker_threads"):
         for t in request.app.state.background_worker_threads:
             if getattr(t, "operation_id", None) == active.operation_id:

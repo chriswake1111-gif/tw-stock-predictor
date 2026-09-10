@@ -3,6 +3,7 @@ import { useRef, useState, type FormEvent } from "react";
 import { evidenceApi } from "../api/client";
 import { researchWorkflowApi } from "../api/researchClient";
 import { DataOperationsModal } from "../components/DataOperationsModal";
+import { DailyJournalOverview } from "../components/DailyResearchJournal";
 import type {
   DailyResearchItem,
   DailyResearchResponse,
@@ -188,6 +189,8 @@ export function DailyResearchPage() {
 
   return (
     <div className="page daily-research-page">
+      <DailyJournalOverview />
+      <details><summary>進階：歷史日期與時間證據複核</summary>
       <header className="workspace-heading">
         <div>
           <span className="eyebrow">Phase 17 · Daily research review</span>
@@ -348,6 +351,7 @@ export function DailyResearchPage() {
       ) : null}
 
       <DataOperationsModal isOpen={isDataModalOpen} onClose={() => setIsDataModalOpen(false)} />
+      </details>
     </div>
   );
 }

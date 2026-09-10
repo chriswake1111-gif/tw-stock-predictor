@@ -20,6 +20,8 @@ from src.domain.valuation import utc_now_timestamp
 from src.repositories.current_research_repository import CurrentResearchRepository
 from src.services.forward_eps_service import ForwardEPSService
 from src.services.technical_scenario_service import TechnicalScenarioService
+from src.services.daily_public_data_service import DailyPublicDataService
+from src.services.daily_market_data_service import DailyMarketDataService
 
 
 class CurrentResearchService:
@@ -173,6 +175,32 @@ class CurrentResearchService:
                     description="目前沒有可計算的有效核准錨點。", suggested_action="請確認錨點與核准狀態。",
                 ))
             screening_ctx = ScreeningContextSummary()
+            public_data = DailyPublicDataService(self.db_path).view(canonical_symbol, cutoff)
+            market_data = DailyMarketDataService(self.db_path).view("MARKET", cutoff)
+            per_rows = public_data.get("TaiwanStockPER", {}).get("rows", [])
+            if per_rows:
+                latest_per = per_rows[-1]
+                for field, source_field in (("pe", "pe"), ("pb", "pb"), ("dividend_yield", "yield_ratio")):
+                    metric = getattr(screening_ctx, field)
+                    metric.value = latest_per.get(source_field)
+                    metric.status = "available" if metric.value is not None else "insufficient_data"
+                    metric.ui_copy = f"FinMind（非官方），資料日期 {latest_per['date']}"
+            twse_values = {r["date"]: r["value"] for r in market_data.get("TWSE_TURNOVER", {}).get("rows", [])}
+            tpex_values = {r["date"]: r["value"] for r in market_data.get("TPEX_TURNOVER", {}).get("rows", [])}
+            common_dates = sorted(twse_values.keys() & tpex_values.keys())
+            turnover_date = settled["settled_trade_date"] if m_ctx.get("market_turnover_total") is not None else None
+            cbc_period = None
+            if common_dates:
+                turnover_date = common_dates[-1]
+                m_ctx["market_turnover_total"] = twse_values[turnover_date] + tpex_values[turnover_date]
+                market_turnover_status = "available"
+                cbc_m1b_ratio = None
+                cbc_status = "insufficient_data"
+            m1b_rows = market_data.get("CBC_M1B", {}).get("rows", [])
+            if m1b_rows and m_ctx.get("market_turnover_total") is not None and m1b_rows[-1]["value"] > 0:
+                cbc_period = m1b_rows[-1]["period"]
+                cbc_m1b_ratio = round(m_ctx["market_turnover_total"] / m1b_rows[-1]["value"], 6)
+                cbc_status = "available"
 
             snapshot_id = off_close.get("snapshot_id")
             snap_avail = None
@@ -214,9 +242,13 @@ class CurrentResearchService:
                 market_turnover_status=market_turnover_status,
                 cbc_m1b_ratio=cbc_m1b_ratio,
                 cbc_status=cbc_status,
+                market_turnover_date=turnover_date,
+                cbc_period=cbc_period,
             )
 
             resp = ResearchSummaryResponse(
+                public_data=public_data,
+                market_data=market_data,
                 canonical_symbol=canonical_symbol,
                 official_code=official_code,
                 venue=venue_str,
