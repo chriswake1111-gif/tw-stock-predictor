@@ -245,6 +245,46 @@ def test_symbol_enablement_fails_closed_on_missing_session(
     assert eod_item.status == InstalledItemStatus.PARTIAL.value
 
 
+def test_official_outage_still_collects_labelled_public_data(sync_env):
+    from urllib.parse import parse_qs, urlparse
+    from src.services.daily_public_data_service import DailyPublicDataService
+    from src.domain.valuation import utc_now_timestamp
+
+    service, repo, db_path = sync_env
+    def fetch(url, **kwargs):
+        if "finmindtrade.com" not in url:
+            raise ConnectionError("official source unavailable")
+        dataset = parse_qs(urlparse(url).query)["dataset"][0]
+        rows = {
+            "TaiwanStockPrice": [{"date": "2026-03-31", "stock_id": "2330", "Trading_Volume": 100,
+                                  "Trading_money": 10000, "open": 100, "max": 101, "min": 99, "close": 100, "spread": 1}],
+            "TaiwanStockPER": [{"date": "2026-03-31", "stock_id": "2330", "PER": 20, "PBR": 2, "dividend_yield": 1}],
+            "TaiwanStockFinancialStatements": [{"date": "2026-03-31", "stock_id": "2330", "type": "EPS", "value": 4.2}],
+        }
+        return 200, json.dumps({"status": 200, "data": rows[dataset]}).encode(), {}
+    service.egress_client.fetch.side_effect = fetch
+    op_id, auth = service.create_operation_and_capability()
+    with pytest.raises(ConnectionError, match="official source unavailable"):
+        service.run_symbol_enablement_pipeline(op_id, auth, "2330.TW")
+    data = DailyPublicDataService(db_path).view("2330.TW", utc_now_timestamp())
+    assert len(data["TaiwanStockPrice"]["rows"]) == 1
+    assert data["TaiwanStockPrice"]["source"] == "FinMind"
+    assert data["TaiwanStockPrice"]["official_exchange_source"] is False
+    with repo._get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM eod_close_observations").fetchone()[0] == 0
+
+
+def test_cancelled_symbol_does_not_attempt_public_recovery(sync_env):
+    import threading
+    service, _, _ = sync_env
+    op_id, auth = service.create_operation_and_capability()
+    stop = threading.Event()
+    stop.set()
+    with pytest.raises(OperationCancelled):
+        service.run_symbol_enablement_pipeline(op_id, auth, "2330.TW", stop_event=stop)
+    service.egress_client.fetch.assert_not_called()
+
+
 def test_symbol_enablement_fails_closed_on_missing_identity(
     sync_env: tuple[InstalledDataSyncService, InstalledDataOperationsRepository, str]
 ) -> None:

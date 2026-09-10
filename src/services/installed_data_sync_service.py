@@ -2048,7 +2048,44 @@ class InstalledDataSyncService:
             if locked:
                 foundation.release_resource_lock(resource, run.ingestion_run_id)
 
+    def _refresh_daily_sections(self, operation_id, authorization, symbol, deadline, stop_event):
+        from src.services.daily_public_data_service import DailyPublicDataService
+        from src.services.daily_market_data_service import DailyMarketDataService
+
+        def authorize_public(resource):
+            if stop_event is not None and stop_event.is_set():
+                authorization.revoke()
+                raise OperationCancelled(f"Operation {operation_id} was interrupted by server shutdown")
+            self._extend_lease_if_needed(operation_id, authorization)
+            self._require_live_write_authorization(operation_id, authorization, resource)
+
+        errors = DailyPublicDataService(self.db_path).refresh(
+            symbol, operation_id, self.egress_client, authorize_public, deadline,
+        )
+        errors.extend(DailyMarketDataService(self.db_path).refresh(
+            "MARKET", operation_id, self.egress_client, authorize_public, deadline,
+        ))
+        return errors
+
     def run_symbol_enablement_pipeline(
+        self, operation_id, authorization, symbol, deadline_monotonic=None, stop_event=None,
+    ) -> None:
+        try:
+            self._run_symbol_enablement_pipeline(
+                operation_id, authorization, symbol, deadline_monotonic, stop_event,
+            )
+        except (OperationCancelled, OperationAuthorizationRevoked):
+            raise
+        except Exception:
+            # The official gate remains failed.  Independent labelled public
+            # observations can still be collected and read, never promoted to
+            # an official close or historical eligibility by this recovery.
+            self._refresh_daily_sections(
+                operation_id, authorization, symbol.strip().upper(), deadline_monotonic, stop_event,
+            )
+            raise
+
+    def _run_symbol_enablement_pipeline(
         self,
         operation_id: str,
         authorization: InstalledWriteAuthorization,
@@ -2236,18 +2273,9 @@ class InstalledDataSyncService:
         _check_cancelled()
         # Independent, explicitly labelled third-party sections cannot suppress
         # the governed official close if a supplemental source is unavailable.
-        from src.services.daily_public_data_service import DailyPublicDataService
-        def authorize_public(resource):
-            _check_cancelled()
-            self._extend_lease_if_needed(operation_id, authorization)
-            self._require_live_write_authorization(operation_id, authorization, resource)
-        public_errors = DailyPublicDataService(self.db_path).refresh(
-            canonical_sym, operation_id, self.egress_client, authorize_public, deadline_monotonic,
+        public_errors = self._refresh_daily_sections(
+            operation_id, authorization, canonical_sym, deadline_monotonic, stop_event,
         )
-        from src.services.daily_market_data_service import DailyMarketDataService
-        public_errors.extend(DailyMarketDataService(self.db_path).refresh(
-            "MARKET", operation_id, self.egress_client, authorize_public, deadline_monotonic,
-        ))
         _check_cancelled()
         # 6. Readiness refresh & completion.  A valid EOD row is not enough to
         # claim a complete research queue item; preserve a truthful partial
