@@ -204,6 +204,10 @@ class Launcher:
         self.process = None
         self._close_control()
 
+    def _stop_requested(self) -> bool:
+        """Read the launch-owned stop signal without consuming or closing it."""
+        return self.stop_event is not None and self.stop_event.wait(0)
+
     def start(self) -> LaunchResult:
         if not self.settings.packaged:
             raise LaunchError("launcher_requires_packaged_mode")
@@ -237,7 +241,11 @@ class Launcher:
                     self.process_tree.assign(int(self.process.pid))
                 deadline = time.monotonic() + READY_TIMEOUT_SECONDS
                 while time.monotonic() < deadline:
+                    if self._stop_requested():
+                        return self.stop()
                     if self.process.poll() is not None:
+                        if self._stop_requested():
+                            return self.stop()
                         break
                     payload = self.ready_fetcher(
                         _ready_url(runtime_settings.application_origin or ""),
@@ -265,6 +273,8 @@ class Launcher:
                             server_pid=int(descriptor.get("server_pid")),
                         )
                     time.sleep(0.1)
+                if self._stop_requested():
+                    return self.stop()
                 self._log("port_unavailable", attempt=attempt + 1, port=port)
                 self._shutdown_child()
                 self._clear_context()

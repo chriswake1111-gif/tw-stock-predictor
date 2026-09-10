@@ -9,6 +9,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,7 @@ from src.runtime.recovery_cli import main as recovery_cli_main
 from src.runtime.restore import RestoreError, restore_backup_and_activate
 from src.runtime.settings import RuntimeSettings, packaged_auto_migrate
 from src.runtime.startup_coordinator import StartupCoordinator
+from src.runtime.launcher import Launcher
 from src.services.evidence_backup_service import EvidenceBackupService
 
 
@@ -524,6 +526,68 @@ def test_phase18_local_stop_event_is_graceful_control_plane(tmp_path):
             assert opened.wait(0.1) is True
     finally:
         event.close()
+
+
+def test_phase18_stop_during_readiness_does_not_retry_child(tmp_path):
+    """A stop arriving after spawn must not fall through to the next port attempt."""
+    settings, _ = _packaged_settings(tmp_path)
+    from src.runtime.instance import InstanceGuard
+    import hashlib
+    mutex_name = "Local\\TWStockPredictor.TestLauncher." + hashlib.sha256(str(tmp_path).encode()).hexdigest()[:20]
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr("src.runtime.launcher.InstanceGuard", lambda runtime: InstanceGuard(runtime, name=mutex_name))
+    class FakeProcessTree:
+        handle = None
+        @classmethod
+        def create(cls):
+            return cls()
+        def assign(self, pid):
+            return None
+        def close(self):
+            return None
+    monkeypatch.setattr("src.runtime.launcher.ProcessTreeOwner", FakeProcessTree)
+    owner = {}
+    spawned = []
+
+    class FakeProcess:
+        pid = 424242
+
+        def poll(self):
+            event = owner.get("launcher").stop_event
+            return 0 if event is not None and event.wait(0) else None
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            return None
+
+    def process_factory(*args, **kwargs):
+        spawned.append(1)
+        return FakeProcess()
+
+    def ready_fetcher(*args, **kwargs):
+        owner["launcher"].stop_event.set()
+        return None
+
+    coordinator = SimpleNamespace(prepare=lambda: SimpleNamespace(ready=True))
+    launcher = Launcher(
+        settings,
+        server_command=[sys.executable, "-c", "pass"],
+        browser_opener=lambda _: None,
+        port_picker=lambda _: 43127,
+        ready_fetcher=ready_fetcher,
+        process_factory=process_factory,
+        coordinator=coordinator,
+    )
+    owner["launcher"] = launcher
+
+    try:
+        result = launcher.start()
+        assert result.status == "stopped"
+        assert len(spawned) == 1
+    finally:
+        monkeypatch.undo()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="requires native Win32 APIs")
