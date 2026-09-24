@@ -86,6 +86,19 @@ def _validate_ondir_bundle(executable_root: Path, bundle_name: str, executable_n
     return True
 
 
+def _validate_research_payload(executable_root: Path) -> dict[str, object]:
+    """Validate the optional v1 assistant payload staged beside executables."""
+
+    bundle = executable_root / "tw-stock-research"
+    skill = executable_root / "skills" / "tw-stock-research" / "SKILL.md"
+    return {
+        "tw-stock-research.exe": _validate_ondir_bundle(
+            executable_root, "tw-stock-research", "tw-stock-research.exe"
+        ),
+        "skill": skill.is_file(),
+    } if skill.is_file() else _fail(f"research assistant skill is missing: {skill}")
+
+
 def _validate_distribution_manifest(manifest_path: Path, package_root: Path) -> dict[str, object]:
     from src.runtime.manifest import EXTERNAL_MANIFEST_VERSION, sha256_file
 
@@ -105,6 +118,16 @@ def _validate_distribution_manifest(manifest_path: Path, package_root: Path) -> 
         _fail(f"installer artifact is missing: {installer_path}")
     if sha256_file(installer_path) != installer.get("sha256"):
         _fail("installer artifact checksum mismatch")
+    artifact_root = package_root / "executables"
+    for record in manifest.get("artifacts", []):
+        if not isinstance(record, dict):
+            _fail("distribution manifest artifact record is invalid")
+        filename = _manifest_filename(record.get("filename"), label="artifact")
+        candidates = [path for path in artifact_root.rglob(filename) if path.is_file()]
+        if len(candidates) != 1:
+            _fail(f"distribution artifact is missing or ambiguous: {filename}")
+        if sha256_file(candidates[0]) != record.get("sha256"):
+            _fail(f"distribution artifact checksum mismatch: {filename}")
     return manifest
 
 
@@ -139,6 +162,19 @@ def validate_package(package_root: str | Path, *, distribution_manifest: str | P
     }
     if not all(executables.values()):
         _fail("one or more PyInstaller executables are missing")
+    build_summary_path = root / "build-summary.json"
+    assistant_enabled = False
+    if build_summary_path.is_file():
+        try:
+            build_summary = json.loads(build_summary_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            _fail("build summary is unreadable")
+        assistant_enabled = (
+            build_summary.get("assistant_version") == "v1"
+            or build_summary.get("research_assistant") == "v1"
+            or isinstance(build_summary.get("research_skill"), dict)
+        )
+    research = _validate_research_payload(executable_root) if assistant_enabled else None
     external = None
     if distribution_manifest:
         external = _validate_distribution_manifest(
@@ -151,6 +187,7 @@ def validate_package(package_root: str | Path, *, distribution_manifest: str | P
         "internal_manifest": internal,
         "frontend_assets_checked": frontend_assets,
         "executables": executables,
+        "research_assistant": research,
         "distribution_manifest": external,
     }
 

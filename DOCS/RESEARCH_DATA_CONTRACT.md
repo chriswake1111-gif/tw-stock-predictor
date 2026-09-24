@@ -193,3 +193,12 @@ python tools\build_official_gap_snapshot.py `
   - 熊市複合報酬高於 -5%
   - 熊市最差 MDD 不超過 5%
 - 通過 research gate 只代表可進入更廣標的驗證，`promotion_to_default` 仍固定為 `False`。
+
+## 每日公開價量的全零來源列（daily-price-v2）
+
+- 僅對 FinMind `TaiwanStockPrice`，在標的、日期及有限數值驗證通過後，若 OHLC、成交股數、成交金額與漲跌七欄全部為零，將該日期列入 `excluded_rows`，不作為有效價格列。不能僅憑全零欄位推論已確認停牌。
+- `excluded_rows` 為新增相容欄位，內容是 `{date, reason: "source_all_zero_price_and_activity"}`；舊快照沒有此欄位時視為空清單。同日零值與有效報價衝突仍拒收，其他不合法值不適用此例外。
+- `rows` 只包含通過原有價量驗證的列；有有效列時 `status=available`，同時保留 `quality_status=quality_warning`。全數被排除時 `status=insufficient_data`、`rows=[]`、`reason=no_valid_price_rows`。來源抓取成功不等於價格完整或可供回測。
+- 原始回應逐字保存並保留 SHA-256。只變更價量解析器版本為 `daily-price-v2`，財報、估值及市場資料不換版本。新快照不覆寫舊快照；新版本不沿用舊解析器的近期更新快取。
+- 圖表標示被排除日期，不補價、不繪製假零價、不跨已知排除日期連線，並禁止選該日期作錨點。未還原權息、第三方來源及交易日完整性未稽核的限制維持不變。
+- 不變更金融公式、EPS／PE 核准、股數基準驗證、研究保存或歷史時間證據資格；本次沒有資料表遷移。

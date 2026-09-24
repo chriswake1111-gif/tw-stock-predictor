@@ -1,0 +1,12 @@
+.assumption-guide { line-height: 1.7; }
+.assumption-guide-lead { font-size: 1.15rem; font-weight: 700; }
+.assumption-guide-steps { display: grid; gap: .7rem; padding-left: 1.5rem; }
+.assumption-guide-steps span, .assumption-guide li > span { display: block; color: #52647d; }
+.assumption-guide-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+.assumption-guide section { margin-top: 1rem; border-top: 1px solid #d7e1ec; }
+.assumption-guide section ul { padding-left: 1.3rem; }
+.assumption-guide section li { margin-bottom: .8rem; overflow-wrap: anywhere; }
+.assumption-field { display: grid; gap: .25rem; }
+.assumption-field small { display: block; color: #52647d; line-height: 1.6; }
+[aria-label="本地研究假設編輯器"] .assumption-field input { margin-left: 0; width: 100%; box-sizing: border-box; }
+.assumption-edit-heading { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #d7e1ec; }

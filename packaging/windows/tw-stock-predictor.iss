@@ -33,6 +33,8 @@ UninstallDisplayName=TW Stock Predictor
 [Files]
 Source: "{#TW_STOCK_BUILD_ROOT}\tw-stock-predictor\*"; DestDir: "{app}\tw-stock-predictor"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#TW_STOCK_BUILD_ROOT}\tw-stock-predictor-server\*"; DestDir: "{app}\tw-stock-predictor-server"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#TW_STOCK_BUILD_ROOT}\tw-stock-research\*"; DestDir: "{app}\research"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#TW_STOCK_BUILD_ROOT}\skills\tw-stock-research\SKILL.md"; DestDir: "{app}\skills\tw-stock-research"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\TW Stock Predictor"; Filename: "{app}\tw-stock-predictor\tw-stock-predictor.exe"; WorkingDir: "{app}\tw-stock-predictor"

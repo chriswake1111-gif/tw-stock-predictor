@@ -12,6 +12,7 @@ import { bootstrapSymbol, getResearchSummary } from "../api/phase20Client";
 import { cancelOperation, getOperationDetails } from "../api/dataOperationsClient";
 import type { ResearchSummaryResponse } from "../api/types";
 import { ResearchSummaryCard } from "../components/ResearchSummaryCard";
+import { ResearchOverview } from "../components/ResearchOverview";
 import { ResearchModelResults } from "../components/ResearchModelResults";
 import { DailyPublicDataPanel } from "../components/DailyPublicDataPanel";
 import { LocalAssumptionEditor } from "../components/LocalAssumptionEditor";
@@ -39,6 +40,21 @@ export function StockResearchPage() {
   const ownedOperation = useRef<string | null>(null);
   const [updateNotice, setUpdateNotice] = useState<string | null>(null);
   const [selectedPrice, setSelectedPrice] = useState<{date: string; price: number; symbol: string} | undefined>();
+
+  function openSection(id: string) {
+    const section = document.getElementById(id);
+    if (section instanceof HTMLDetailsElement) section.open = true;
+    section?.scrollIntoView({ block: "start" });
+    const target = section?.querySelector<HTMLElement>("summary, h2");
+    if (target) { target.tabIndex = -1; target.focus({ preventScroll: true }); }
+  }
+
+  useEffect(() => {
+    if (summary?.canonical_symbol === canonicalSymbol && window.location.hash) {
+      const id = window.location.hash.slice(1);
+      if (["local-assumptions", "daily-journal", "research-models"].includes(id)) openSection(id);
+    }
+  }, [canonicalSymbol, summary]);
 
   const loadData = useCallback(async (forceRefresh = false) => {
     requestRef.current?.abort();
@@ -193,7 +209,7 @@ export function StockResearchPage() {
           <span>返回標的搜尋</span>
         </button>
 
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+        <div className="research-toolbar" style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
           {asOf ? (
             <div
               style={{
@@ -288,7 +304,6 @@ export function StockResearchPage() {
         </form>
       )}
 
-      <nav aria-label="個股研究操作" style={{display:"flex",gap:12,marginBottom:16}}><a href="#local-assumptions">設定估值假設／波浪錨點</a><a href="#daily-journal">保存研究與筆記</a></nav>
       {/* Loading state */}
       {loading && <button type="button" onClick={async () => {
         const operation = ownedOperation.current;
@@ -338,7 +353,7 @@ export function StockResearchPage() {
         >
           <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "0.75rem" }}>
             <AlertTriangle size={24} />
-            <h3 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700 }}>載入失敗</h3>
+            <h3 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700 }}>{summary?.canonical_symbol === canonicalSymbol ? "本次更新未完成" : "載入失敗"}</h3>
           </div>
           <p style={{ margin: "0 0 1rem", fontSize: "0.95rem" }}>{error}</p>
           <button
@@ -361,13 +376,13 @@ export function StockResearchPage() {
           <ResearchSummaryCard
             summary={summary}
             onOpenAuditDrawer={() => setAuditDrawerOpen(true)}
-          />
+          ><ResearchOverview summary={summary} historical={!!asOf} onOpenSection={openSection} /></ResearchSummaryCard>
 
-          <DailyPublicDataPanel key={`prices-${canonicalSymbol}`} data={summary.public_data || {}} onSelectPrice={!asOf ? (date, price) => setSelectedPrice({date, price, symbol: canonicalSymbol}) : undefined} />
-          <details><summary>查看模型情境與成立條件</summary><ResearchModelResults summary={summary} /></details>
-          {!asOf && <div id="local-assumptions"><LocalAssumptionEditor key={canonicalSymbol} symbol={canonicalSymbol}
+          <div id="daily-public-data"><DailyPublicDataPanel key={`prices-${canonicalSymbol}`} data={summary.public_data || {}} onSelectPrice={!asOf ? (date, price) => { setSelectedPrice({date, price, symbol: canonicalSymbol}); openSection("local-assumptions"); } : undefined} /></div>
+          <details id="research-models" className="research-disclosure"><summary>查看模型情境與成立條件</summary><ResearchModelResults key={`${canonicalSymbol}-${asOf || "latest"}`} summary={summary} /></details>
+          {!asOf && <details id="local-assumptions" className="research-disclosure"><summary>設定估值假設／波浪錨點（可稍後）</summary><LocalAssumptionEditor key={canonicalSymbol} symbol={canonicalSymbol}
             selectedPrice={selectedPrice?.symbol === canonicalSymbol ? selectedPrice : undefined}
-            onChanged={() => { void getResearchSummary(canonicalSymbol).then(setSummary).catch(() => setError("假設已保存，研究畫面讀取失敗，請重試。")); }} /></div>}
+            onChanged={() => { void getResearchSummary(canonicalSymbol).then(setSummary).catch(() => setError("假設已保存，研究畫面讀取失敗，請重試。")); }} /></details>}
           {!asOf && <div id="daily-journal"><ResearchJournalPanel key={`journal-${canonicalSymbol}`} symbol={canonicalSymbol} cutoff={summary.knowledge_cutoff_at} /></div>}
           <details><summary>市場資料更新與來源</summary>
             {Object.entries(summary.market_data || {}).map(([key, data]) => <p key={key}>
@@ -381,7 +396,7 @@ export function StockResearchPage() {
             items={summary.human_decision_queue}
             canonicalSymbol={summary.canonical_symbol}
             onActionClick={(item) => {
-              if (!asOf) { document.getElementById("local-assumptions")?.scrollIntoView({ behavior: "smooth" }); return; }
+              if (!asOf) { openSection("local-assumptions"); return; }
               if (item.rule_id === "VAL-02" || item.rule_id === "VAL-04") {
                 navigate(`/rules?rule=${item.rule_id}`);
               } else if (item.rule_id.includes("FB")) {

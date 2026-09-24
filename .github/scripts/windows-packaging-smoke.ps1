@@ -267,6 +267,7 @@ Assert-UnderRunnerTemp $user
 $installer = Join-Path $package "installer\tw-stock-predictor-setup.exe"
 $launcher = Join-Path $install "tw-stock-predictor\tw-stock-predictor.exe"
 $server = Join-Path $install "tw-stock-predictor-server\tw-stock-predictor-server.exe"
+$researchAssistant = Join-Path $install "research\tw-stock-research.exe"
 $runtimeDescriptor = Join-Path $user "runtime\instance.json"
 $sentinel = Join-Path $user "data\user-sentinel.txt"
 $smokeSummaryPath = Join-Path $package "smoke-summary.json"
@@ -294,6 +295,7 @@ $installerProcess = Start-Process -FilePath $installer -ArgumentList @(
 Assert-True ($installerProcess.ExitCode -eq 0) "installer failed with exit code $($installerProcess.ExitCode)"
 Assert-True (Test-Path -LiteralPath $launcher) "installed launcher is missing: $launcher"
 Assert-True (Test-Path -LiteralPath $server) "installed server is missing: $server"
+Assert-True (Test-Path -LiteralPath $researchAssistant) "installed research assistant is missing: $researchAssistant"
 
 $first = $null
 $second = $null
@@ -508,6 +510,50 @@ try {
     $journalHistory = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/journal/2330.TW" -UseBasicParsing -TimeoutSec 15
     $savedNotes = @($journalHistory.entries | Where-Object { $_.note -eq "installed smoke note" })
     Assert-True ($savedNotes.Count -ge 1) "journal history missing installed smoke note"
+
+    # 2i. Installed research assistant CLI: doctor/search/review/save.  Keep
+    # the synthetic note local and use a stable UUID for idempotent replay.
+    Write-Host "Smoke scenario: installed research assistant CLI"
+    $doctorJson = (& $researchAssistant "--user-root" $user "doctor" | Out-String).Trim()
+    Assert-True ($LASTEXITCODE -eq 0) "research assistant doctor failed: $doctorJson"
+    $doctor = $doctorJson | ConvertFrom-Json
+    Assert-True ($doctor.contract_version -eq "tw_stock_research_assistant_v1") "research assistant doctor contract mismatch"
+
+    $assistantSearchJson = (& $researchAssistant "--user-root" $user "search" "2330" | Out-String).Trim()
+    Assert-True ($LASTEXITCODE -eq 0) "research assistant search failed: $assistantSearchJson"
+    $assistantSearch = $assistantSearchJson | ConvertFrom-Json
+    Assert-True ($assistantSearch.results | Where-Object { $_.canonical_symbol -eq "2330.TW" }) "research assistant search did not find 2330.TW"
+
+    $assistantReviewJson = (& $researchAssistant "--user-root" $user "review" "2330.TW" | Out-String).Trim()
+    Assert-True ($LASTEXITCODE -eq 0) "research assistant review failed: $assistantReviewJson"
+    $assistantReview = $assistantReviewJson | ConvertFrom-Json
+    Assert-True ($assistantReview.contract_version -eq "tw_stock_research_assistant_v1") "research assistant review contract mismatch"
+    Assert-True ($assistantReview.review_file -and (Test-Path -LiteralPath $assistantReview.review_file)) "research assistant review_file missing"
+    Assert-True ($assistantReview.review.symbol -eq "2330.TW") "research assistant review symbol mismatch"
+
+    $assistantNotePath = Join-Path $user "runtime\research-assistant\smoke-note.txt"
+    [System.IO.File]::WriteAllText($assistantNotePath, "installed assistant smoke note", [System.Text.UTF8Encoding]::new($false))
+    $assistantRequestId = [guid]::NewGuid().ToString()
+    $assistantSaveArgs = @(
+        "--user-root", $user, "save", "--review", $assistantReview.review_file,
+        "--note-file", $assistantNotePath, "--request-id", $assistantRequestId, "--confirmed"
+    )
+    $assistantSaveJson = (& $researchAssistant @assistantSaveArgs | Out-String).Trim()
+    Assert-True ($LASTEXITCODE -eq 0) "research assistant save failed: $assistantSaveJson"
+    $assistantSaved = $assistantSaveJson | ConvertFrom-Json
+    Assert-True ($assistantSaved.entry_id) "research assistant save did not return entry_id"
+    $assistantRetryJson = (& $researchAssistant @assistantSaveArgs | Out-String).Trim()
+    Assert-True ($LASTEXITCODE -eq 0) "research assistant idempotent retry failed: $assistantRetryJson"
+    $assistantRetry = $assistantRetryJson | ConvertFrom-Json
+    Assert-True ($assistantRetry.entry_id -eq $assistantSaved.entry_id) "research assistant retry changed entry_id"
+    $assistantHistory = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/journal/2330.TW" -UseBasicParsing -TimeoutSec 15
+    $assistantEntry = @($assistantHistory.entries | Where-Object { $_.entry_id -eq $assistantSaved.entry_id })
+    Assert-True ($assistantEntry.Count -eq 1 -and $assistantEntry[0].note -eq "installed assistant smoke note") "assistant saved entry readback mismatch"
+
+    $missingConfirmed = (& $researchAssistant "--user-root" $user "save" "--review" $assistantReview.review_file "--note-file" $assistantNotePath "--request-id" ([guid]::NewGuid().ToString()) 2>&1 | Out-String).Trim()
+    Assert-True ($LASTEXITCODE -ne 0) "research assistant save without --confirmed unexpectedly succeeded: $missingConfirmed"
+    $approveAttempt = (& $researchAssistant "--user-root" $user "approve" "2330.TW" 2>&1 | Out-String).Trim()
+    Assert-True ($LASTEXITCODE -ne 0) "research assistant exposed an approve command: $approveAttempt"
 
     $second = New-ProductProcess -FilePath $launcher
     Write-Host "Smoke scenario: single-instance rejection"

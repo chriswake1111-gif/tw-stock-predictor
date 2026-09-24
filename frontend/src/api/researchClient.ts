@@ -4,24 +4,22 @@ import type {
   ResearchMembershipMutationResponse,
   ResearchWatchlistItem,
 } from "./types";
+import { getLocalCsrfToken, invalidateLocalCsrfToken, isCsrfRejection } from "./localCsrfSession";
 
-let researchCsrfToken: string | null = null;
+function csrfEndpoint(path: string): "/api/v2/data-operations/csrf-token" | "/api/v2/research/csrf-token" {
+  // Installed local research is independent of the older workflow write gate.
+  // Both endpoints issue sessions consumed by the existing security middleware.
+  return /^\/api\/v2\/research\/(assumptions|journal)(\/|$)/.test(path)
+    ? "/api/v2/data-operations/csrf-token"
+    : "/api/v2/research/csrf-token";
+}
 
-async function ensureResearchCsrf(): Promise<string> {
-  if (researchCsrfToken) return researchCsrfToken;
-  const response = await fetch("/api/v2/research/csrf-token", {
-    method: "GET",
-    headers: { Accept: "application/json" },
-    credentials: "same-origin",
-  });
-  if (!response.ok) throw new Error(`research_csrf_error:${response.status}`);
-  const payload = await response.json() as { csrf_token: string };
-  researchCsrfToken = payload.csrf_token;
-  return researchCsrfToken;
+async function ensureResearchCsrf(path: string): Promise<string> {
+  return getLocalCsrfToken(csrfEndpoint(path));
 }
 
 export async function researchMutation<T>(path: string, payload: unknown, idempotencyKey?: string): Promise<T> {
-  const token = await ensureResearchCsrf();
+  const token = await ensureResearchCsrf(path);
   const headers: Record<string, string> = {
     Accept: "application/json",
     "Content-Type": "application/json",
@@ -36,12 +34,11 @@ export async function researchMutation<T>(path: string, payload: unknown, idempo
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({})) as { detail?: string };
-    if (response.status === 403 && ["csrf_session_expired", "csrf_session_invalid"].includes(error.detail ?? "")) {
-      researchCsrfToken = null;
+    if (isCsrfRejection(response.status, error.detail)) {
+      invalidateLocalCsrfToken(token);
       try {
-        await ensureResearchCsrf();
+        await ensureResearchCsrf(path);
       } catch {
-        researchCsrfToken = null;
         throw new Error("csrf_refresh_failed");
       }
       throw new Error("csrf_refresh_required");
@@ -49,6 +46,13 @@ export async function researchMutation<T>(path: string, payload: unknown, idempo
     throw new Error(error.detail ?? `research_write_error:${response.status}`);
   }
   return await response.json() as T;
+}
+
+export function researchErrorMessage(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback;
+  if (error.message === "csrf_refresh_required") return "操作驗證已更新，本次操作尚未執行。請再按一次原操作；已填內容仍保留。";
+  if (error.message === "csrf_refresh_failed") return "操作驗證更新失敗，本次操作尚未執行。請稍後再試；已填內容仍保留。";
+  return error.message;
 }
 
 export const researchWorkflowApi = {

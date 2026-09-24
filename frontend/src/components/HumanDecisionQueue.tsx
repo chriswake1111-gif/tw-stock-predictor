@@ -1,4 +1,4 @@
-import { CheckCircle, ArrowRight, ShieldCheck } from "lucide-react";
+import { Info, ArrowRight, ShieldCheck } from "lucide-react";
 import type { HumanDecisionItem } from "../api/types";
 
 interface HumanDecisionQueueProps {
@@ -26,9 +26,9 @@ export function HumanDecisionQueue({
           gap: "0.75rem",
         }}
       >
-        <CheckCircle size={20} color="#166534" />
-        <span style={{ fontSize: "0.95rem", color: "#166534", fontWeight: 600 }}>
-          本標的目前無待辦人工決策事項；各模型是否可用請以個別結果為準。
+        <Info size={20} color="#5d6b82" />
+        <span style={{ fontSize: "0.95rem", color: "#5d6b82", fontWeight: 600 }}>
+          目前沒有待確認的假設；資料缺項與模型限制仍請看上方摘要。
         </span>
       </div>
     );

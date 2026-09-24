@@ -12,11 +12,13 @@ import {
 interface ResearchSummaryCardProps {
   summary: ResearchSummaryResponse;
   onOpenAuditDrawer?: () => void;
+  children?: React.ReactNode;
 }
 
 export function ResearchSummaryCard({
   summary,
   onOpenAuditDrawer,
+  children,
 }: ResearchSummaryCardProps) {
   const m = summary?.market_context || {
     settled_trade_date: null,
@@ -113,6 +115,7 @@ export function ResearchSummaryCard({
         )}
       </div>
 
+      {children || <>
       {/* Grid of Key Facts */}
       <div
         style={{
@@ -245,6 +248,7 @@ export function ResearchSummaryCard({
           <span title={summary.screening_context.pb?.ui_copy}>{summary.screening_context.pb?.value ?? "尚無可用資料"}</span>
         </div>
       </div>
+      </>}
     </div>
   );
 }

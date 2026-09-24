@@ -91,3 +91,63 @@ def test_payload_contract_and_dates_are_fail_closed():
         parse_daily_public_dataset("TaiwanStockFinancialStatements", payload([
             {"date": "2026-02-28", "stock_id": "2330", "type": "EPS", "value": 1}
         ]), "2330.TW", OBSERVED)
+
+
+def empty_price_row(**overrides):
+    return price_row(**{
+        "date": "2026-09-09", "open": 0, "max": 0, "min": 0,
+        "close": 0, "Trading_Volume": 0, "Trading_money": 0, "spread": 0,
+        **overrides,
+    })
+
+
+def test_all_zero_activity_preserves_other_prices_and_discloses_missing_date():
+    rows = [price_row(), empty_price_row(), empty_price_row()]
+    before = [dict(row) for row in rows]
+    result = parse_daily_public_dataset("TaiwanStockPrice", payload(rows), "2330.TW", OBSERVED)
+    assert rows == before  # Raw source remains unchanged, including duplicates.
+    assert [row["date"] for row in result["rows"]] == ["2026-09-10"]
+    assert result["rows"][0]["close"] == 2465
+    assert result["excluded_rows"] == [{
+        "date": "2026-09-09", "reason": "source_all_zero_price_and_activity",
+    }]
+    assert result["status"] == "available"
+    assert result["quality_status"] == "quality_warning"
+    assert result["official_exchange_source"] is False
+
+
+def test_only_all_zero_rows_are_insufficient_not_a_zero_price():
+    result = parse_daily_public_dataset("TaiwanStockPrice", payload([empty_price_row()]), "2330.TW", OBSERVED)
+    assert result["rows"] == []
+    assert result["status"] == "insufficient_data"
+    assert result["reason"] == "no_valid_price_rows"
+    assert len(result["excluded_rows"]) == 1
+
+
+@pytest.mark.parametrize("changes", [
+    {"Trading_Volume": 1}, {"Trading_money": 1}, {"spread": 1}, {"close": 1},
+    {"Trading_Volume": -1}, {"Trading_Volume": 0.5}, {"Trading_money": -1},
+    {"open": None}, {"open": False}, {"open": float("nan")},
+    {"stock_id": "3491"}, {"date": "2026-09-12"},
+])
+def test_exclusion_does_not_accept_mixed_invalid_or_untrusted_rows(changes):
+    with pytest.raises(DailyPublicDataError):
+        parse_daily_public_dataset("TaiwanStockPrice", payload([
+            price_row(), empty_price_row(**changes),
+        ]), "2330.TW", OBSERVED)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_excluded_row_cannot_hide_conflicting_same_day_quote(reverse):
+    rows = [empty_price_row(), price_row(date="2026-09-09")]
+    with pytest.raises(DailyPublicDataError, match="duplicate_date_conflict"):
+        parse_daily_public_dataset("TaiwanStockPrice", payload(rows[::-1] if reverse else rows), "2330.TW", OBSERVED)
+
+
+def test_exclusions_have_stable_date_order_and_an_empty_feed_stays_insufficient():
+    result = parse_daily_public_dataset("TaiwanStockPrice", payload([
+        empty_price_row(date="2026-09-10"), empty_price_row(date="2026-09-08"),
+    ]), "2330.TW", OBSERVED)
+    assert [row["date"] for row in result["excluded_rows"]] == ["2026-09-08", "2026-09-10"]
+    empty = parse_daily_public_dataset("TaiwanStockPrice", payload([]), "2330.TW", OBSERVED)
+    assert empty["status"] == "insufficient_data" and empty["excluded_rows"] == []

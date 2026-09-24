@@ -13,6 +13,7 @@ class SaveNote(BaseModel):
     model_config = ConfigDict(extra="forbid")
     knowledge_cutoff_at: str
     note: str = Field(default="", max_length=4000)
+    expected_content_fingerprint: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 def service(request):
@@ -33,4 +34,10 @@ def history(symbol: str, request: Request, limit: int = Query(20, ge=1, le=50)):
 @router.post("/{symbol}")
 def save(symbol: str, payload: SaveNote, request: Request,
          idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=8, max_length=128)):
-    return invoke(lambda: service(request).save(symbol, payload.knowledge_cutoff_at, payload.note, idempotency_key))
+    return invoke(lambda: service(request).save(symbol, payload.knowledge_cutoff_at, payload.note,
+                                              idempotency_key, payload.expected_content_fingerprint))
+
+
+@router.get("/{symbol}/preview")
+def preview(symbol: str, request: Request):
+    return invoke(lambda: service(request).preview(symbol))

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Search, ArrowRight, Clock, Sparkles, Building2 } from "lucide-react";
 import { searchUniverse, getUniverseCoverage } from "../api/phase20Client";
 import type { UniverseCoverage, UniverseSearchResultItem } from "../api/types";
@@ -47,6 +47,11 @@ export function SearchHomePage() {
   const setQuery = (value: string) => setEditedQuery({ origin: searchQuery, value });
   const [results, setResults] = useState<UniverseSearchResultItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [resultQuery, setResultQuery] = useState("");
+  const [searchError, setSearchError] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const searching = !!query.trim() && (loading || resultQuery !== query.trim());
+  const visibleResults = resultQuery === query.trim() ? results : [];
   const [coverage, setCoverage] = useState<UniverseCoverage | null>(null);
   const [recentSearches, setRecentSearches] = useState<RecentSearchItem[]>(() => getStoredRecentSearches());
   const inputRef = useRef<HTMLInputElement>(null);
@@ -73,32 +78,41 @@ export function SearchHomePage() {
   // Live search debounced
   useEffect(() => {
     const trimmed = query.trim();
+    const controller = new AbortController();
     if (!trimmed) {
       const clearTimer = setTimeout(() => {
         setResults([]);
         setLoading(false);
+        setResultQuery("");
+        setSearchError(false);
       }, 0);
       return () => clearTimeout(clearTimer);
     }
 
     const timeoutId = setTimeout(() => {
       setLoading(true);
-      searchUniverse(trimmed, 10)
+      setSearchError(false);
+      searchUniverse(trimmed, 10, controller.signal)
         .then((res) => {
+          if (controller.signal.aborted) return;
           setResults(res.results);
+          setResultQuery(trimmed);
           if (res.coverage) {
             setCoverage(res.coverage);
           }
           setLoading(false);
         })
         .catch(() => {
+          if (controller.signal.aborted) return;
           setResults([]);
+          setResultQuery(trimmed);
+          setSearchError(true);
           setLoading(false);
         });
     }, 150);
 
-    return () => clearTimeout(timeoutId);
-  }, [query]);
+    return () => { clearTimeout(timeoutId); controller.abort(); };
+  }, [query, retry]);
 
   function handleSelect(canonicalSymbol: string, displayName?: string) {
     const name = displayName || canonicalSymbol;
@@ -117,7 +131,7 @@ export function SearchHomePage() {
             <ShortNameUpgradeBanner coverage={coverage} onUpgradeComplete={refreshCoverage} />
           )}
 
-          <div style={{ textAlign: "center", marginTop: "2rem", marginBottom: "2.5rem" }}>
+          <div style={{ textAlign: "left", marginTop: "1rem", marginBottom: "1.5rem" }}>
             <div
               style={{
                 display: "inline-flex",
@@ -135,12 +149,14 @@ export function SearchHomePage() {
               <Sparkles size={14} />
               <span>本地優先 杜金龍理論研究工作區</span>
             </div>
-            <h1 style={{ fontSize: "2.2rem", fontWeight: 800, margin: 0, letterSpacing: "-0.02em" }}>
+            <h1 style={{ fontSize: "1.75rem", fontWeight: 800, margin: 0, letterSpacing: "-0.02em" }}>
               搜尋標的以開啟研究
             </h1>
             <p style={{ color: "var(--color-muted, #64748b)", marginTop: "0.75rem", fontSize: "1.05rem" }}>
               支援股票代號（例如 <code>2330</code>）與中文簡稱（例如 <code>台積電</code>）即時本地檢索
             </p>
+            <p style={{ lineHeight: 1.7 }}>搜尋後先看行情與資料缺項，需要估值時再設定假設；可以先保存觀察，隔日再比較。</p>
+            <Link to="/research/daily">查看自選與每日複核</Link>
           </div>
 
           <div style={{ position: "relative", marginBottom: "2rem" }}>
@@ -159,6 +175,7 @@ export function SearchHomePage() {
               <input
                 ref={inputRef}
                 type="text"
+                aria-label="搜尋股票代號或中文名稱"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="請輸入股票代號（如 2330）或中文簡稱（如 台積電）..."
@@ -172,7 +189,7 @@ export function SearchHomePage() {
                   color: "var(--color-foreground, #1e293b)",
                 }}
               />
-              {loading && (
+              {searching && (
                 <div style={{ color: "var(--color-muted, #94a3b8)", fontSize: "0.85rem", whiteSpace: "nowrap" }}>
                   搜尋中...
                 </div>
@@ -180,7 +197,7 @@ export function SearchHomePage() {
             </div>
 
             {/* Results Dropdown */}
-            {results.length > 0 && (
+            {!searching && visibleResults.length > 0 && (
               <div
                 className="card"
                 style={{
@@ -196,11 +213,12 @@ export function SearchHomePage() {
                   boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.15)",
                 }}
               >
-                {results.map((item) => (
-                  <div
+                {visibleResults.map((item) => (
+                  <button type="button"
                     key={item.canonical_symbol}
                     onClick={() => handleSelect(item.canonical_symbol, item.short_name || item.display_name)}
                     style={{
+                      width: "100%", background: "white", color: "inherit", border: 0, textAlign: "left", font: "inherit", minHeight: 44,
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "space-between",
@@ -249,13 +267,14 @@ export function SearchHomePage() {
                       </span>
                       <ArrowRight size={16} color="var(--color-muted, #94a3b8)" />
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
 
-            {query.trim() && !loading && results.length === 0 && (
+            {query.trim() && !searching && visibleResults.length === 0 && (
               <div
+                role={searchError ? "alert" : "status"}
                 className="card"
                 style={{
                   position: "absolute",
@@ -269,7 +288,7 @@ export function SearchHomePage() {
                   color: "var(--color-muted, #64748b)",
                 }}
               >
-                查無符合「{query}」的上市櫃標的。請檢查輸入代號或名稱。
+                {searchError ? <>目前無法連線到本機搜尋服務，尚不能判定有沒有這檔股票。<button type="button" onClick={() => setRetry(value => value + 1)}>重試搜尋</button></> : <>查無符合「{query}」的上市櫃標的。請檢查輸入代號或名稱。{coverage?.degraded_search_mode && <p>中文簡稱清單尚未完整，可先用股票代號搜尋；也可更新上方簡稱清單。</p>}</>}
               </div>
             )}
           </div>
@@ -299,11 +318,12 @@ export function SearchHomePage() {
                 }}
               >
                 {recentSearches.map((st) => (
-                  <div
+                  <button type="button"
                     key={st.code}
                     onClick={() => handleSelect(st.code, st.name)}
                     className="card"
                     style={{
+                      background: "white", color: "inherit", border: "1px solid var(--border)", borderRadius: 8, textAlign: "left", font: "inherit", minHeight: 44,
                       padding: "1rem",
                       cursor: "pointer",
                       transition: "transform 0.15s ease, box-shadow 0.15s ease",
@@ -324,7 +344,7 @@ export function SearchHomePage() {
                       <Building2 size={16} color="var(--color-muted, #94a3b8)" />
                     </div>
                     <div style={{ fontWeight: 600, marginTop: "0.3rem" }}>{st.name}</div>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>

@@ -1,0 +1,52 @@
+.research-overview { line-height: 1.65; overflow-wrap: anywhere; }
+.research-overview h2 { margin: 0 0 12px; font-size: 20px; }
+.research-overview p { margin: 8px 0; }
+.research-overview__intro { color: var(--muted); padding-bottom: 16px; }
+.research-overview__shortcuts { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: -8px 0 20px; }
+.research-overview__shortcuts a { display: inline-flex; align-items: center; min-height: 44px; color: #174da9; }
+.research-overview__columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 28px; }
+.research-overview__columns > section { min-width: 0; }
+.research-overview__quote-label { color: var(--muted); }
+.research-overview .research-overview__quote { margin: 0; font-size: 30px; font-weight: 750; font-variant-numeric: tabular-nums; }
+.research-overview__muted { color: var(--muted); font-size: 14px; }
+.research-overview__warning { color: #7a4600; }
+.research-overview__supplement { border-left: 3px solid var(--border); padding-left: 12px; margin: 16px 0; font-size: 14px; }
+.research-overview__metrics { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 16px 0 8px; }
+.research-overview__metrics dt { color: var(--muted); font-size: 14px; }
+.research-overview__metrics dd { margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; }
+.research-overview__gaps { border-top: 1px solid var(--border); margin-top: 24px; padding-top: 20px; }
+.research-overview__gaps ul { padding-left: 22px; margin: 8px 0; }
+.research-overview__gaps li { margin: 6px 0; }
+.research-overview__sources { font-size: 14px; color: var(--muted); }
+.research-overview__next { border-top: 1px solid var(--border); margin-top: 20px; padding-top: 20px; }
+.research-overview__actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+.research-overview button, .stock-research-page .button { min-height: 44px; padding: 8px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: white; color: #174da9; cursor: pointer; font-weight: 650; line-height: 1.5; }
+.research-overview button:hover { background: var(--surface-selected); }
+.research-overview button.research-overview__primary { background: var(--accent); border-color: var(--accent); color: white; }
+.research-overview__glossary { margin-top: 16px; }
+.research-overview summary, .research-disclosure > summary { cursor: pointer; min-height: 44px; padding: 10px 0; color: #174da9; font-weight: 650; }
+.research-disclosure { border-top: 1px solid var(--border); margin-top: 16px; scroll-margin-top: 84px; }
+.stock-research-page [id] { scroll-margin-top: 84px; }
+.stock-research-page { overflow-wrap: anywhere; }
+.stock-research-page [aria-label="每日公開資料"] button, .stock-research-page [aria-label="每日公開資料"] select { min-height: 44px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: white; color: var(--ink); font: inherit; max-width: 100%; }
+.stock-research-page [aria-label="每日公開資料"] button[aria-pressed="true"] { background: var(--surface-selected); color: #174da9; border-color: var(--accent); }
+.stock-research-page [aria-label="每日公開資料"] summary { min-height: 44px; padding: 8px 0; }
+.research-model-filter { display: grid; gap: 8px; margin: 16px 0; }
+.research-model-filter select { min-height: 44px; width: 100%; max-width: 100%; font: inherit; border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; color: var(--ink); background: white; }
+@media (max-width: 900px) { .research-overview__columns { grid-template-columns: minmax(0, 1fr); gap: 24px; } }
+@media (max-width: 600px) {
+  .stock-research-page { padding: 8px 0 !important; }
+  .stock-research-page > div:first-child { gap: 8px !important; margin-bottom: 8px !important; }
+  .stock-research-page .research-summary-card { padding: 16px !important; }
+  .stock-research-page .research-summary-card > div:first-child { gap: 8px !important; margin-bottom: 8px !important; padding-bottom: 8px !important; }
+  .stock-research-page .research-summary-card h1 { font-size: 24px !important; }
+  .stock-research-page .research-toolbar { flex-wrap: wrap; }
+  .research-overview { display: flex; flex-direction: column; }
+  .research-overview__columns { order: 0; }
+  .research-overview__intro { order: 1; }
+  .research-overview__shortcuts { order: 2; }
+  .research-overview__gaps { order: 3; }
+  .research-overview__next { order: 4; }
+  .research-overview__actions { display: grid; }
+  .research-overview__quote { font-size: 28px; }
+}

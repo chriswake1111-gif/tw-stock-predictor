@@ -191,6 +191,7 @@ class ResearchBootstrapService:
             "status": "preparing",
             "canonical_symbol": canonical_symbol,
             "operation_id": op_id,
+            "operation_created": True,
             "message": f"Bootstrap operation {op_id} started for {canonical_symbol}",
         }
 

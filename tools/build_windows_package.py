@@ -9,6 +9,7 @@ the user's local application directory on first launch.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -19,6 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS_DIR = ROOT / "packaging" / "windows"
+RESEARCH_SKILL = ROOT / "skills" / "tw-stock-research" / "SKILL.md"
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -44,6 +46,21 @@ def _copy_required_tree(source: Path, destination: Path) -> None:
     if not source.is_dir():
         raise RuntimeError(f"required package resource is missing: {source}")
     shutil.copytree(source, destination)
+
+
+def _copy_required_file(source: Path, destination: Path) -> None:
+    if not source.is_file():
+        raise RuntimeError(f"required package resource is missing: {source}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _iscc_path(configured: str | None) -> str | None:
@@ -86,7 +103,7 @@ def _pyinstaller(output_root: Path, resource_root: Path) -> Path:
     base_env = os.environ.copy()
     base_env["TW_STOCK_SOURCE_ROOT"] = str(ROOT)
     base_env["TW_STOCK_PACKAGE_RESOURCE_ROOT"] = str(resource_root)
-    for name in ("server", "launcher"):
+    for name in ("server", "launcher", "research"):
         spec = WINDOWS_DIR / f"tw_stock_predictor_{name}.spec"
         work = output_root / "pyinstaller-build" / name
         command = [
@@ -105,10 +122,15 @@ def _pyinstaller(output_root: Path, resource_root: Path) -> Path:
     expected = (
         executable_root / "tw-stock-predictor" / "tw-stock-predictor.exe",
         executable_root / "tw-stock-predictor-server" / "tw-stock-predictor-server.exe",
+        executable_root / "tw-stock-research" / "tw-stock-research.exe",
     )
     missing = [str(path) for path in expected if not path.is_file()]
     if missing:
         raise RuntimeError("PyInstaller output is incomplete: " + ", ".join(missing))
+    _copy_required_file(
+        RESEARCH_SKILL,
+        executable_root / "skills" / "tw-stock-research" / "SKILL.md",
+    )
     return executable_root
 
 
@@ -192,6 +214,8 @@ def main() -> int:
             artifact_paths=(
                 executable_root / "tw-stock-predictor" / "tw-stock-predictor.exe",
                 executable_root / "tw-stock-predictor-server" / "tw-stock-predictor-server.exe",
+                executable_root / "tw-stock-research" / "tw-stock-research.exe",
+                executable_root / "skills" / "tw-stock-research" / "SKILL.md",
             ),
         )
     else:
@@ -206,6 +230,11 @@ def main() -> int:
         "executable_root": str(executable_root),
         "installer": str(installer) if installer else None,
         "distribution_manifest": distribution,
+        "research_skill": {
+            "path": "skills/tw-stock-research/SKILL.md",
+            "sha256": _sha256_file(RESEARCH_SKILL),
+            "size": RESEARCH_SKILL.stat().st_size,
+        },
     }
     (output_root / "build-summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",

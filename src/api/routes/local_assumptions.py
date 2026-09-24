@@ -68,7 +68,8 @@ def invoke(fn):
     try:
         return fn()
     except (ValueError, KeyError) as exc:
-        raise HTTPException(409 if "idempotency_conflict" in str(exc) else 422, detail=str(exc)) from exc
+        conflict = "idempotency_conflict" in str(exc) or str(exc) == "research_content_changed_review_again"
+        raise HTTPException(409 if conflict else 422, detail=str(exc)) from exc
     except sqlite3.Error as exc:
         raise HTTPException(503, detail="local_research_storage_unavailable") from exc
 

@@ -11,6 +11,19 @@ from src.domain.universe import parse_canonical_symbol
 from src.domain.valuation import normalize_utc_timestamp, utc_now_timestamp
 from src.repositories.analysis_snapshot_repository import AnalysisSnapshotRepository, SnapshotIntegrityError
 from src.services.current_research_service import CurrentResearchService
+from src.services.local_assumption_service import LocalAssumptionService
+
+ASSISTANT_CONTRACT = "tw_stock_research_assistant_v1"
+
+
+def _current_content(value):
+    """Ignore query-clock echoes only, never source/ingestion/approval dates."""
+    if isinstance(value, dict):
+        return {k: _current_content(v) for k, v in value.items()
+                if k not in {"knowledge_cutoff_at", "source_data_as_of"}}
+    if isinstance(value, list):
+        return [_current_content(v) for v in value]
+    return value
 
 
 def comparable_facts(summary):
@@ -42,7 +55,11 @@ def compare_entries(previous, current):
         facts.append({"field": key, "before": prior, "after": value,
                       "delta": value["value"] - prior["value"] if comparable else None,
                       "status": "comparable" if comparable else "not_comparable"})
-    changed = previous["assumption_fingerprint"] != current["assumption_fingerprint"]
+    # Older entries hashed query-clock echoes inside technical traces. Compare
+    # their stored model content without those echoes; never rewrite old rows.
+    def model_content(summary):
+        return _current_content({k: summary.get(k) for k in ("valuation_context", "technical_context")})
+    changed = model_content(before) != model_content(after)
     return {"status": "available", "facts": facts, "assumptions_changed": changed,
             "model_comparison_status": "assumptions_changed" if changed else "same_assumptions",
             "previous_date": before.get("market_context", {}).get("settled_trade_date"),
@@ -73,17 +90,42 @@ class DailyResearchJournalService:
         return {"contract_version": "daily_research_journal_v1", "symbol": symbol,
                 "knowledge_cutoff_at": cutoff, "summary": summary, "note": note,
                 "model_version": summary.get("audit_reference", {}).get("model_version"),
-                "assumption_fingerprint": sha256_json(assumptions),
+                "assumption_fingerprint": sha256_json(_current_content(assumptions)),
                 "historical_eligibility": "not_asserted", "status": "partial"}
 
-    def save(self, symbol, cutoff, note, key):
+    def _review(self, symbol, cutoff, payload):
+        previous = self.history(symbol, 1)["entries"]
+        previous = previous[0] if previous else None
+        latest = self._payload(symbol, utc_now_timestamp(), "")
+        assumptions = LocalAssumptionService(self.db_path).list(symbol)["items"]
+        guard = {"contract": ASSISTANT_CONTRACT, "reviewed": {**payload, "note": ""},
+                 "latest": _current_content(latest["summary"]), "assumptions": assumptions,
+                 "previous_entry_id": previous["entry_id"] if previous else None}
+        return {"contract_version": ASSISTANT_CONTRACT, "symbol": symbol,
+                "knowledge_cutoff_at": cutoff, "current": {**payload, "note": ""},
+                "previous": previous, "comparison": compare_entries(previous, payload),
+                "assumptions": assumptions, "content_fingerprint": sha256_json(guard)}
+
+    def preview(self, symbol):
+        parse_canonical_symbol(symbol)
+        # Readers below use their own connections. Reserve the writer while
+        # composing the review so they all observe the same committed state.
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cutoff = normalize_utc_timestamp(utc_now_timestamp(), "knowledge_cutoff_at")
+            return self._review(symbol, cutoff, self._payload(symbol, cutoff, ""))
+
+    def save(self, symbol, cutoff, note, key, expected_content_fingerprint=None):
         parse_canonical_symbol(symbol)
         cutoff = normalize_utc_timestamp(cutoff, "knowledge_cutoff_at")
         if cutoff > utc_now_timestamp():
             raise ValueError("future_knowledge_cutoff")
         if len(note) > 4000 or not 8 <= len(key) <= 128:
             raise ValueError("invalid_journal_request")
-        fingerprint = sha256_json(dict(symbol=symbol, cutoff=cutoff, note=note))
+        request = dict(symbol=symbol, cutoff=cutoff, note=note)
+        if expected_content_fingerprint is not None:
+            request["expected_content_fingerprint"] = expected_content_fingerprint
+        fingerprint = sha256_json(request)
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.row_factory = sqlite3.Row
             conn.execute("BEGIN IMMEDIATE")
@@ -93,6 +135,10 @@ class DailyResearchJournalService:
                     raise ValueError("research_idempotency_conflict")
                 return self._decode(existing)
             payload = self._payload(symbol, cutoff, note)
+            if expected_content_fingerprint is not None:
+                reviewed = self._review(symbol, cutoff, payload)
+                if reviewed["content_fingerprint"] != expected_content_fingerprint:
+                    raise ValueError("research_content_changed_review_again")
             # Link only an exact existing analysis. A partial observation never
             # enters the historical-analysis snapshot population by implication.
             row = conn.execute("SELECT snapshot_id FROM analysis_snapshots WHERE symbol=? AND knowledge_cutoff_at=? ORDER BY created_at DESC LIMIT 1", (symbol, cutoff)).fetchone()

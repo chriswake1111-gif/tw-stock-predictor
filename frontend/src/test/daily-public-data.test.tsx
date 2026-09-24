@@ -13,11 +13,17 @@ const data = {
 };
 
 describe("DailyPublicDataPanel", () => {
+  it("orders reversed rows by date and shows the actual most recent quote without mutating input", () => {
+    const before = JSON.stringify(data);
+    renderWithProviders(<DailyPublicDataPanel data={data} />);
+    expect(screen.getByText(/最新收盤：100 元，漲跌：2 元，成交量：1,000 股/)).toBeInTheDocument();
+    expect(JSON.stringify(data)).toBe(before);
+  });
   it("shows null values, provenance warnings, and does not calculate TTM", () => {
     renderWithProviders(<DailyPublicDataPanel data={data} />);
     expect(screen.getByText(/FinMind 非官方資料/)).toBeInTheDocument();
     expect(screen.getByText(/未還原權息/)).toBeInTheDocument();
-    expect(screen.getByText(/資料日期：2026-09-10/)).toBeInTheDocument();
+    expect(screen.getAllByText(/資料日期：2026-09-10/)).toHaveLength(2);
     expect(screen.getByText(/本機取得時間：2026-09-10/)).toBeInTheDocument();
     expect(screen.getByText("缺值")).toBeInTheDocument();
     expect(screen.getAllByText("殖利率").length).toBeGreaterThan(0);
@@ -70,5 +76,45 @@ describe("DailyPublicDataPanel", () => {
     renderWithProviders(<DailyPublicDataPanel data={normal} />);
     expect(screen.getAllByText(/狀態：可用/).length).toBeGreaterThan(0);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("discloses excluded dates, breaks the line, and never offers them as anchors", () => {
+    const onSelectPrice = vi.fn();
+    const missing = { ...data, TaiwanStockPrice: { ...data.TaiwanStockPrice,
+      rows: [
+        { date: "2026-09-07", close: 94, volume: 800 },
+        { date: "2026-09-08", close: 96, volume: 900 },
+        { date: "2026-09-10", close: 100, volume: 1000 },
+      ],
+      excluded_rows: [{ date: "2026-09-09", reason: "source_all_zero_price_and_activity" }],
+    } };
+    const before = JSON.stringify(missing);
+    renderWithProviders(<DailyPublicDataPanel data={missing} onSelectPrice={onSelectPrice} />);
+    expect(screen.getByRole("note")).toHaveTextContent("2026-09-09：來源價格、成交量與成交金額皆為零");
+    expect(screen.getByRole("note")).toHaveTextContent("是否停牌仍須核對公告");
+    const chart = screen.getByRole("img", { name: "收盤價折線與成交量柱" });
+    const segments = chart.querySelectorAll("polyline");
+    expect(segments).toHaveLength(2);
+    expect(segments[0]!.getAttribute("points")?.split(" ")).toHaveLength(2);
+    expect(segments[1]!.getAttribute("points")?.split(" ")).toHaveLength(1);
+    expect(chart.querySelectorAll("rect")).toHaveLength(3);
+    expect(screen.queryByRole("option", { name: /2026-09-09/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /2026-09-09 收盤價/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "2026-09-10 收盤價 100 元" }));
+    expect(onSelectPrice).toHaveBeenCalledWith("2026-09-10", 100);
+    expect(JSON.stringify(missing)).toBe(before);
+  });
+
+  it("keeps other datasets visible when every price is excluded", () => {
+    const empty = { ...data, TaiwanStockPrice: { ...data.TaiwanStockPrice,
+      status: "insufficient_data", rows: [],
+      excluded_rows: [{ date: "2026-09-10", reason: "source_all_zero_price_and_activity" }],
+    } };
+    renderWithProviders(<DailyPublicDataPanel data={empty} onSelectPrice={vi.fn()} />);
+    expect(screen.getByRole("note")).toHaveTextContent("2026-09-10");
+    expect(screen.queryByRole("img", { name: "收盤價折線與成交量柱" })).not.toBeInTheDocument();
+    expect(screen.getByText("目前沒有行情資料可顯示。")).toBeInTheDocument();
+    expect(screen.getByText("3.5%")).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /2026-09-10/ })).not.toBeInTheDocument();
   });
 });

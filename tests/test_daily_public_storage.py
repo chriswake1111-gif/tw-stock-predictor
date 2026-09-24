@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -146,3 +147,58 @@ def test_finmind_allowlist_accepts_exact_bounded_query():
 def test_finmind_allowlist_rejects_out_of_contract_urls(url):
     with pytest.raises(EndpointNotAllowlistedError):
         validate_egress_url(url)
+
+
+def test_excluded_price_remains_in_immutable_raw_snapshot(db_path):
+    original = price_payload()
+    original["data"].append({
+        "date": "2026-09-09", "stock_id": "2330", "Trading_Volume": 0,
+        "Trading_money": 0, "open": 0, "max": 0, "min": 0, "close": 0, "spread": 0,
+    })
+    svc = DailyPublicDataService(db_path)
+    assert refresh(svc, FakeClient(payloads={"TaiwanStockPrice": original})) == []
+    current = svc.view("2330.TW", "9999-01-01T00:00:00Z")["TaiwanStockPrice"]
+    assert len(current["rows"]) == 1
+    assert current["excluded_rows"][0]["date"] == "2026-09-09"
+    assert current["parser_version"] == "daily-price-v2"
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("SELECT raw_json, normalized_json FROM daily_public_snapshots WHERE snapshot_id=?", (current["snapshot_id"],)).fetchone()
+    assert json.loads(row[0]) == original
+    assert json.loads(row[1])["quality_status"] == "quality_warning"
+    assert svc.view("2330.TW", "9999-01-01T00:00:00Z")["TaiwanStockPER"]["parser_version"] == "daily-public-v1"
+
+
+def test_new_price_parser_refreshes_recent_v1_and_keeps_old_cutoff_readable(db_path, monkeypatch):
+    class PriceOnly(DailyPublicDataService):
+        datasets = ("TaiwanStockPrice",)
+
+    class LegacyPrice(PriceOnly):
+        def parse(self, *args):
+            result = super().parse(*args)
+            result.pop("excluded_rows")
+            return result
+
+    now = datetime.now(timezone.utc)
+    before = (now - timedelta(seconds=2)).isoformat().replace("+00:00", "Z")
+    after = (now - timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
+    monkeypatch.setattr(service_module, "utc_now_timestamp", lambda: before)
+    with monkeypatch.context() as legacy:
+        legacy.setattr(service_module, "PRICE_PARSER_VERSION", "daily-public-v1")
+        refresh(LegacyPrice(db_path), FakeClient())
+    with sqlite3.connect(db_path) as conn:
+        old_row = conn.execute("SELECT * FROM daily_public_snapshots").fetchone()
+    monkeypatch.setattr(service_module, "utc_now_timestamp", lambda: after)
+    svc = PriceOnly(db_path)
+    assert refresh(svc, FakeClient()) == []
+    old_view = svc.view("2330.TW", before)["TaiwanStockPrice"]
+    new_view = svc.view("2330.TW", after)["TaiwanStockPrice"]
+    assert old_view["parser_version"] == "daily-public-v1" and "excluded_rows" not in old_view
+    assert new_view["parser_version"] == "daily-price-v2"
+    assert old_view["snapshot_id"] != new_view["snapshot_id"]
+    assert old_view["raw_sha256"] == new_view["raw_sha256"]
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT * FROM daily_public_snapshots WHERE snapshot_id=?", (old_row[0],)).fetchone() == old_row
+    assert counts(db_path) == (2, 2)
+    # A repeat within the existing freshness window reuses the v2 result.
+    assert refresh(svc, FakeClient(failures={"TaiwanStockPrice"})) == []
+    assert counts(db_path) == (2, 2)

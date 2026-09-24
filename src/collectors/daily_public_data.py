@@ -92,6 +92,7 @@ def _check_code(row: dict[str, Any], code: str) -> None:
 def _parse_price(rows: list[dict[str, Any]], code: str, dataset: str, observed_at: str) -> dict[str, Any]:
     observed_date = _observed_date(observed_at)
     parsed: list[dict[str, Any]] = []
+    excluded: dict[str, str] = {}
     seen: dict[str, tuple[Any, ...]] = {}
     for row in rows:
         _check_code(row, code)
@@ -100,6 +101,14 @@ def _parse_price(rows: list[dict[str, Any]], code: str, dataset: str, observed_a
             "open", "max", "min", "close", "Trading_Volume", "Trading_money", "spread"
         ))
         opening, high, low, closing, volume, value, change = values
+        if day in seen and seen[day] != values:
+            raise DailyPublicDataError("duplicate_date_conflict")
+        seen[day] = values
+        if all(number == 0 for number in values):
+            # Preserve the raw row in the source snapshot. Zero fields alone
+            # do not establish a trading suspension or a usable price.
+            excluded[day] = "source_all_zero_price_and_activity"
+            continue
         if volume < 0:
             raise DailyPublicDataError("negative_volume")
         if volume != int(volume) or value < 0 or low <= 0:
@@ -111,10 +120,6 @@ def _parse_price(rows: list[dict[str, Any]], code: str, dataset: str, observed_a
             "close": closing, "volume": volume, "value": value, "change": change,
             "zero_volume": volume == 0,
         }
-        fingerprint = tuple(normalized[key] for key in ("open", "high", "low", "close", "volume", "value", "change"))
-        if day in seen and seen[day] != fingerprint:
-            raise DailyPublicDataError("duplicate_date_conflict")
-        seen[day] = fingerprint
         if not any(item["date"] == day for item in parsed):
             parsed.append(normalized)
     parsed.sort(key=lambda item: item["date"])
@@ -125,7 +130,10 @@ def _parse_price(rows: list[dict[str, Any]], code: str, dataset: str, observed_a
         "quality_warning": "FinMind prices are not official, corporate-action-adjusted, or trading-calendar-audited",
         "symbol": code,
         "rows": parsed,
+        "excluded_rows": [{"date": day, "reason": reason} for day, reason in sorted(excluded.items())],
     })
+    if excluded and not parsed:
+        result["reason"] = "no_valid_price_rows"
     return result
 
 

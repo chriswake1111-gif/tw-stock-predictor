@@ -3,35 +3,34 @@ import type {
   SyncTriggerResponse,
   EnableSymbolResponse,
 } from "./types";
-
-let cachedCsrfToken: string | null = null;
+import { getLocalCsrfToken, invalidateLocalCsrfToken, isCsrfRejection } from "./localCsrfSession";
 
 export async function getCsrfToken(signal?: AbortSignal): Promise<string> {
-  if (cachedCsrfToken) {
-    return cachedCsrfToken;
-  }
-  const res = await fetch("/api/v2/data-operations/csrf-token", {
-    method: "GET",
-    headers: { Accept: "application/json" },
-    signal,
-  });
-  if (!res.ok) {
-    // fallback
-    const fallbackRes = await fetch("/api/v2/research/csrf-token", {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      signal,
+  return getLocalCsrfToken("/api/v2/data-operations/csrf-token", signal, "/api/v2/research/csrf-token");
+}
+
+export async function postDataOperation<T>(path: string, payload: unknown, errorPrefix: string, signal?: AbortSignal): Promise<T> {
+  const body = JSON.stringify(payload);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const token = await getCsrfToken(signal);
+    signal?.throwIfAborted();
+    const response = await fetch(path, {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": token },
+      body, signal,
     });
-    if (!fallbackRes.ok) {
-      throw new Error(`Failed to fetch CSRF token: ${res.status}`);
+    if (response.ok) return await response.json() as T;
+    const error = await response.json().catch(() => ({})) as { detail?: unknown };
+    if (isCsrfRejection(response.status, error.detail)) {
+      invalidateLocalCsrfToken(token);
+      // These exact middleware errors precede execution. Never replay a network
+      // failure, an ambiguous write response, or an unrelated authorization error.
+      if (attempt === 0) continue;
+      throw new Error("操作驗證仍未通過，本次操作未執行。請稍後再試或重新整理頁面。");
     }
-    const fallbackData = await fallbackRes.json();
-    cachedCsrfToken = fallbackData.csrf_token;
-    return cachedCsrfToken!;
+    throw new Error(typeof error.detail === "string" ? error.detail : `${errorPrefix}:${response.status}`);
   }
-  const data = await res.json();
-  cachedCsrfToken = data.csrf_token;
-  return cachedCsrfToken!;
+  throw new Error("操作驗證未完成，請稍後再試。");
 }
 
 export async function getDataOperationsStatus(): Promise<DataOperationsStatusResponse> {
@@ -60,91 +59,32 @@ export async function triggerSync(
   deadlineSeconds?: number,
   signal?: AbortSignal
 ): Promise<SyncTriggerResponse> {
-  const token = await getCsrfToken(signal);
   const effectiveDeadline = Math.min(deadlineSeconds || 90.0, 90.0);
-  const res = await fetch("/api/v2/data-operations/sync", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-CSRF-Token": token,
-    },
-    body: JSON.stringify({
-      target_symbols: targetSymbols || null,
-      deadline_seconds: effectiveDeadline,
-    }),
-    signal,
-  });
-  if (res.status === 403) {
-    cachedCsrfToken = null;
-    const retryToken = await getCsrfToken(signal);
-    const retryRes = await fetch("/api/v2/data-operations/sync", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-CSRF-Token": retryToken,
-      },
-      body: JSON.stringify({
-        target_symbols: targetSymbols || null,
-        deadline_seconds: effectiveDeadline,
-      }),
-      signal,
-    });
-    if (!retryRes.ok) {
-      throw new Error(`Sync failed: ${retryRes.status}`);
-    }
-    return retryRes.json();
-  }
-  if (!res.ok) {
-    throw new Error(`Sync failed: ${res.status}`);
-  }
-  return res.json();
+  return postDataOperation("/api/v2/data-operations/sync", {
+    target_symbols: targetSymbols || null, deadline_seconds: effectiveDeadline,
+  }, "Sync failed", signal);
 }
 
 export async function enableSymbol(symbol: string): Promise<EnableSymbolResponse> {
-  const token = await getCsrfToken();
   const clean = symbol.trim().toUpperCase();
-  const res = await fetch(`/api/v2/data-operations/symbols/${encodeURIComponent(clean)}/enable`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-CSRF-Token": token,
-    },
-    body: JSON.stringify({}),
-  });
-  if (res.status === 403) {
-    cachedCsrfToken = null;
-    const retryToken = await getCsrfToken();
-    const retryRes = await fetch(`/api/v2/data-operations/symbols/${encodeURIComponent(clean)}/enable`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-CSRF-Token": retryToken,
-      },
-      body: JSON.stringify({}),
-    });
-    if (!retryRes.ok) {
-      throw new Error(`Enable symbol failed: ${retryRes.status}`);
-    }
-    return retryRes.json();
-  }
-  if (!res.ok) {
-    throw new Error(`Enable symbol failed: ${res.status}`);
-  }
-  return res.json();
+  return postDataOperation(`/api/v2/data-operations/symbols/${encodeURIComponent(clean)}/enable`, {}, "Enable symbol failed");
 }
 
 export async function cancelOperation(expectedOperationId?: string): Promise<{ operation_id: string; status: string }> {
   const token = await getCsrfToken();
-  const res = await fetch("/api/v2/data-operations/cancel", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-CSRF-Token": token,
-    },
+  const response = await fetch("/api/v2/data-operations/cancel", {
+    method: "POST", credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": token },
     body: JSON.stringify(expectedOperationId ? { expected_operation_id: expectedOperationId } : {}),
   });
-  if (!res.ok) {
-    throw new Error(`Cancel failed: ${res.status}`);
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as { detail?: unknown };
+    if (isCsrfRejection(response.status, error.detail)) {
+      invalidateLocalCsrfToken(token);
+      // Do not automatically repeat cancellation against a possibly changed active job.
+      throw new Error("操作驗證已失效，本次取消未執行。請確認作業狀態後再試。");
+    }
+    throw new Error(`Cancel failed: ${response.status}`);
   }
-  return res.json();
+  return response.json();
 }

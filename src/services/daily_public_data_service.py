@@ -17,6 +17,7 @@ from src.domain.valuation import utc_now_timestamp
 
 DATASETS = ("TaiwanStockPrice", "TaiwanStockPER", "TaiwanStockFinancialStatements")
 PARSER_VERSION = "daily-public-v1"
+PRICE_PARSER_VERSION = "daily-price-v2"
 
 
 class DailyPublicDataService:
@@ -42,12 +43,14 @@ class DailyPublicDataService:
         today = datetime.now(ZoneInfo("Asia/Taipei")).date()
         errors = []
         for dataset in self.datasets:
+            parser_version = PRICE_PARSER_VERSION if dataset == "TaiwanStockPrice" else PARSER_VERSION
             resource, url = self.request_spec(symbol, dataset, today)
             authorize(resource)
             cutoff = utc_now_timestamp()
             current = self.view(symbol, cutoff).get(dataset, {})
             checked = current.get("last_checked_at")
-            if checked and current.get("last_update_status") == "available":
+            if (checked and current.get("last_update_status") == "available"
+                    and current.get("parser_version") == parser_version):
                 checked_time = datetime.fromisoformat(checked.replace("Z", "+00:00"))
                 if timedelta(0) <= datetime.now(timezone.utc) - checked_time < timedelta(minutes=30):
                     continue
@@ -66,13 +69,13 @@ class DailyPublicDataService:
                 with closing(sqlite3.connect(self.db_path)) as conn, conn:
                     existing = conn.execute(
                         "SELECT snapshot_id FROM daily_public_snapshots WHERE symbol=? AND dataset=? AND raw_sha256=? AND parser_version=?",
-                        (symbol, dataset, raw_hash, PARSER_VERSION),
+                        (symbol, dataset, raw_hash, parser_version),
                     ).fetchone()
                     snapshot_id = existing[0] if existing else "daily_" + uuid4().hex
                     if not existing:
                         conn.execute("INSERT INTO daily_public_snapshots VALUES (?,?,?,?,?,?,?,?,?,?)", (
                             snapshot_id, symbol, dataset, observed, url, raw_hash,
-                            raw.decode("utf-8"), text, hashlib.sha256(text.encode()).hexdigest(), PARSER_VERSION,
+                            raw.decode("utf-8"), text, hashlib.sha256(text.encode()).hexdigest(), parser_version,
                         ))
             except (ValueError, sqlite3.Error, RuntimeError) as exc:
                 reason = str(exc) if str(exc).startswith("source_http_") else "source_validation_or_storage_failed"

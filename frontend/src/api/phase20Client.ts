@@ -4,7 +4,7 @@ import type {
   UniverseCoverage,
   UniverseSearchResponse,
 } from "./types";
-import { getCsrfToken, triggerSync } from "./dataOperationsClient";
+import { postDataOperation, triggerSync } from "./dataOperationsClient";
 
 export async function searchUniverse(
   query: string,
@@ -67,21 +67,8 @@ export async function bootstrapSymbol(
   refresh = false,
   signal?: AbortSignal
 ): Promise<ResearchBootstrapResponse> {
-  const token = await getCsrfToken(signal);
-  const res = await fetch("/api/v2/research/bootstrap", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-CSRF-Token": token,
-    },
-    body: JSON.stringify({ canonical_symbol: canonicalSymbol, refresh }),
-    signal,
-  });
-  if (!res.ok) {
-    const errorBody = await res.json().catch(() => ({}));
-    throw new Error(errorBody.detail || `research_bootstrap_error:${res.status}`);
-  }
-  return res.json();
+  return postDataOperation("/api/v2/research/bootstrap",
+    { canonical_symbol: canonicalSymbol, refresh }, "research_bootstrap_error", signal);
 }
 
 export async function triggerUniversePrep(signal?: AbortSignal): Promise<{ operation_id: string }> {

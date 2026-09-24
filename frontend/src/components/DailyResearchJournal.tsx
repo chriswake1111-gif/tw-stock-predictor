@@ -1,7 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { researchMutation, researchWorkflowApi } from "../api/researchClient";
+import { researchErrorMessage, researchMutation, researchWorkflowApi } from "../api/researchClient";
 import "./DailyResearchJournal.css";
 import type { ResearchSummaryResponse } from "../api/types";
 
@@ -12,6 +12,7 @@ type History = { entries: Entry[]; comparison: Comparison | null };
 const localTime = (value?: string) => value ? new Date(value).toLocaleString("zh-TW", {timeZone:"Asia/Taipei",hour12:false}) : "未知";
 const number = (v: number | null, field: string) => v == null ? "缺值" : field === "yield_ratio" ? `${(v * 100).toLocaleString("zh-TW", {maximumFractionDigits:4})}%` : v.toLocaleString("zh-TW", {maximumFractionDigits:4});
 const fieldNames: Record<string, string> = { official_close: "官方收盤價", pe: "本益比", pb: "股價淨值比", yield_ratio: "殖利率", volume: "成交股數" };
+const noteGuide = "研究時間尺度（例如數週、數月或長期）：\n本次參考的年度、EPS 與 PE 情境：\n支持觀察的資料與日期：\n尚缺的資料或不確定之處：\n哪些變化會讓我重新評估：\n下次想確認的事項：";
 async function read<T>(path: string, signal: AbortSignal): Promise<T> {
   const r = await fetch(path, { signal, credentials: "same-origin" });
   if (!r.ok) throw new Error("目前無法讀取保存研究，請重試。");
@@ -27,11 +28,12 @@ function ComparisonView({ value }: { value?: Comparison | null }) {
 }
 
 export function ResearchJournalPanel({ symbol, cutoff }: { symbol: string; cutoff: string }) {
+  const queryClient = useQueryClient();
   const [note, setNote] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const keys = useRef<Record<string, string>>({});
-  const history = useQuery({ queryKey: ["research-journal", symbol], queryFn: ({ signal }) => read<History>(`/api/v2/research/journal/${encodeURIComponent(symbol)}`, signal) });
+  const history = useQuery({ queryKey: ["research-journal", symbol, cutoff], queryFn: ({ signal }) => read<History>(`/api/v2/research/journal/${encodeURIComponent(symbol)}`, signal) });
   async function save() {
     const payload = { knowledge_cutoff_at: cutoff, note };
     const identity = JSON.stringify(payload);
@@ -40,16 +42,25 @@ export function ResearchJournalPanel({ symbol, cutoff }: { symbol: string; cutof
     try {
       await researchMutation(`/api/v2/research/journal/${encodeURIComponent(symbol)}`, payload, keys.current[identity]);
       setMessage("已保存當次資料、缺失狀態與筆記；保存不代表完整分析。");
-      await history.refetch();
-    } catch (e) { setMessage(e instanceof Error ? e.message : "保存失敗，請重試。"); }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["research-journal", symbol] }),
+        queryClient.invalidateQueries({ queryKey: ["daily-journal-overview"] }),
+      ]);
+    } catch (e) { setMessage(researchErrorMessage(e, "保存失敗，請重試。")); }
     finally { setBusy(false); }
   }
   return <section className="evidence-card" aria-label="保存當次研究"><h2>保存與隔日複核</h2>
+    <p>記錄您與家人想研究的理由與觀察期限。沒有估值假設也可以保存；筆記不會自動核准假設。</p>
     <button type="button" disabled={busy} onClick={async () => { setBusy(true); try { await researchWorkflowApi.addSymbol(symbol); setMessage("已加入自選清單。"); } catch { setMessage("加入自選失敗，請重試。"); } finally { setBusy(false); } }}>加入自選</button>
     <label style={{ display: "block", marginTop: 12 }}>研究筆記<textarea maxLength={4000} rows={3} value={note} onChange={e => setNote(e.target.value)} placeholder="記下本次觀察、假設或明天要確認的事項" style={{ display: "block", width: "100%" }} /></label>
+    <button type="button" disabled={busy || note.includes(noteGuide) || note.length + noteGuide.length + 2 > 4000} onClick={() => {
+      setNote(current => current ? `${current}\n\n${noteGuide}` : noteGuide);
+      setMessage("已加入空白研究提示，請自行填寫；尚未保存。");
+    }}>加入研究筆記引導</button>
     <button type="button" disabled={busy || !cutoff} onClick={() => void save()}>保存當次研究與筆記</button> <Link to="/research/daily">查看每日複核</Link>
     {message && <p role="status">{message}</p>}{history.isError && <p role="alert">保存紀錄讀取失敗。<button onClick={() => void history.refetch()}>重試</button></p>}
-    <ComparisonView value={history.data?.comparison} />
+    {history.isLoading && <p role="status">正在讀取前次保存研究…</p>}
+    {history.data && <ComparisonView value={history.data.comparison} />}
     <details><summary>先前保存紀錄（{history.data?.entries.length || 0}）</summary>{history.data?.entries.map(e => <article key={e.entry_id}><h3>{e.summary.market_context?.settled_trade_date || "行情日期尚缺"}</h3><p>保存時間：{localTime(e.created_at)}；保留部分研究與缺失狀態</p><p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{e.note || "未填筆記"}</p><p>收盤價：{e.summary.market_context?.official_close ?? "缺值"}；估值：{e.summary.valuation_context?.status === "available" ? "已計算" : "待確認"}</p></article>)}</details>
   </section>;
 }
