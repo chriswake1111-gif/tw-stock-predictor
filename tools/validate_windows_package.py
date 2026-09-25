@@ -86,11 +86,27 @@ def _validate_ondir_bundle(executable_root: Path, bundle_name: str, executable_n
     return True
 
 
-def _validate_research_payload(executable_root: Path) -> dict[str, object]:
+def _validate_research_payload(executable_root: Path, resources: object = None) -> dict[str, object]:
     """Validate the optional v1 assistant payload staged beside executables."""
 
     bundle = executable_root / "tw-stock-research"
     skill = executable_root / "skills" / "tw-stock-research" / "SKILL.md"
+    if resources is not None:
+        from src.runtime.manifest import sha256_file
+        if not isinstance(resources, list) or not resources:
+            _fail("research skill resource list is invalid")
+        for record in resources:
+            if not isinstance(record, dict):
+                _fail("research skill resource record is invalid")
+            raw_path = str(record.get("path", ""))
+            relative = Path(raw_path)
+            path = (executable_root / relative).resolve()
+            if (not raw_path or ":" in raw_path or "\\" in raw_path
+                    or relative.is_absolute() or relative.drive or ".." in relative.parts
+                    or not path.is_relative_to((executable_root / "skills").resolve())):
+                _fail("research skill resource path is invalid")
+            if not path.is_file() or sha256_file(path) != record.get("sha256"):
+                _fail(f"research skill resource missing or changed: {relative}")
     return {
         "tw-stock-research.exe": _validate_ondir_bundle(
             executable_root, "tw-stock-research", "tw-stock-research.exe"
@@ -123,7 +139,18 @@ def _validate_distribution_manifest(manifest_path: Path, package_root: Path) -> 
         if not isinstance(record, dict):
             _fail("distribution manifest artifact record is invalid")
         filename = _manifest_filename(record.get("filename"), label="artifact")
-        candidates = [path for path in artifact_root.rglob(filename) if path.is_file()]
+        if "relative_path" in record:
+            raw_path = str(record["relative_path"])
+            relative = Path(raw_path)
+            if (not raw_path or ":" in raw_path or "\\" in raw_path
+                    or relative.is_absolute() or relative.drive or ".." in relative.parts):
+                _fail("distribution artifact relative path is invalid")
+            candidate = (artifact_root / relative).resolve()
+            if not candidate.is_relative_to(artifact_root.resolve()) or candidate.name != filename:
+                _fail("distribution artifact relative path is invalid")
+            candidates = [candidate] if candidate.is_file() else []
+        else:
+            candidates = [path for path in artifact_root.rglob(filename) if path.is_file()]
         if len(candidates) != 1:
             _fail(f"distribution artifact is missing or ambiguous: {filename}")
         if sha256_file(candidates[0]) != record.get("sha256"):
@@ -164,6 +191,7 @@ def validate_package(package_root: str | Path, *, distribution_manifest: str | P
         _fail("one or more PyInstaller executables are missing")
     build_summary_path = root / "build-summary.json"
     assistant_enabled = False
+    skill_resources = None
     if build_summary_path.is_file():
         try:
             build_summary = json.loads(build_summary_path.read_text(encoding="utf-8"))
@@ -174,7 +202,8 @@ def validate_package(package_root: str | Path, *, distribution_manifest: str | P
             or build_summary.get("research_assistant") == "v1"
             or isinstance(build_summary.get("research_skill"), dict)
         )
-    research = _validate_research_payload(executable_root) if assistant_enabled else None
+        skill_resources = build_summary.get("research_skill_files")
+    research = _validate_research_payload(executable_root, skill_resources) if assistant_enabled else None
     external = None
     if distribution_manifest:
         external = _validate_distribution_manifest(

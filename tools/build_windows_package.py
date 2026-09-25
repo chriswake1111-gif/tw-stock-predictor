@@ -21,6 +21,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS_DIR = ROOT / "packaging" / "windows"
 RESEARCH_SKILL = ROOT / "skills" / "tw-stock-research" / "SKILL.md"
+RESEARCH_SKILL_FILES = (
+    "tw-stock-research/SKILL.md",
+    "du-jinlong-research-method/SKILL.md",
+    "du-jinlong-research-method/references/evidence-cards.md",
+    "du-jinlong-research-method/references/candidate-workflow.md",
+)
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -61,6 +67,18 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _copy_research_skills(executable_root: Path) -> tuple[Path, ...]:
+    """Ship only reviewed skill resources; never research receipts or source PDFs."""
+    sources = tuple(ROOT / "skills" / name for name in RESEARCH_SKILL_FILES)
+    for source in sources:
+        if not source.is_file():
+            raise RuntimeError(f"required package resource is missing: {source}")
+    destinations = tuple(executable_root / "skills" / name for name in RESEARCH_SKILL_FILES)
+    for source, destination in zip(sources, destinations):
+        _copy_required_file(source, destination)
+    return destinations
 
 
 def _iscc_path(configured: str | None) -> str | None:
@@ -127,10 +145,7 @@ def _pyinstaller(output_root: Path, resource_root: Path) -> Path:
     missing = [str(path) for path in expected if not path.is_file()]
     if missing:
         raise RuntimeError("PyInstaller output is incomplete: " + ", ".join(missing))
-    _copy_required_file(
-        RESEARCH_SKILL,
-        executable_root / "skills" / "tw-stock-research" / "SKILL.md",
-    )
+    _copy_research_skills(executable_root)
     return executable_root
 
 
@@ -211,11 +226,12 @@ def main() -> int:
             build_sha=build_sha,
             output_path=output_root / "distribution-manifest.json",
             internal_manifest_path=output_root / "internal-package-manifest.json",
+            artifact_root=executable_root,
             artifact_paths=(
                 executable_root / "tw-stock-predictor" / "tw-stock-predictor.exe",
                 executable_root / "tw-stock-predictor-server" / "tw-stock-predictor-server.exe",
                 executable_root / "tw-stock-research" / "tw-stock-research.exe",
-                executable_root / "skills" / "tw-stock-research" / "SKILL.md",
+                *(executable_root / "skills" / name for name in RESEARCH_SKILL_FILES),
             ),
         )
     else:
@@ -232,9 +248,17 @@ def main() -> int:
         "distribution_manifest": distribution,
         "research_skill": {
             "path": "skills/tw-stock-research/SKILL.md",
-            "sha256": _sha256_file(RESEARCH_SKILL),
-            "size": RESEARCH_SKILL.stat().st_size,
+            "sha256": _sha256_file(executable_root / "skills" / "tw-stock-research" / "SKILL.md"),
+            "size": (executable_root / "skills" / "tw-stock-research" / "SKILL.md").stat().st_size,
         },
+        "research_skill_files": [
+            {
+                "path": "skills/" + name,
+                "sha256": _sha256_file(executable_root / "skills" / name),
+                "size": (executable_root / "skills" / name).stat().st_size,
+            }
+            for name in RESEARCH_SKILL_FILES
+        ],
     }
     (output_root / "build-summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",

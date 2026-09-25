@@ -206,6 +206,7 @@ def build_external_distribution_manifest(
     onedir_archive_path: str | Path | None = None,
     internal_manifest_path: str | Path | None = None,
     artifact_paths: Iterable[str | Path] = (),
+    artifact_root: str | Path | None = None,
 ) -> dict[str, Any]:
     installer = Path(installer_path).resolve(strict=False)
     if not installer.is_file():
@@ -243,11 +244,14 @@ def build_external_distribution_manifest(
         artifact = Path(artifact_path).resolve(strict=False)
         if not artifact.is_file():
             raise ManifestError(f"distribution artifact does not exist: {artifact}")
-        artifacts.append({
+        record = {
             "filename": artifact.name,
             "sha256": sha256_file(artifact),
             "size": artifact.stat().st_size,
-        })
+        }
+        if artifact_root is not None:
+            record["relative_path"] = _relative(Path(artifact_root), artifact)
+        artifacts.append(record)
     if artifacts:
         result["artifacts"] = artifacts
     if output_path:
