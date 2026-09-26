@@ -20,7 +20,7 @@ export function AssumptionGuide({ items, loading, loadFailed, busy, deferred, on
     <p>行情、歷史價量、已公布 EPS 與研究筆記不需要先填這張表。估值需要「全年預估 EPS」和「PE 假設」；波浪則另需確認錨點。</p>
     <ol className="assumption-guide-steps">
       <li><strong>準備全年預估 EPS</strong><span>確認預估年度、元／股數值、來源與發布日。單季實績或歷史 TTM 不能直接代填。</span></li>
-      <li><strong>設定 PE 假設</strong><span>記錄採用倍數的理由；畫面上的客觀本益比不等於適用的估值倍數。</span></li>
+      <li><strong>設定 PE 假設</strong><span>確認與 EPS 相同的適用年度，並記錄採用倍數的理由；畫面上的客觀本益比不等於適用的估值倍數。</span></li>
       <li><strong>預覽，再確認採用</strong><span>草稿不會自動核准。核准代表您同意採用假設，不代表預估已被證實。</span></li>
     </ol>
     <div className="assumption-guide-actions">
@@ -40,8 +40,9 @@ export function AssumptionGuide({ items, loading, loadFailed, busy, deferred, on
         {approved.length === 0 && <p>目前沒有未被新版取代的已核准紀錄。可以先閱讀資料，不必為了完成表單而填數字。</p>}
         {approved.length > 0 && <p>以下為已核准且未被新版取代的紀錄；實際適用性與採用組合以模型情境為準，不必每天重建。</p>}
         <ul>{approved.map(i => <li key={i.id}>
-          <strong>{i.kind === "eps" ? `${i.fiscal_year} 年預估 EPS：${i.eps_base} 元／股` : i.kind === "pe" ? `${i.label}：PE ${i.pe_value} 倍` : `波浪錨點：${i.evidence_basis_rule_id}`}</strong>
+          <strong>{i.kind === "eps" ? `${i.fiscal_year} 年預估 EPS：${i.eps_base} 元／股` : i.kind === "pe" ? `${i.fiscal_year ?? "年度待確認"} · ${i.label}：PE ${i.pe_value} 倍` : `波浪錨點：${i.evidence_basis_rule_id}`}</strong>
           <span>v{i.revision_number} · 已核准</span>
+          {i.kind === "pe" && !i.fiscal_year && <span>舊紀錄未註明年度，暫不參與新計算。請修改這份 PE 假設，補上年度後核准新版本；舊研究仍保留。</span>}
           {i.kind === "eps" && <span>來源：{i.source_name || "未記錄"}；發布日：{i.published_at || "未記錄"}</span>}
           <button type="button" disabled={busy} onClick={() => onEdit(i)}>修改這份{i.kind === "eps" ? "EPS" : i.kind === "pe" ? "PE" : "錨點"}假設</button>
         </li>)}</ul>

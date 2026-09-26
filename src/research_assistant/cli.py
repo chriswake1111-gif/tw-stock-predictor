@@ -88,11 +88,12 @@ def roots(args):
 
 
 def execute(args, client):
-    client.connect(start=args.command != "doctor")
+    connection = client.connect(start=args.command != "doctor")
     cmd = args.command
     if cmd in {"connect", "doctor"}:
         return {"status":"ready", "origin":client.origin, "build_sha":client.descriptor["build_sha"],
-                "active_operation":client.active_operation()}
+                "active_operation":client.active_operation(),
+                "valuation_pairing_policy":connection.get("valuation_pairing_policy")}
     if cmd == "search":
         return client.search(args.query)
     if cmd == "research":

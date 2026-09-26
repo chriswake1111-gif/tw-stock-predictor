@@ -38,6 +38,8 @@ export function ResearchOverview({ summary, historical, onOpenSection }: Props) 
     ...(!ratio || !numeric(ratio.pe) || !numeric(ratio.pb) || !numeric(ratio.yield_ratio) ? ["本益比、股價淨值比或殖利率仍有缺值。"] : []),
     // The current collector has not verified share basis; never infer a usable TTM from quarter rows.
     "財報每股盈餘的股數基準尚未核對，暫不提供可採用的 TTM EPS。",
+    ...(summary.valuation_context.year_pairing?.status === "needs_human_input"
+      ? ["部分估值缺少同年度 PE，或舊 PE 尚未設定年度；請補上適用年度並核准新版本。已可計算的年度仍可查閱。"] : []),
     ...(!valuations.length ? [summary.valuation_context.status === "needs_human_judgment"
       ? "估值需要確認全年預估 EPS 與 PE 假設；沒有依據時可以先略過。"
       : "估值目前缺少可用輸入或適用證據；曾核准不代表本次可計算。"] : []),

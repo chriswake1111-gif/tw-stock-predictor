@@ -32,6 +32,7 @@ def readiness_payload(request: Request) -> dict[str, Any]:
         "scheduler_enabled": bool(state.get("scheduler_enabled", False)),
         "reason": state.get("reason"),
         "research_assistant_contract": "tw_stock_research_assistant_v1",
+        "valuation_pairing_policy": "same_fiscal_year_v1",
     }
 
 

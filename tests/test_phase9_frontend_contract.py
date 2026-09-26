@@ -86,6 +86,7 @@ def _analysis_contract_slice(body: dict) -> dict:
     valuation_fields = (
         "status", "observation_id", "pe_scenario_id", "fiscal_year",
         "source_name", "eps_scenario", "eps_value", "pe_value", "target_price",
+        "pe_fiscal_year", "pairing_policy_version",
     )
     scenario_fields = (
         "anchor_set_revision_id", "scenario_type", "semantic_role",

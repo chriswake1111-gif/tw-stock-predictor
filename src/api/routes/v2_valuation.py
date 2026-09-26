@@ -92,6 +92,7 @@ class ForwardEPSRequest(StrictRequest):
 
 
 class PEScenarioRequest(StrictRequest):
+    fiscal_year: int | None = Field(default=None, ge=1900, le=2200, strict=True)
     logical_series_id: str
     revision_number: int
     revision_of: str | None = None
@@ -460,6 +461,7 @@ def create_pe_scenario(
     try:
         _require_write_access(admin_api_key)
         scenario = PEScenario(
+            fiscal_year=payload.fiscal_year,
             logical_series_id=payload.logical_series_id,
             revision_number=payload.revision_number,
             revision_of=payload.revision_of,
@@ -1187,6 +1189,8 @@ def _build_v2_analysis(
             needs_human.append("approved_forward_eps")
         elif valuation["reason"] == "approved_symbol_pe_missing_at_knowledge_cutoff":
             needs_human.append("approved_symbol_pe")
+    if valuation.get("year_pairing", {}).get("status") == "needs_human_input":
+        needs_human.append("approved_symbol_pe_for_fiscal_year")
     if technical_support["status"] == "needs_human_input":
         technical_requirement = {
             "manual_anchor_required": "manual_anchor",

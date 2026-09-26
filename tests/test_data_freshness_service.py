@@ -339,7 +339,7 @@ def test_new_pe_and_liquidity_revisions_produce_multiple_stale_reasons(tmp_path)
     pe1 = valuation.add_pe_scenario(
         PEScenario(
             logical_series_id="2330-approved-pe", revision_number=1,
-            label="base", pe_value=15, rationale="reviewed scenario",
+            label="base", pe_value=15, fiscal_year=2027, rationale="reviewed scenario",
             evidence_level="U", scope=PEScope.SYMBOL, symbol="2330.TW",
             available_at="2026-07-01T08:00:00Z",
             approval_status=ApprovalStatus.DRAFT,
@@ -383,7 +383,7 @@ def test_new_pe_and_liquidity_revisions_produce_multiple_stale_reasons(tmp_path)
     pe2 = valuation.add_pe_scenario(
         PEScenario(
             logical_series_id="2330-approved-pe", revision_number=2,
-            revision_of=pe1["id"], label="base", pe_value=16,
+            revision_of=pe1["id"], label="base", pe_value=16, fiscal_year=2027,
             rationale="reviewed revision", evidence_level="U",
             scope=PEScope.SYMBOL, symbol="2330.TW",
             available_at="2026-07-03T08:00:00Z",

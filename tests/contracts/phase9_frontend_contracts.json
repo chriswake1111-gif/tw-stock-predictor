@@ -3,7 +3,9 @@
     {
       "status": "available",
       "observation_id": "feps_5d9d6e264b9599bf5f3c4b13",
-      "pe_scenario_id": "pe_20488a89ab0ff5fcf099f699",
+      "pe_scenario_id": "pe_938ff4c512b41f6752e324f3",
+      "pe_fiscal_year": 2027,
+      "pairing_policy_version": "same_fiscal_year_v1",
       "fiscal_year": 2027,
       "source_name": "manual-research",
       "eps_scenario": "low",
@@ -14,7 +16,9 @@
     {
       "status": "available",
       "observation_id": "feps_5d9d6e264b9599bf5f3c4b13",
-      "pe_scenario_id": "pe_20488a89ab0ff5fcf099f699",
+      "pe_scenario_id": "pe_938ff4c512b41f6752e324f3",
+      "pe_fiscal_year": 2027,
+      "pairing_policy_version": "same_fiscal_year_v1",
       "fiscal_year": 2027,
       "source_name": "manual-research",
       "eps_scenario": "base",
@@ -25,7 +29,9 @@
     {
       "status": "available",
       "observation_id": "feps_5d9d6e264b9599bf5f3c4b13",
-      "pe_scenario_id": "pe_20488a89ab0ff5fcf099f699",
+      "pe_scenario_id": "pe_938ff4c512b41f6752e324f3",
+      "pe_fiscal_year": 2027,
+      "pairing_policy_version": "same_fiscal_year_v1",
       "fiscal_year": 2027,
       "source_name": "manual-research",
       "eps_scenario": "high",

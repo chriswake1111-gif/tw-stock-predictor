@@ -465,7 +465,7 @@ class SnapshotComparator:
         valuation_fields = (
             "observation_logical_series_id", "pe_logical_series_id", "eps_scenario",
             "fiscal_year", "status", "eps_value", "pe_value", "target_price", "formula",
-            "rule_ids",
+            "rule_ids", "pe_fiscal_year", "pairing_policy_version",
         )
         valuation_projection = lambda row: {
             field: row[field] for field in valuation_fields if field in row

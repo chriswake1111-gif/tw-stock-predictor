@@ -13,6 +13,22 @@ function openEditor() {
 
 describe("LocalAssumptionEditor", () => {
   beforeEach(() => { vi.restoreAllMocks(); });
+  it("requires a year revision for legacy PE and invalidates preview when that year changes", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => new Response(JSON.stringify(
+      String(input).endsWith("/csrf-token") ? { csrf_token: "test-token" } :
+      init?.method === "POST" ? { status: "preview_only" } : { items: [{ id: "legacy", kind: "pe", label: "舊倍數", pe_value: 20, rationale: "原依據", fiscal_year: null, revision_number: 1, superseded: false, approval: { decision: "approved" } }] }
+    ), { status: 200 }));
+    openEditor();
+    await screen.findByText(/需補年度並核准新版本/);
+    fireEvent.click(screen.getByRole("button", { name: "修改此版本" }));
+    expect(screen.getByLabelText("PE 適用年度")).toHaveValue("");
+    expect(screen.queryByRole("button", { name: "確認採用此版本" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("PE 適用年度"), { target: { value: "2027" } });
+    fireEvent.click(screen.getByRole("button", { name: "先預覽" }));
+    await screen.findByRole("button", { name: "保存草稿" });
+    fireEvent.change(screen.getByLabelText("PE 適用年度"), { target: { value: "2026" } });
+    expect(screen.queryByRole("button", { name: "保存草稿" })).not.toBeInTheDocument();
+  });
   it("allows reading first and preserves entered values when returning without writes", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({items: []})));
     renderWithProviders(<LocalAssumptionEditor symbol="2330.TW" onChanged={vi.fn()} />);
@@ -80,12 +96,15 @@ describe("LocalAssumptionEditor", () => {
     await waitFor(() => expect(screen.getByLabelText("類型")).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText("類型"), { target: { value: "pe" } });
     fireEvent.change(screen.getByLabelText("版本方式"), { target: { value: "old" } });
+    expect(screen.getByLabelText("PE 適用年度")).toHaveValue("");
+    fireEvent.change(screen.getByLabelText("PE 適用年度"), { target: { value: "2027" } });
     fireEvent.change(screen.getByLabelText("標籤"), {target:{value:"基準"}}); fireEvent.change(screen.getByLabelText("PE 值"), {target:{value:"20"}}); fireEvent.change(screen.getByLabelText("理由"), {target:{value:"確認倍數適用"}});
     fireEvent.click(screen.getByRole("button", { name: "先預覽" }));
     await screen.findByText("預覽（僅計算，不寫入）"); fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
     await screen.findByRole("button", { name: "明確核准" }); fireEvent.click(screen.getByRole("button", { name: "明確核准" }));
     await waitFor(() => expect(calls.some(([input]) => String(input).endsWith("/new/approve"))).toBe(true));
     const draftCall = calls.find(([input]) => String(input).endsWith("/pe/draft")); expect(JSON.stringify(draftCall?.[1]?.body)).toContain("previous_id");
+    expect(JSON.parse(String(draftCall?.[1]?.body)).values.fiscal_year).toBe(2027);
   });
   it("sends EPS source/date and complete two-anchor payloads", async () => {
     const bodies: string[] = [];

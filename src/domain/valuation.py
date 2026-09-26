@@ -174,6 +174,7 @@ class PEScenario:
     evidence_basis_rule_id: str | None = None
     revision_of: str | None = None
     version: str = "2.0.0"
+    fiscal_year: int | None = None
 
     def validated(self) -> "PEScenario":
         if not self.logical_series_id.strip():
@@ -187,6 +188,10 @@ class PEScenario:
         pe_value = float(self.pe_value)
         if not math.isfinite(pe_value) or pe_value <= 0:
             raise ValueError("pe_value must be finite and greater than zero")
+        if self.fiscal_year is not None and (
+            type(self.fiscal_year) is not int or not 1900 <= self.fiscal_year <= 2200
+        ):
+            raise ValueError("pe_fiscal_year_invalid")
         if self.evidence_level not in {"A", "B", "C", "U"}:
             raise ValueError("evidence_level must be A, B, C, or U")
         scope_values = {
@@ -243,6 +248,8 @@ class PEScenario:
             "effective_to": normalize_utc_timestamp(self.effective_to, "effective_to") if self.effective_to else None,
             "evidence_basis_rule_id": self.evidence_basis_rule_id,
             "version": self.version,
+            # Omit absent years only to preserve the fingerprint of legacy retries.
+            **({"fiscal_year": self.fiscal_year} if self.fiscal_year is not None else {}),
         }
 
 

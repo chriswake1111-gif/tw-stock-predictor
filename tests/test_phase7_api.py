@@ -79,6 +79,7 @@ def create_approved_inputs(monkeypatch, tmp_path):
             "revision_number": 1,
             "label": "approved symbol PE",
             "pe_value": 20,
+            "fiscal_year": 2027,
             "rationale": "company specific review",
             "scope": "symbol",
             "symbol": "2330.TW",

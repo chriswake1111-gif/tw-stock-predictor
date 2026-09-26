@@ -66,6 +66,7 @@ class ValuationContextSummary(BaseModel):
     status: str = "needs_human_judgment"
     reason_code: Optional[str] = "forward_eps_missing_at_knowledge_cutoff"
     target_matrix: List[Any] = Field(default_factory=list)
+    year_pairing: dict = Field(default_factory=dict)
 
 
 class TechnicalContextSummary(BaseModel):

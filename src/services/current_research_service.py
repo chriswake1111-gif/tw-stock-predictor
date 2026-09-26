@@ -151,21 +151,32 @@ class CurrentResearchService:
                 status=valuation["status"],
                 reason_code=valuation.get("reason"),
                 target_matrix=valuation.get("target_matrix", []),
+                year_pairing=valuation.get("year_pairing", {}),
             )
             technical_ctx = TechnicalContextSummary(
                 status=technical["status"],
                 reason_code=technical.get("reason"),
                 targets=technical if technical.get("scenarios") else None,
             )
+            year_pairing_missing = valuation_ctx.year_pairing.get("status") == "needs_human_input"
             if valuation_ctx.status in {"insufficient_data", "needs_human_input"}:
                 valuation_ctx.status = "needs_human_judgment"
-                missing_pe = valuation.get("reason") == "approved_symbol_pe_missing_at_knowledge_cutoff"
+                missing_pe = valuation.get("reason") in {
+                    "approved_symbol_pe_missing_at_knowledge_cutoff", "pe_fiscal_year_required",
+                    "approved_symbol_pe_year_mismatch",
+                }
                 decision_queue.append(HumanDecisionItem(
                     item_id="val_04_pe" if missing_pe else "val_02_forward_eps",
                     title="補齊估值輸入與核准",
                     rule_id="VAL-04" if missing_pe else "VAL-02",
                     evidence_level="A", description="估值需要有效的預估 EPS 與本益比情境核准。",
                     suggested_action="請檢查估值資料與核准狀態；行情仍可直接查閱。",
+                ))
+            if year_pairing_missing:
+                decision_queue.append(HumanDecisionItem(
+                    item_id="val_04_pe_year", title="確認 PE 適用年度", rule_id="VAL-04", evidence_level="A",
+                    description="部分預估 EPS 尚無同年度已核准 PE，或舊 PE 尚未註明年度。",
+                    suggested_action="請在本地研究假設補上適用年度並核准新版本；已保存研究保留不變。",
                 ))
             if technical_ctx.status == "needs_human_input":
                 technical_ctx.status = "needs_human_judgment"

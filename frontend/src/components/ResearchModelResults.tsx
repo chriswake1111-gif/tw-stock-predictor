@@ -24,6 +24,11 @@ export function ResearchModelResults({ summary }: { summary: ResearchSummaryResp
     <h2>模型研究結果</h2>
     <p>以下為情境推算，並非保證價格或交易指令。資料知識截止時間：{summary.knowledge_cutoff_at}；模型版本：{summary.audit_reference.model_version || "未提供"}。</p>
     <h3>估值情境</h3>
+    {summary.valuation_context.year_pairing?.status === "needs_human_input" && <div role="status">
+      {!!summary.valuation_context.year_pairing.unmatched_eps_years.length && <p>{summary.valuation_context.year_pairing.unmatched_eps_years.join("、")} 年預估 EPS 尚無同年度已核准 PE，這些年度暫不計算。</p>}
+      {!!summary.valuation_context.year_pairing.unbound_pe_ids.length && <p>有舊 PE 尚未註明適用年度。請補上年度並核准新版本；已保存研究保留不變。</p>}
+      <a href="#local-assumptions">設定 PE 適用年度</a>
+    </div>}
     {groups.length > 1 && <div className="research-model-filter"><label htmlFor="valuation-display">想先看哪一組 EPS？</label>
       <select id="valuation-display" value={activeSelection} onChange={event => setSelection(event.target.value)}>
         <option value="">查看全部已計算情境（{groups.length} 組 EPS）</option>

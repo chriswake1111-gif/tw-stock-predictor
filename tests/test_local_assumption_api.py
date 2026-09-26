@@ -54,6 +54,30 @@ EPS = {
 }
 
 
+@pytest.mark.parametrize("year", [None, True, 2026.5, "2026", 1899, 2201])
+def test_pe_year_invalid_or_missing_cannot_preview_or_write(api, year):
+    body = {"values": {"label": "測試", "pe_value": 20, "rationale": "年度測試"}}
+    if year is not None:
+        body["values"]["fiscal_year"] = year
+    for action in ("preview", "draft"):
+        response = api.post(f"/api/v2/research/assumptions/2330.TW/pe/{action}",
+                            headers=csrf(api) | {"Idempotency-Key": f"invalid-year-{action}"}, json=body)
+        assert response.status_code == 422, response.text
+    assert api.get("/api/v2/research/assumptions/2330.TW").json()["items"] == []
+
+
+def test_pe_year_roundtrip_preview_draft_requires_explicit_approval(api):
+    body = {"values": {"label": "2027 情境", "pe_value": 31.2, "fiscal_year": 2027, "rationale": "自訂敏感度"}}
+    preview = api.post("/api/v2/research/assumptions/2330.TW/pe/preview", headers=csrf(api), json=body)
+    assert preview.status_code == 200
+    assert api.get("/api/v2/research/assumptions/2330.TW").json()["items"] == []
+    created = api.post("/api/v2/research/assumptions/2330.TW/pe/draft",
+                       headers=csrf(api) | {"Idempotency-Key": "pe-year-roundtrip"}, json=body)
+    assert created.status_code == 200
+    row = api.get("/api/v2/research/assumptions/2330.TW").json()["items"][0]
+    assert row["fiscal_year"] == 2027 and row["approval"] is None
+
+
 def test_missing_handshake_returns_503(api):
     api.app.state.launch_handshake = None
     response = api.post("/api/v2/research/assumptions/2330.TW/eps/draft", headers=csrf(api) | {"Idempotency-Key": "missing-handshake-1"}, json=EPS)

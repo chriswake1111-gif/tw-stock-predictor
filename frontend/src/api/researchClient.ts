@@ -50,6 +50,8 @@ export async function researchMutation<T>(path: string, payload: unknown, idempo
 
 export function researchErrorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback;
+  if (error.message === "pe_fiscal_year_required") return "請填寫 PE 適用年度；只會搭配同年度的全年預估 EPS。";
+  if (error.message === "pe_fiscal_year_required_create_revision") return "這份舊 PE 尚未註明年度。請修改此版本、補上適用年度，再核准新版本。";
   if (error.message === "csrf_refresh_required") return "操作驗證已更新，本次操作尚未執行。請再按一次原操作；已填內容仍保留。";
   if (error.message === "csrf_refresh_failed") return "操作驗證更新失敗，本次操作尚未執行。請稍後再試；已填內容仍保留。";
   return error.message;

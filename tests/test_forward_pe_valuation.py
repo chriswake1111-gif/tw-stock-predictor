@@ -31,11 +31,11 @@ def approve(repo, resource_type, resource_id, key, *, evidence="B", project=Fals
     )
 
 
-def add_eps(repo, *, series, source, eps, approved=True):
+def add_eps(repo, *, series, source, eps, approved=True, fiscal_year=2027):
     row = repo.add_forward_eps(
         ForwardEPSObservation(
             logical_series_id=series, revision_number=1, symbol="2330.TW",
-            fiscal_year=2027, eps_base=eps, source_name=source,
+            fiscal_year=fiscal_year, eps_base=eps, source_name=source,
             source_type=ForwardEPSSourceType.MANUAL, published_at="2026-08-01",
             available_at="2026-08-01T00:00:00Z",
         ), f"eps-{series}", ingested_at="2026-08-01T00:01:00Z",
@@ -47,7 +47,7 @@ def add_eps(repo, *, series, source, eps, approved=True):
 
 def add_pe(repo, *, series, scope, pe, approved=True, evidence="B", project=False,
            revision=1, revision_of=None, effective_from=None, effective_to=None,
-           symbol=None, industry=None, market=None, evidence_basis_rule_id=None):
+           symbol=None, industry=None, market=None, evidence_basis_rule_id=None, fiscal_year=2027):
     values = {
         "symbol": symbol if symbol is not None else ("2330.TW" if scope is PEScope.SYMBOL else None),
         "industry": industry if industry is not None else ("Semiconductor" if scope is PEScope.INDUSTRY else None),
@@ -55,6 +55,7 @@ def add_pe(repo, *, series, scope, pe, approved=True, evidence="B", project=Fals
     }
     row = repo.add_pe_scenario(
         PEScenario(
+            fiscal_year=fiscal_year,
             logical_series_id=series, revision_number=revision, revision_of=revision_of,
             label="base", pe_value=pe, rationale="research scenario", evidence_level="U",
             scope=scope, available_at="2026-08-01T00:00:00Z",
@@ -67,6 +68,34 @@ def add_pe(repo, *, series, scope, pe, approved=True, evidence="B", project=Fals
         approve(repo, ApprovalResourceType.PE_SCENARIO, row["id"], f"pe-{series}-{revision}",
                 evidence=evidence, project=project)
     return row
+
+
+def test_only_same_year_pairs_calculate_and_unmatched_year_stays_visible(tmp_path):
+    repo = ForwardEPSRepository(str(tmp_path / "years.db"))
+    add_eps(repo, series="2026", source="Source", eps=18.5, fiscal_year=2026)
+    eps27 = add_eps(repo, series="2027", source="Source", eps=40, fiscal_year=2027)
+    pe27 = add_pe(repo, series="pe-2027", scope=PEScope.SYMBOL, pe=31.2, fiscal_year=2027)
+    result = ForwardPEValuationEngine(repo).evaluate("2330.TW", CUTOFF)
+    assert result["status"] == "available"
+    assert len(result["target_matrix"]) == 1
+    cell = result["target_matrix"][0]
+    assert cell["observation_id"] == eps27["id"]
+    assert cell["pe_scenario_id"] == pe27["id"]
+    assert cell["fiscal_year"] == cell["pe_fiscal_year"] == 2027
+    assert cell["target_price"] == 1248
+    assert result["year_pairing"]["unmatched_eps_years"] == [2026]
+    assert result["year_pairing"]["status"] == "needs_human_input"
+
+
+def test_year_mismatch_returns_actionable_reason_and_no_price(tmp_path):
+    repo = ForwardEPSRepository(str(tmp_path / "mismatch.db"))
+    add_eps(repo, series="2026", source="Source", eps=18.5, fiscal_year=2026)
+    add_pe(repo, series="pe-2027", scope=PEScope.SYMBOL, pe=31.2, fiscal_year=2027)
+    result = ForwardPEValuationEngine(repo).evaluate("2330.TW", CUTOFF)
+    assert result["target_matrix"] == []
+    assert result["status"] == "needs_human_input"
+    assert result["reason"] == "approved_symbol_pe_year_mismatch"
+    assert result["year_pairing"]["unmatched_eps_years"] == [2026]
 
 
 def test_multiple_forward_eps_sources_are_not_averaged(tmp_path):

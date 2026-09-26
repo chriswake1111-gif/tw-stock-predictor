@@ -29,6 +29,7 @@ class EPSValues(Strict):
 
 
 class PEValues(Strict):
+    fiscal_year: int | None = Field(default=None, ge=1900, le=2200, strict=True)
     label: Text
     pe_value: float = Field(gt=0)
     rationale: Text
@@ -78,7 +79,7 @@ def values_for(kind, payload):
     expected = {"eps": EPSValues, "pe": PEValues, "anchor": AnchorValues}[kind]
     if not isinstance(payload.values, expected):
         raise HTTPException(422, detail="assumption_kind_payload_mismatch")
-    return payload.values.model_dump()
+    return payload.values.model_dump(exclude_none=True)
 
 
 @router.get("/{symbol}")

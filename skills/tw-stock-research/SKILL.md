@@ -53,16 +53,16 @@ description: 使用這台 Windows 的 TW Stock Predictor 安裝版研究上市�
 方法 Skill 負責提問、選源與比較；本 Skill 負責操作、確認邊界及解說。不新增金融公式或更改程式 Rule Trace 資格。
 若方法 Skill 未安裝，說明引導資源缺失，仍可更新、閱讀及比較，不憑記憶宣稱已套用證據庫。
 候選可少於三個或沒有；不將 20／21／25 倍當通用預設，不從目標價反推未明示的 PE。保留公司、年度、口徑與限制。
-PE 沒有結構化年度限制。外部倍數限某年／口徑而程式可能套其他 EPS 時，先按方法 Skill 說明並取得明確自訂敏感度選擇，不能假裝 rationale 會約束計算。
+PE 使用結構化 `fiscal_year` 限定適用年度。先從 doctor／connect 的 `valuation_pairing_policy` 或 review 的 `current.summary.valuation_context.year_pairing.policy_version` 確認為 `same_fiscal_year_v1`；舊版未回傳此能力時，僅整理候選並提示需要升級，不退回只寫 rationale 或跨年度配對。年度一致仍不代表股數／稀釋／幣別口徑一致，須另行核對。
 
 ### 選用、預覽與核准
 
 先讓使用者看到候選及來源限制，再詢問要採用哪一份作草稿；允許「先不估值」。選用範圍必須可對應到特定股票、年度、EPS／PE 值及來源，不能把「補齊缺項」視為授權任意選值或核准。
 
 把候選整理成預覽 JSON，使用 `assumption-preview SYMBOL eps|pe|anchor --input FILE`。
-EPS values: fiscal_year, eps_base, source, source_date, rationale；PE values: label, pe_value, rationale；錨點 values: rule_id (FB-03/FB-04), anchors (role, price, market_date), source, rationale。
+EPS values: fiscal_year, eps_base, source, source_date, rationale；PE values: fiscal_year, label, pe_value, rationale；錨點 values: rule_id (FB-03/FB-04), anchors (role, price, market_date), source, rationale。
 外層只有 `values` 與可選 `previous_id`。來源文字包含發布者、報告標題及 URL；PE 的來源記在 rationale。自行推估明示其性質，不自動建立。
-將候選的適用年度、盈餘口徑、發布者／日期／URL、採用理由與限制寫入既有來源及 rationale 欄位；不新增 API 欄位。若現有長度或格式無法保留關鍵證據，停止並回報限制，不靜默截掉。
+年度填入 `fiscal_year`（1900–2200 的整數）；盈餘口徑、發布者／日期／URL、採用理由與限制寫入既有來源及 rationale 欄位，不自行新增其他 API 欄位。若現有長度或格式無法保留關鍵證據，停止並回報限制，不靜默截掉。舊 PE 年度為空時不能計算，使用者選定年度後沿 `previous_id` 建立新版本，正式核准仍由介面完成。改年度會取代該系列；要保留兩年分別可用的假設，須明確選擇建立不同系列。
 使用者明確選用候選作為草稿後，才執行 `assumption-draft SYMBOL KIND --input FILE --confirmed --request-id ID`。檔案使用 UTF-8；ID 為每個邏輯請求固定 UUID，重試不得換 ID 或 payload。
 用 `open SYMBOL --assumptions` 開啟介面，告知返回的 record.id；正式核准、撤銷都由使用者在介面操作。之後重新 `review SYMBOL` 驗證程式狀態，不以對話宣稱代替實際核准。
 核准後核對程式 target_matrix 實際採用的年度、EPS、PE、來源／版本與 approval IDs。若還有其他年度或舊系列，分組呈現並說明；不能把顯示篩選當成已撤銷其他假設。核准後仍無可用情境時，回報程式原因，不由 agent 補算。

@@ -39,6 +39,25 @@ def _setup_db(tmp_path: Path) -> tuple[Path, CurrentResearchService]:
     return db_file, service
 
 
+def test_partial_year_pairing_is_preserved_in_summary_and_decision_queue(tmp_path):
+    from tests.test_forward_pe_valuation import add_eps, add_pe
+
+    db, service = _setup_db(tmp_path)
+    with sqlite3.connect(db) as conn:
+        _insert_universe_instrument(conn, official_code="2330")
+        _insert_snapshot_and_observation(conn, date="2026-09-04", official_code="2330", close="980.0")
+    repo = ForwardEPSRepository(str(db), auto_migrate=False)
+    add_eps(repo, series="eps2026", source="Source", eps=18.5, fiscal_year=2026)
+    add_eps(repo, series="eps2027", source="Source", eps=40, fiscal_year=2027)
+    add_pe(repo, series="pe2027", scope=PEScope.SYMBOL, pe=31.2, fiscal_year=2027)
+    summary = service.get_summary("2330.TW", knowledge_cutoff_at="2026-09-04T16:00:00Z")
+    valuation = summary["valuation_context"]
+    assert valuation["status"] == "available"
+    assert valuation["year_pairing"]["unmatched_eps_years"] == [2026]
+    assert {r["fiscal_year"] for r in valuation["target_matrix"]} == {2027}
+    assert any(item["item_id"] == "val_04_pe_year" for item in summary["human_decision_queue"])
+
+
 def _insert_universe_instrument(
     conn: sqlite3.Connection,
     *,
@@ -393,7 +412,7 @@ def test_summary_governed_forward_eps_and_technical_anchor_as_of(tmp_path):
     assert not any(item["rule_id"] == "VAL-02" for item in summary_after["human_decision_queue"])
 
     pe = eps_repo.add_pe_scenario(PEScenario(
-        logical_series_id="2330-pe", revision_number=1, label="base", pe_value=20,
+        logical_series_id="2330-pe", revision_number=1, label="base", pe_value=20, fiscal_year=2027,
         rationale="Test approved assumption", evidence_level="A", scope=PEScope.SYMBOL,
         symbol="2330.TW", available_at="2026-09-02T08:00:00Z",
         approval_status=ApprovalStatus.DRAFT,

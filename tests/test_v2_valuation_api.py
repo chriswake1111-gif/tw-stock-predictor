@@ -37,7 +37,7 @@ def eps_payload(**overrides):
 def pe_payload(**overrides):
     payload = {
         "logical_series_id": "2330-pe-base", "revision_number": 1,
-        "label": "base", "pe_value": 20.0, "rationale": "reviewed PE",
+        "label": "base", "pe_value": 20.0, "fiscal_year": 2027, "rationale": "reviewed PE",
         "scope": "symbol", "symbol": "2330",
         "available_at": "2026-08-01T09:00:00+08:00",
     }
@@ -84,6 +84,9 @@ def test_post_validation_and_caller_cannot_claim_approval(monkeypatch, tmp_path)
         ("/api/v2/forward-eps", eps_payload(source_type="historical_ttm"), "ttm"),
         ("/api/v2/forward-eps", eps_payload(eps_low=60.0), "range"),
         ("/api/v2/pe-scenarios", pe_payload(pe_value=0), "pe-zero"),
+        ("/api/v2/pe-scenarios", pe_payload(fiscal_year=None), "pe-no-year"),
+        ("/api/v2/pe-scenarios", pe_payload(fiscal_year=True), "pe-bool-year"),
+        ("/api/v2/pe-scenarios", pe_payload(fiscal_year=2027.5), "pe-fraction-year"),
         ("/api/v2/pe-scenarios", pe_payload(evidence_level="A"), "claim-evidence"),
         ("/api/v2/pe-scenarios", pe_payload(approved_by="caller"), "claim-actor"),
     ]

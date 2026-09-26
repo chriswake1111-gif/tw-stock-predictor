@@ -7,6 +7,16 @@ import { guidedResearchFixture } from "./guidedResearchFixture";
 import { renderWithProviders } from "./render";
 
 describe("guided stock research", () => {
+  it("keeps valid calculations visible while explaining unmatched years and legacy PE", () => {
+    const summary = guidedResearchFixture();
+    summary.valuation_context.year_pairing = { policy_version: "same_fiscal_year_v1", status: "needs_human_input", unmatched_eps_years: [2027], unbound_pe_ids: ["legacy-pe"] };
+    renderWithProviders(<><ResearchOverview summary={summary} historical={false} onOpenSection={vi.fn()} /><ResearchModelResults summary={summary} /></>);
+    expect(screen.getByText(/部分估值缺少同年度 PE/)).toBeInTheDocument();
+    expect(screen.getByText(/2027 年預估 EPS 尚無同年度已核准 PE/)).toBeInTheDocument();
+    expect(screen.getByText(/有舊 PE 尚未註明適用年度/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "設定 PE 適用年度" })).toHaveAttribute("href", "#local-assumptions");
+    expect(screen.getByText(/自訂敏感度 20 倍：2,154.8 元/)).toBeInTheDocument();
+  });
   it("separates dated official and third-party prices and keeps missing data visible despite an empty queue", () => {
     renderWithProviders(<ResearchOverview summary={guidedResearchFixture()} historical={false} onOpenSection={vi.fn()} />);
     for (const name of ["目前發生什麼", "程式算出什麼", "還缺什麼、哪些要留意", "下一步做什麼"]) expect(screen.getByRole("heading", { name })).toBeInTheDocument();

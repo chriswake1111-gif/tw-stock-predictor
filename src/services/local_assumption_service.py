@@ -71,7 +71,10 @@ class LocalAssumptionService:
                 source_name=values["source"], published_at=values["source_date"],
                 quality_note=values["rationale"], **common)
         elif kind == "pe":
+            if values.get("fiscal_year") is None:
+                raise ValueError("pe_fiscal_year_required")
             obj = PEScenario(logical_series_id=series, label=values["label"], pe_value=values["pe_value"],
+                fiscal_year=values["fiscal_year"],
                 rationale=values["rationale"], evidence_level="U", scope=PEScope.SYMBOL,
                 approval_status=ApprovalStatus.DRAFT, **common)
         else:

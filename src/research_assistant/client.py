@@ -184,7 +184,8 @@ class LocalClient:
         if ready.get("research_assistant_contract") != CONTRACT:
             raise AssistantError("assistant_upgrade_required")
         return {"contract_version": CONTRACT, "status": "ready", "origin": self.origin,
-                "build_sha": expected_build}
+                "build_sha": expected_build,
+                "valuation_pairing_policy": ready.get("valuation_pairing_policy")}
 
     def mutate(self, path, body, key=None):
         self.token = self._http("/api/v2/data-operations/csrf-token")["csrf_token"]
@@ -293,6 +294,9 @@ class LocalClient:
     def assumption(self, symbol, kind, payload, *, draft=False, key=None):
         if kind not in {"eps", "pe", "anchor"}:
             raise AssistantError("unsupported_assumption_kind")
+        if kind == "pe":
+            if self._http("/api/ready").get("valuation_pairing_policy") != "same_fiscal_year_v1":
+                raise AssistantError("pe_fiscal_year_upgrade_required")
         if draft:
             request_key(key)
         return self.mutate(f"/api/v2/research/assumptions/{symbol_path(symbol)}/{kind}/" + ("draft" if draft else "preview"), payload, key)

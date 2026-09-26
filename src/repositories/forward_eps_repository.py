@@ -181,6 +181,8 @@ class ForwardEPSRepository:
             )
             if existing:
                 return existing
+            if payload.get("fiscal_year") is None:
+                raise ValueError("pe_fiscal_year_required")
             self._validate_revision(
                 conn, "pe_scenarios", payload["logical_series_id"],
                 payload["revision_number"], payload["revision_of"], payload,
@@ -193,8 +195,8 @@ class ForwardEPSRepository:
                     revision_number,revision_of,label,pe_value,rationale,evidence_level,
                     scope,symbol,industry,market,available_at,ingested_at,
                     approval_status,approved_by,approved_at,effective_from,effective_to,
-                    evidence_basis_rule_id,version
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    evidence_basis_rule_id,version,fiscal_year
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     record_id, idempotency_key, fingerprint,
@@ -205,7 +207,7 @@ class ForwardEPSRepository:
                     payload["available_at"], ingested, payload["approval_status"],
                     payload["approved_by"], payload["approved_at"],
                     payload["effective_from"], payload["effective_to"],
-                    payload["evidence_basis_rule_id"], payload["version"],
+                    payload["evidence_basis_rule_id"], payload["version"], payload["fiscal_year"],
                 ),
             )
             result = _row_dict(conn.execute(
@@ -249,6 +251,10 @@ class ForwardEPSRepository:
             ).fetchone()
             if resource is None:
                 raise ValueError("approval resource does not exist")
+            if (approval.resource_type is ApprovalResourceType.PE_SCENARIO
+                    and approval.decision.value == "approved"
+                    and resource["fiscal_year"] is None):
+                raise ValueError("pe_fiscal_year_required_create_revision")
             previous_decision = conn.execute(
                 """
                 SELECT available_at FROM valuation_approvals

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.research_assistant.cli import compact, parser
+from src.research_assistant.cli import compact, execute, parser
 from src.research_assistant.client import AssistantError, CONTRACT, LocalClient, NoRedirect, local_origin, request_key, atomic_json
 
 
@@ -109,6 +109,28 @@ def test_cli_has_no_approval_or_generic_http_commands():
     p=parser()
     for command in (["approve"], ["request","http://external"], ["save","--review","a","--note-file","b","--request-id","12345678"]):
         with pytest.raises(SystemExit):p.parse_args(command)
+
+
+def test_pe_preview_requires_server_year_pairing_capability(client):
+    calls = []
+    client.mutate = lambda path, body, key: calls.append((path, body, key)) or {"status": "preview_only"}
+    client._http = lambda path: {"ready": True, "research_assistant_contract": CONTRACT}
+    payload = {"values": {"fiscal_year": 2027, "pe_value": 20, "label": "test", "rationale": "custom"}}
+    with pytest.raises(AssistantError, match="pe_fiscal_year_upgrade_required"):
+        client.assumption("2330.TW", "pe", payload)
+    assert calls == []
+    client._http = lambda path: {"ready": True, "valuation_pairing_policy": "same_fiscal_year_v1"}
+    assert client.assumption("2330.TW", "pe", payload)["status"] == "preview_only"
+    assert calls[0][1]["values"]["fiscal_year"] == 2027
+
+
+def test_doctor_exposes_pairing_capability_without_starting(client):
+    starts = []
+    client.connect = lambda *, start: starts.append(start) or {"valuation_pairing_policy": "same_fiscal_year_v1"}
+    client.active_operation = lambda: None
+    result = execute(parser().parse_args(["doctor"]), client)
+    assert starts == [False]
+    assert result["valuation_pairing_policy"] == "same_fiscal_year_v1"
 
 
 def test_compact_preserves_provenance_and_explicitly_marks_omitted_rows():

@@ -49,6 +49,7 @@ ADDITIONAL_MIGRATION_IDS = (
     "20260911_23_daily_public_data",
     "20260911_24_local_research_commands",
     "20260911_25_daily_research_notes",
+    "20260926_26_pe_fiscal_year",
 )
 ADDITIONAL_MIGRATION_FILES = tuple(
     Path(__file__).resolve().parents[2] / "migrations" / f"{migration_id}.sql"

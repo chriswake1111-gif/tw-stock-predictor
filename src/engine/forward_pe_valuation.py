@@ -90,11 +90,27 @@ class ForwardPEValuationEngine:
             )
         ]
         symbol_scenarios = pe_by_scope["symbol"]
+        matched_scenarios = [
+            pe for pe in symbol_scenarios
+            if pe.get("fiscal_year") is not None
+            and any(pe["fiscal_year"] == eps["fiscal_year"] for eps in observations)
+        ]
+        unmatched_years = sorted({
+            eps["fiscal_year"] for eps in observations
+            if not any(pe.get("fiscal_year") == eps["fiscal_year"] for pe in matched_scenarios)
+        })
+        unbound_pe_ids = [pe["id"] for pe in symbol_scenarios if pe.get("fiscal_year") is None]
+        year_pairing = {
+            "policy_version": "same_fiscal_year_v1",
+            "status": "needs_human_input" if unmatched_years or unbound_pe_ids else "available",
+            "unmatched_eps_years": unmatched_years,
+            "unbound_pe_ids": unbound_pe_ids,
+        }
         forecast_approval_ids = [
             row["verified_approval_id"] for row in observations
         ]
         pe_approval_ids = [
-            row["verified_approval_id"] for row in symbol_scenarios
+            row["verified_approval_id"] for row in matched_scenarios
         ]
         rules_used = [
             self._rule_trace("VAL-01", knowledge_cutoff_at),
@@ -103,7 +119,7 @@ class ForwardPEValuationEngine:
         if any(
             row.get("evidence_basis_rule_id") == "VAL-03"
             and float(row["pe_value"]) in {20.0, 21.0, 25.0}
-            for row in symbol_scenarios
+            for row in matched_scenarios
         ):
             rules_used.append(self._rule_trace("VAL-03", knowledge_cutoff_at))
         rules_used.append(
@@ -119,6 +135,7 @@ class ForwardPEValuationEngine:
                 "automatic_use": False,
             },
             "target_matrix": [],
+            "year_pairing": year_pairing,
             "historical_ttm_reference": {
                 "status": "insufficient_data",
                 "value": None,
@@ -127,6 +144,7 @@ class ForwardPEValuationEngine:
             "invalidation_conditions": [
                 "forward_eps_revised_or_revoked",
                 "approved_symbol_pe_revised_revoked_or_expired",
+                "eps_and_pe_fiscal_year_must_match",
             ],
             "rules_used": rules_used,
             "multiple_sources_aggregated": False,
@@ -157,6 +175,12 @@ class ForwardPEValuationEngine:
                 "status": "needs_human_input",
                 "reason": "approved_symbol_pe_missing_at_knowledge_cutoff",
             }
+        if not matched_scenarios:
+            return {
+                **base,
+                "status": "needs_human_input",
+                "reason": "pe_fiscal_year_required" if unbound_pe_ids else "approved_symbol_pe_year_mismatch",
+            }
 
         cells = []
         applicable_count = 0
@@ -169,7 +193,9 @@ class ForwardPEValuationEngine:
             for eps_label, eps_value in eps_values:
                 if eps_value is None:
                     continue
-                for pe_scenario in symbol_scenarios:
+                for pe_scenario in matched_scenarios:
+                    if pe_scenario["fiscal_year"] != observation["fiscal_year"]:
+                        continue
                     applicable = float(eps_value) > 0
                     if applicable:
                         applicable_count += 1
@@ -195,6 +221,8 @@ class ForwardPEValuationEngine:
                         "pe_revision_number": pe_scenario["revision_number"],
                         "pe_label": pe_scenario["label"],
                         "pe_value": float(pe_scenario["pe_value"]),
+                        "pe_fiscal_year": pe_scenario["fiscal_year"],
+                        "pairing_policy_version": "same_fiscal_year_v1",
                         "target_price": round(float(eps_value) * float(pe_scenario["pe_value"]), 4) if applicable else None,
                         "formula": "forward_eps * approved_symbol_pe",
                         "rule_ids": rule_ids,

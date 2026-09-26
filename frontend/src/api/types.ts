@@ -136,6 +136,8 @@ export interface ForwardPeTargetCell extends UnknownRecord {
   observation_id: string;
   pe_scenario_id: string;
   fiscal_year: number;
+  pe_fiscal_year?: number;
+  pairing_policy_version?: string;
   source_name: string;
   eps_scenario: string;
   eps_value: number;
@@ -775,6 +777,7 @@ export interface ValuationContextSummary {
   status: "needs_human_judgment" | "available" | "insufficient_data";
   reason_code: string | null;
   target_matrix: unknown[];
+  year_pairing?: { policy_version: string; status: string; unmatched_eps_years: number[]; unbound_pe_ids: string[] };
 }
 
 export interface TechnicalContextSummary {

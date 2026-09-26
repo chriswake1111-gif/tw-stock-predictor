@@ -14,7 +14,7 @@ def service(tmp_path):
 
 
 EPS = dict(fiscal_year=2026, eps_base=100, source="使用者研究", source_date="2026-09-01", rationale="預估年度獲利")
-PE = dict(label="基準", pe_value=20, rationale="使用者確認適用的情境")
+PE = dict(label="基準", pe_value=20, fiscal_year=2026, rationale="使用者確認適用的情境")
 
 
 def draft(service, kind, values, key, previous=None):
@@ -81,3 +81,29 @@ def test_anchor_preview_does_not_write_or_approve(service):
     assert service.technical.analyze("2330.TW", utc_now_timestamp())["status"] == "available"
     approve(service, "anchor", record, "anchor-revoke-1", "revoke")
     assert service.technical.analyze("2330.TW", utc_now_timestamp())["status"] != "available"
+
+
+def test_pe_year_revision_requires_new_approval_and_preserves_historical_pair(service):
+    eps = draft(service, "eps", EPS, "year-eps-draft")
+    pe = draft(service, "pe", PE, "year-pe-draft")
+    approve(service, "eps", eps, "year-eps-approve")
+    approve(service, "pe", pe, "year-pe-approve")
+    before = utc_now_timestamp()
+    assert service.valuation.analyze("2330.TW", before)["target_matrix"][0]["target_price"] == 2000
+    revised = draft(service, "pe", {**PE, "fiscal_year": 2027}, "year-pe-revised", pe["record"]["id"])
+    assert revised["record"]["revision_number"] == 2
+    assert service.valuation.analyze("2330.TW", utc_now_timestamp())["target_matrix"] == []
+    approve(service, "pe", revised, "year-pe-reapprove")
+    result = service.valuation.analyze("2330.TW", utc_now_timestamp())
+    assert result["target_matrix"] == []
+    assert result["reason"] == "approved_symbol_pe_year_mismatch"
+    assert service.valuation.analyze("2330.TW", before)["target_matrix"][0]["pe_fiscal_year"] == 2026
+    with pytest.raises(ValueError, match="idempotency_conflict"):
+        draft(service, "pe", {**PE, "fiscal_year": 2027}, "year-pe-draft")
+
+
+def test_pe_preview_requires_year_without_writes(service):
+    values = {k: v for k, v in PE.items() if k != "fiscal_year"}
+    with pytest.raises(ValueError, match="pe_fiscal_year_required"):
+        service.preview("2330.TW", "pe", values)
+    assert service.list("2330.TW")["items"] == []
