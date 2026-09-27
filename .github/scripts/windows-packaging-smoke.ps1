@@ -457,7 +457,7 @@ try {
 
     $peBefore = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/assumptions/2330.TW" -UseBasicParsing -TimeoutSec 15
     $pePreviewHeaders = @{} + $assumptionHeaders
-    $pePreviewBody = @{ values = @{ label = "installed smoke base"; pe_value = 20; rationale = "Installed smoke test local PE preview" } } | ConvertTo-Json -Depth 4
+    $pePreviewBody = @{ values = @{ label = "installed smoke base"; fiscal_year = $smokeFiscalYear; pe_value = 20; rationale = "Installed smoke test local PE preview" } } | ConvertTo-Json -Depth 4
     $pePreview = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/assumptions/2330.TW/pe/preview" -Method POST -Headers $pePreviewHeaders -Body $pePreviewBody -WebSession $smokeSession -TimeoutSec 15
     Assert-True ($pePreview.status -eq "preview_only" -and $pePreview.approval_required) "local PE preview failed"
     $peAfterPreview = Invoke-RestMethod -Uri "$($descriptor.origin)/api/v2/research/assumptions/2330.TW" -UseBasicParsing -TimeoutSec 15
@@ -518,6 +518,7 @@ try {
     Assert-True ($LASTEXITCODE -eq 0) "research assistant doctor failed: $doctorJson"
     $doctor = $doctorJson | ConvertFrom-Json
     Assert-True ($doctor.contract_version -eq "tw_stock_research_assistant_v1") "research assistant doctor contract mismatch"
+    Assert-True ($doctor.research_guidance_contract -eq "research_guidance_v1") "research assistant guidance contract mismatch"
 
     $assistantSearchJson = (& $researchAssistant "--user-root" $user "search" "2330" | Out-String).Trim()
     Assert-True ($LASTEXITCODE -eq 0) "research assistant search failed: $assistantSearchJson"
