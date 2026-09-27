@@ -523,7 +523,7 @@ try {
     $assistantSearchJson = (& $researchAssistant "--user-root" $user "search" "2330" | Out-String).Trim()
     Assert-True ($LASTEXITCODE -eq 0) "research assistant search failed: $assistantSearchJson"
     $assistantSearch = $assistantSearchJson | ConvertFrom-Json
-    Assert-True ($assistantSearch.results | Where-Object { $_.canonical_symbol -eq "2330.TW" }) "research assistant search did not find 2330.TW"
+    Assert-True (@($assistantSearch.results | Where-Object { $_.canonical_symbol -eq "2330.TW" }).Count -ge 1) "research assistant search did not find 2330.TW"
 
     $assistantReviewJson = (& $researchAssistant "--user-root" $user "review" "2330.TW" | Out-String).Trim()
     Assert-True ($LASTEXITCODE -eq 0) "research assistant review failed: $assistantReviewJson"
@@ -542,7 +542,7 @@ try {
     $assistantSaveJson = (& $researchAssistant @assistantSaveArgs | Out-String).Trim()
     Assert-True ($LASTEXITCODE -eq 0) "research assistant save failed: $assistantSaveJson"
     $assistantSaved = $assistantSaveJson | ConvertFrom-Json
-    Assert-True ($assistantSaved.entry_id) "research assistant save did not return entry_id"
+    Assert-True (-not [string]::IsNullOrWhiteSpace($assistantSaved.entry_id)) "research assistant save did not return entry_id"
     $assistantRetryJson = (& $researchAssistant @assistantSaveArgs | Out-String).Trim()
     Assert-True ($LASTEXITCODE -eq 0) "research assistant idempotent retry failed: $assistantRetryJson"
     $assistantRetry = $assistantRetryJson | ConvertFrom-Json
