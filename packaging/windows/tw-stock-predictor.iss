@@ -36,7 +36,6 @@ Source: "{#TW_STOCK_BUILD_ROOT}\tw-stock-predictor-server\*"; DestDir: "{app}\tw
 Source: "{#TW_STOCK_BUILD_ROOT}\tw-stock-research\*"; DestDir: "{app}\research"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#TW_STOCK_BUILD_ROOT}\skills\tw-stock-research\SKILL.md"; DestDir: "{app}\skills\tw-stock-research"; Flags: ignoreversion
 Source: "{#TW_STOCK_BUILD_ROOT}\skills\tw-stock-research\references\*.md"; DestDir: "{app}\skills\tw-stock-research\references"; Flags: ignoreversion
-Source: "{#TW_STOCK_BUILD_ROOT}\skills\tw-stock-research\references\*.md"; DestDir: "{app}\skills\tw-stock-research\references"; Flags: ignoreversion
 Source: "{#TW_STOCK_BUILD_ROOT}\skills\du-jinlong-research-method\SKILL.md"; DestDir: "{app}\skills\du-jinlong-research-method"; Flags: ignoreversion
 Source: "{#TW_STOCK_BUILD_ROOT}\skills\du-jinlong-research-method\references\*.md"; DestDir: "{app}\skills\du-jinlong-research-method\references"; Flags: ignoreversion
 

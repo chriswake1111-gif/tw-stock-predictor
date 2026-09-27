@@ -24,7 +24,6 @@ RESEARCH_SKILL = ROOT / "skills" / "tw-stock-research" / "SKILL.md"
 RESEARCH_SKILL_FILES = (
     "tw-stock-research/SKILL.md",
     "tw-stock-research/references/research-guidance-v1.md",
-    "tw-stock-research/references/research-guidance-v1.md",
     "du-jinlong-research-method/SKILL.md",
     "du-jinlong-research-method/references/evidence-cards.md",
     "du-jinlong-research-method/references/candidate-workflow.md",
