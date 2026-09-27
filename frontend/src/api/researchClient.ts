@@ -9,7 +9,7 @@ import { getLocalCsrfToken, invalidateLocalCsrfToken, isCsrfRejection } from "./
 function csrfEndpoint(path: string): "/api/v2/data-operations/csrf-token" | "/api/v2/research/csrf-token" {
   // Installed local research is independent of the older workflow write gate.
   // Both endpoints issue sessions consumed by the existing security middleware.
-  return /^\/api\/v2\/research\/(assumptions|journal)(\/|$)/.test(path)
+  return /^\/api\/v2\/research\/(assumptions|journal|evidence)(\/|$)/.test(path)
     ? "/api/v2/data-operations/csrf-token"
     : "/api/v2/research/csrf-token";
 }
@@ -50,6 +50,16 @@ export async function researchMutation<T>(path: string, payload: unknown, idempo
 
 export function researchErrorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback;
+  const guidanceErrors: Record<string, string> = {
+    research_content_changed_review_again: '資料或核准內容已更新，請重新預覽差異，再確認保存；原筆記仍保留。',
+    research_evidence_changed_review_again: '這份來源已有新版本，請重新閱讀候選與限制。',
+    candidate_values_mismatch: '候選內容與預覽不一致，請重新取得來源版本。',
+    candidate_requires_concise_evidence_revision: '來源與限制超過現有假設欄位容量，請助理精簡查證版本；不會截掉重要內容。',
+    research_evidence_storage_full: '本機查證區已達容量上限，既有研究仍可閱讀；請先決定紀錄整理方式。',
+    evidence_not_selectable: '這份資料目前僅供查證，尚不能建立假設。',
+  };
+  const guidanceMessage = guidanceErrors[error.message];
+  if (guidanceMessage) return guidanceMessage;
   if (error.message === "pe_fiscal_year_required") return "請填寫 PE 適用年度；只會搭配同年度的全年預估 EPS。";
   if (error.message === "pe_fiscal_year_required_create_revision") return "這份舊 PE 尚未註明年度。請修改此版本、補上適用年度，再核准新版本。";
   if (error.message === "csrf_refresh_required") return "操作驗證已更新，本次操作尚未執行。請再按一次原操作；已填內容仍保留。";

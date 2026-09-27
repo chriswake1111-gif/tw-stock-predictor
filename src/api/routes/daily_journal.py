@@ -14,6 +14,8 @@ class SaveNote(BaseModel):
     knowledge_cutoff_at: str
     note: str = Field(default="", max_length=4000)
     expected_content_fingerprint: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    research_year: int | None = Field(default=None, ge=1900, le=2200, strict=True)
+    include_research_context: bool = False
 
 
 def service(request):
@@ -35,9 +37,10 @@ def history(symbol: str, request: Request, limit: int = Query(20, ge=1, le=50)):
 def save(symbol: str, payload: SaveNote, request: Request,
          idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=8, max_length=128)):
     return invoke(lambda: service(request).save(symbol, payload.knowledge_cutoff_at, payload.note,
-                                              idempotency_key, payload.expected_content_fingerprint))
+                                              idempotency_key, payload.expected_content_fingerprint,
+                                              payload.research_year, payload.include_research_context))
 
 
 @router.get("/{symbol}/preview")
-def preview(symbol: str, request: Request):
-    return invoke(lambda: service(request).preview(symbol))
+def preview(symbol: str, request: Request, research_year: int | None = Query(None, ge=1900, le=2200)):
+    return invoke(lambda: service(request).preview(symbol, research_year))

@@ -6,9 +6,11 @@ import { StockResearchPage } from "../pages/StockResearchPage";
 import { bootstrapSymbol, getResearchSummary } from "../api/phase20Client";
 import { getOperationDetails } from "../api/dataOperationsClient";
 import type { ResearchSummaryResponse } from "../api/types";
+import { readReview, type Review } from "../api/guidanceClient";
 
 vi.mock("../api/phase20Client", () => ({ bootstrapSymbol: vi.fn(), getResearchSummary: vi.fn() }));
 vi.mock("../api/dataOperationsClient", () => ({ getOperationDetails: vi.fn() }));
+vi.mock("../api/guidanceClient", async original => ({ ...await original<typeof import('../api/guidanceClient')>(), readReview: vi.fn() }));
 
 const summary = (symbol: string) => ({
   canonical_symbol: symbol, official_code: symbol.split(".")[0], venue: "TWSE", company_name: symbol,
@@ -27,6 +29,9 @@ function Harness() {
 describe("installed research refresh", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // This suite retains the original entry's refresh behavior; the guided
+    // workspace has its own end-to-end and component coverage.
+    vi.mocked(readReview).mockResolvedValue({} as Review);
     vi.mocked(getResearchSummary).mockImplementation(async symbol => summary(symbol));
     vi.mocked(bootstrapSymbol).mockResolvedValue({ status: "preparing", canonical_symbol: "2330.TW", operation_id: "op1" });
   });

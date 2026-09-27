@@ -26,6 +26,21 @@ description: 使用這台 Windows 的 TW Stock Predictor 安裝版研究上市�
 
 ## 缺項分工
 
+### 引導第一版：本機查證工作區
+
+先確認 `doctor/connect.research_guidance_contract=research_guidance_v1`。舊安裝版沒有此能力時，只在對話整理候選；不能直接寫資料庫，也不自行安裝升級。
+
+每次先讀 `evidence-list SYMBOL` 與 `review SYMBOL [--year 2026]`，採用程式 `guidance` 的缺項責任與實際有效情境。`--year` 只選引導年度，不核准、不篩除其他已計算情境。原始金融狀態不因引導文案而改變。
+
+在本次使用者已要求進行的研究內，可自動用 `evidence-record SYMBOL --input FILE --request-id UUID` 保留候選、查無合格來源與助理整理稿；不需要另一次正式研究保存確認。使用者明示「不寫入任何紀錄」時尊重其限制。這是查證工作紀錄，與假設草稿、核准、正式研究保存三者分開。
+
+- 欄位與例子見 [查證紀錄格式](references/research-guidance-v1.md)。同內容重送不新增版本；修訂或重新查證帶 `previous_id`（即使結果相同），由伺服器記錄這次新查證時間，不覆寫或移植核准。
+- 候選的來源可讀性用 `source_access=read|blocked|unread`；無法核讀／數字矛盾者保留 `review_status=lead`，衝突另設 `unresolved_conflict=true`。不能以核准解決資料矛盾。
+- 同股票、年度、查找範圍先 `evidence-reuse SYMBOL --scope "2026 全年估值" --year 2026`；24 小時內查無結果，預設沿用並明示上次時間。使用者要求續查用 `--force`，新報告／修訂／事件用 `--new-information`，這兩個參數只回傳重查提示，不代表已搜尋。
+- 每項最多三個適用候選。沒有合格來源時主動建議閱讀或保存部分研究，停止要求選數值。歷史案例、線索、未採用候選留在查證歷程。
+- `brief.note_draft` 是人工智慧草稿，附最新 `review.financial_content_fingerprint` 作 `base_review_fingerprint`，只在其資料與假設仍相符時供保存預覽使用。保持使用者原文分開，不存整段對話。
+- 單筆 16 KiB、查證區 64 MiB 邏輯配額（含列及索引預留）；額滿停寫，保留舊紀錄，不自動清理或建立背景排程。
+
 先對照 review 的實際內容，列出必要項目即可，不要求使用者填滿所有模組。
 
 | 缺項 | 對研究的影響 | 助理／程式的下一步 | 使用者需要做什麼 |
@@ -61,7 +76,7 @@ PE 使用結構化 `fiscal_year` 限定適用年度。先從 doctor／connect �
 
 把候選整理成預覽 JSON，使用 `assumption-preview SYMBOL eps|pe|anchor --input FILE`。
 EPS values: fiscal_year, eps_base, source, source_date, rationale；PE values: fiscal_year, label, pe_value, rationale；錨點 values: rule_id (FB-03/FB-04), anchors (role, price, market_date), source, rationale。
-外層只有 `values` 與可選 `previous_id`。來源文字包含發布者、報告標題及 URL；PE 的來源記在 rationale。自行推估明示其性質，不自動建立。
+外層為 `values` 與可選 `previous_id`、`candidate_id`。有本機候選時先 `evidence-candidate SYMBOL --id RECORD_ID` 取得伺服器整理的 values，將 values 與 candidate_id 原樣交 preview／draft（不要夾帶回應的 kind、approval_required）；由伺服器核對版本、股票、年度、值與限制。來源文字包含發布者、報告標題及 URL；PE 的來源記在 rationale。自行推估明示其性質，不自動建立。
 年度填入 `fiscal_year`（1900–2200 的整數）；盈餘口徑、發布者／日期／URL、採用理由與限制寫入既有來源及 rationale 欄位，不自行新增其他 API 欄位。若現有長度或格式無法保留關鍵證據，停止並回報限制，不靜默截掉。舊 PE 年度為空時不能計算，使用者選定年度後沿 `previous_id` 建立新版本，正式核准仍由介面完成。改年度會取代該系列；要保留兩年分別可用的假設，須明確選擇建立不同系列。
 使用者明確選用候選作為草稿後，才執行 `assumption-draft SYMBOL KIND --input FILE --confirmed --request-id ID`。檔案使用 UTF-8；ID 為每個邏輯請求固定 UUID，重試不得換 ID 或 payload。
 用 `open SYMBOL --assumptions` 開啟介面，告知返回的 record.id；正式核准、撤銷都由使用者在介面操作。之後重新 `review SYMBOL` 驗證程式狀態，不以對話宣稱代替實際核准。
@@ -85,6 +100,7 @@ TTM／市場 PE／Forward EPS 的差異只在需要時解釋。沒有波浪情�
 只有使用者確認這份內容後才執行：
 `save --review REVIEW_FILE --note-file NOTE_FILE --request-id ID --confirmed`。
 review_file 是程式給的完整本機收據；不可改寫指紋、截止時間或標的來繞過檢查。筆記為最多 4000 字的 UTF-8 純文字。
+有引導的保存自動附帶查證版本及缺項摘要，日後來源更新不改寫已保存研究。核准與保存是兩個獨立動作，不另增加相同內容的重複確認。
 `research_content_changed_review_again` 時重新 review、展示差異並再確認，不自動接受新版。回應遺失時沿用同一 review、note、request-id 重試，已成功保存會回傳原紀錄。
 保存不代表完整分析或歷史回測資格，不自動加入自選。
 

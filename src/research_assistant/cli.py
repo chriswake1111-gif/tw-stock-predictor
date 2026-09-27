@@ -44,6 +44,22 @@ def parser():
     sub.add_parser("connect")
     search = sub.add_parser("search")
     search.add_argument("query")
+    for cmd in ("evidence-list", "evidence-record", "evidence-reuse", "evidence-candidate"):
+        q = sub.add_parser(cmd)
+        q.add_argument("symbol")
+        if cmd == "evidence-record":
+            q.add_argument("--input", required=True)
+            q.add_argument("--request-id", required=True)
+        elif cmd == "evidence-candidate":
+            q.add_argument("--id", required=True)
+        elif cmd == "evidence-list":
+            q.add_argument("--history", action="store_true")
+            q.add_argument("--before")
+        else:
+            q.add_argument("--scope", required=True)
+            q.add_argument("--year", type=int)
+            q.add_argument("--force", action="store_true")
+            q.add_argument("--new-information", action="store_true")
     research = sub.add_parser("research")
     research.add_argument("query")
     research.add_argument("--wait-seconds", type=float, default=120)
@@ -52,6 +68,8 @@ def parser():
         q.add_argument("symbol")
         if cmd == "open":
             q.add_argument("--assumptions", action="store_true")
+        if cmd == "review":
+            q.add_argument("--year", type=int)
         if cmd == "update":
             q.add_argument("--refresh", action="store_true")
     for cmd in ("operation", "wait", "cancel"):
@@ -93,9 +111,21 @@ def execute(args, client):
     if cmd in {"connect", "doctor"}:
         return {"status":"ready", "origin":client.origin, "build_sha":client.descriptor["build_sha"],
                 "active_operation":client.active_operation(),
-                "valuation_pairing_policy":connection.get("valuation_pairing_policy")}
+                "valuation_pairing_policy":connection.get("valuation_pairing_policy"),
+                "research_guidance_contract":connection.get("research_guidance_contract")}
     if cmd == "search":
         return client.search(args.query)
+    if cmd.startswith("evidence-"):
+        symbol, selection = client.resolve(args.symbol)
+        if symbol is None:
+            return selection
+        if cmd == "evidence-record":
+            return client.evidence(symbol, read_json(args.input), args.request_id)
+        if cmd == "evidence-candidate":
+            return client.evidence_candidate(symbol, args.id)
+        if cmd == "evidence-reuse":
+            return client.evidence_reuse(symbol, args.scope, args.year, force=args.force, new_information=args.new_information)
+        return client.evidence(symbol, history=args.history, before=args.before)
     if cmd == "research":
         if not 0 <= args.wait_seconds <= 120:
             raise AssistantError("wait_out_of_range")
@@ -105,7 +135,7 @@ def execute(args, client):
         if symbol is None:
             return selection
         if cmd == "review":
-            result = {"status":"review_ready", "review":client.review(symbol)}
+            result = {"status":"review_ready", "review":client.review(symbol, args.year) if args.year else client.review(symbol)}
         elif cmd == "update":
             return client.update(symbol, refresh=args.refresh)
         elif cmd == "open":

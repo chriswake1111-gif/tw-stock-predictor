@@ -82,6 +82,19 @@ def test_skill_bundle_copies_references_but_not_runtime_files(tmp_path, monkeypa
     assert not (tmp_path / "incomplete").exists()
 
 
+def test_guidance_reference_is_shipped_and_installed(tmp_path):
+    from tools.build_windows_package import _copy_research_skills
+
+    copied = _copy_research_skills(tmp_path)
+    guide = tmp_path / "skills/tw-stock-research/references/research-guidance-v1.md"
+    assert guide in copied
+    skill = (tmp_path / "skills/tw-stock-research/SKILL.md").read_text(encoding="utf-8")
+    assert "references/research-guidance-v1.md" in skill
+    assert "evidence-record" in guide.read_text(encoding="utf-8")
+    installer = (WINDOWS / "tw-stock-predictor.iss").read_text(encoding="utf-8")
+    assert 'Source: "{#TW_STOCK_BUILD_ROOT}\\skills\\tw-stock-research\\references\\*.md"; DestDir: "{app}\\skills\\tw-stock-research\\references"' in installer
+
+
 def test_manifest_disambiguates_skill_names_and_detects_reference_tamper(tmp_path):
     from tools.build_windows_package import _copy_research_skills
     from src.runtime.manifest import build_external_distribution_manifest

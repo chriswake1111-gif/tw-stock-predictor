@@ -185,7 +185,31 @@ class LocalClient:
             raise AssistantError("assistant_upgrade_required")
         return {"contract_version": CONTRACT, "status": "ready", "origin": self.origin,
                 "build_sha": expected_build,
-                "valuation_pairing_policy": ready.get("valuation_pairing_policy")}
+                "valuation_pairing_policy": ready.get("valuation_pairing_policy"),
+                "research_guidance_contract": ready.get("research_guidance_contract")}
+
+    def evidence(self, symbol, payload=None, key=None, *, history=False, before=None):
+        if self._http("/api/ready").get("research_guidance_contract") != "research_guidance_v1":
+            raise AssistantError("research_guidance_upgrade_required")
+        path = f"/api/v2/research/evidence/{symbol_path(symbol)}"
+        if payload is not None:
+            request_key(key)
+            return self.mutate(path, payload, key)
+        query = urllib.parse.urlencode({"history": str(history).lower(), **({"before": before} if before else {})})
+        return self._http(path + "?" + query)
+
+    def evidence_reuse(self, symbol, scope, year=None, *, force=False, new_information=False):
+        if self._http("/api/ready").get("research_guidance_contract") != "research_guidance_v1":
+            raise AssistantError("research_guidance_upgrade_required")
+        query = {"scope":scope, "force":str(force).lower(), "new_information":str(new_information).lower()}
+        if year is not None:
+            query["fiscal_year"] = year
+        return self._http(f"/api/v2/research/evidence/{symbol_path(symbol)}/reuse?" + urllib.parse.urlencode(query))
+
+    def evidence_candidate(self, symbol, record_id):
+        if self._http("/api/ready").get("research_guidance_contract") != "research_guidance_v1":
+            raise AssistantError("research_guidance_upgrade_required")
+        return self._http(f"/api/v2/research/evidence/{symbol_path(symbol)}/{identifier(record_id)}/candidate")
 
     def mutate(self, path, body, key=None):
         self.token = self._http("/api/v2/data-operations/csrf-token")["csrf_token"]
@@ -211,8 +235,11 @@ class LocalClient:
             return None, {"status":"unsupported_instrument", "instrument":row}
         return symbol, row
 
-    def review(self, symbol):
-        result = self._http(f"/api/v2/research/journal/{symbol_path(symbol)}/preview")
+    def review(self, symbol, year=None):
+        if year is not None and (type(year) is not int or not 1900 <= year <= 2200):
+            raise AssistantError("invalid_research_year")
+        query = "?research_year=" + str(year) if year is not None else ""
+        result = self._http(f"/api/v2/research/journal/{symbol_path(symbol)}/preview" + query)
         if result.get("contract_version") != CONTRACT or result.get("symbol") != symbol:
             raise AssistantError("response_contract_invalid")
         return result
@@ -307,9 +334,11 @@ class LocalClient:
         request_key(key)
         if len(note) > 4000:
             raise AssistantError("invalid_save_request")
+        context = ({"include_research_context": True, "research_year": reviewed["guidance"].get("selected_year")}
+                   if reviewed.get("guidance", {}).get("contract_version") == "research_guidance_v1" else {})
         return self.mutate(f"/api/v2/research/journal/{symbol_path(reviewed['symbol'])}",
                            {"knowledge_cutoff_at":reviewed["knowledge_cutoff_at"], "note":note,
-                            "expected_content_fingerprint":reviewed["content_fingerprint"]}, key)
+                            "expected_content_fingerprint":reviewed["content_fingerprint"], **context}, key)
 
     def page_url(self, symbol, *, assumptions=False):
         return f"{self.origin}/stocks/{symbol_path(symbol)}" + ("#local-assumptions" if assumptions else "")

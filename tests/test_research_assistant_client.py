@@ -66,6 +66,42 @@ def test_exact_resolved_ordinary_stock(client,symbol):
     assert client.resolve(symbol)[0]==symbol
 
 
+def test_evidence_commands_check_capability_and_encode_scope(client):
+    calls = []
+    def http(path, **kwargs):
+        calls.append((path, kwargs))
+        return {"research_guidance_contract":"research_guidance_v1"} if path == "/api/ready" else {"items":[]}
+    client._http = http
+    client.evidence("2330.TW", history=True, before="evidence_cursor")
+    assert "history=true&before=evidence_cursor" in calls[-1][0]
+    client.evidence_reuse("2330.TW", "2026 全年估值", 2026, force=True)
+    assert "force=true" in calls[-1][0] and "fiscal_year=2026" in calls[-1][0]
+    client.evidence_candidate("2330.TW", "evidence_abc")
+    assert calls[-1][0].endswith("/evidence_abc/candidate")
+    client._http = lambda *a, **k: {}
+    for command in (lambda:client.evidence("2330.TW"), lambda:client.evidence_reuse("2330.TW","scope"), lambda:client.evidence_candidate("2330.TW","evidence_abc")):
+        with pytest.raises(AssistantError, match="upgrade_required"):
+            command()
+
+
+def test_guided_save_preserves_exact_review_and_separate_confirmation(client):
+    from src.research_assistant.cli import parser
+    args = parser().parse_args(["evidence-record", "2330.TW", "--input", "work.json", "--request-id", "01900000-0000-4000-8000-000000000001"])
+    assert args.command == "evidence-record" and not hasattr(args, "confirmed")
+    assert parser().parse_args(["review", "2330.TW", "--year", "2026"]).year == 2026
+    with pytest.raises(SystemExit):
+        parser().parse_args(["approve", "2330.TW"])
+    recorded = []
+    client.mutate = lambda path, body, key: recorded.append((path,body,key)) or {}
+    reviewed = {"contract_version":"tw_stock_research_assistant_v1", "symbol":"2330.TW",
+        "content_fingerprint":"a"*64, "knowledge_cutoff_at":"2026-01-01T00:00:00Z",
+        "guidance":{"contract_version":"research_guidance_v1","selected_year":2026}}
+    client.save(reviewed, "原文與草稿分開", "01900000-0000-4000-8000-000000000001")
+    assert recorded[0][1]["include_research_context"] is True
+    assert recorded[0][1]["research_year"] == 2026
+    assert recorded[0][1]["expected_content_fingerprint"] == reviewed["content_fingerprint"]
+
+
 def test_ambiguous_and_unsupported_do_not_trigger_update(client):
     client.search=lambda q:{"results":[stock(),stock("2408.TW")],"total_matches":2}
     assert client.research("台")["status"]=="needs_selection"
@@ -188,3 +224,15 @@ def test_start_missing_instance_uses_hidden_existing_launcher_and_explicit_user_
     assert calls[0][0]==[str(root/"tw-stock-predictor.exe"),"--user-root",str(client.user_root)]
     assert calls[0][1]["creationflags"] != 0
     assert len(calls)==1
+
+
+@pytest.mark.parametrize("command", ["doctor", "connect"])
+def test_cli_reports_guidance_capability(command):
+    client = SimpleNamespace(
+        connect=lambda **kwargs: {"research_guidance_contract": "research_guidance_v1"},
+        origin="http://127.0.0.1:12345",
+        descriptor={"build_sha": "test"},
+        active_operation=lambda: None,
+    )
+    result = execute(SimpleNamespace(command=command), client)
+    assert result["research_guidance_contract"] == "research_guidance_v1"

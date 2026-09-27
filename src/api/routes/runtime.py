@@ -6,6 +6,8 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from src.services.research_evidence_service import guidance_enabled
+from src.domain.research_evidence import GUIDANCE_CONTRACT
 
 
 READY_CONTRACT_VERSION = "tw_stock_ready_v1"
@@ -33,6 +35,7 @@ def readiness_payload(request: Request) -> dict[str, Any]:
         "reason": state.get("reason"),
         "research_assistant_contract": "tw_stock_research_assistant_v1",
         "valuation_pairing_policy": "same_fiscal_year_v1",
+        "research_guidance_contract": GUIDANCE_CONTRACT if guidance_enabled() else None,
     }
 
 

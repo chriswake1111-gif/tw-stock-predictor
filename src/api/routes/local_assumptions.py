@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.routes.installed_data_operations import _get_db_path, _get_instance_id
 from src.services.local_assumption_service import LocalAssumptionService
+from src.services.research_evidence_service import ResearchEvidenceService
 
 router = APIRouter(prefix="/api/v2/research/assumptions", tags=["local-assumptions"])
 
@@ -51,6 +52,7 @@ class AnchorValues(Strict):
 class Draft(Strict):
     values: EPSValues | PEValues | AnchorValues
     previous_id: str | None = Field(default=None, max_length=128)
+    candidate_id: str | None = Field(default=None, max_length=128)
 
 
 class Decision(Strict):
@@ -69,17 +71,22 @@ def invoke(fn):
     try:
         return fn()
     except (ValueError, KeyError) as exc:
-        conflict = "idempotency_conflict" in str(exc) or str(exc) == "research_content_changed_review_again"
+        conflict = "conflict" in str(exc) or str(exc) in {"research_content_changed_review_again", "research_evidence_changed_review_again"}
         raise HTTPException(409 if conflict else 422, detail=str(exc)) from exc
     except sqlite3.Error as exc:
         raise HTTPException(503, detail="local_research_storage_unavailable") from exc
 
 
-def values_for(kind, payload):
+def values_for(kind, payload, request=None):
     expected = {"eps": EPSValues, "pe": PEValues, "anchor": AnchorValues}[kind]
     if not isinstance(payload.values, expected):
         raise HTTPException(422, detail="assumption_kind_payload_mismatch")
-    return payload.values.model_dump(exclude_none=True)
+    values = payload.values.model_dump(exclude_none=True)
+    if payload.candidate_id and request is not None:
+        candidate_kind, candidate_values = ResearchEvidenceService(_get_db_path(request)).candidate_values(request.path_params["symbol"], payload.candidate_id)
+        if kind != candidate_kind or values != candidate_values:
+            raise ValueError("candidate_values_mismatch")
+    return values
 
 
 @router.get("/{symbol}")
@@ -89,14 +96,14 @@ def list_assumptions(symbol: str, request: Request):
 
 @router.post("/{symbol}/{kind}/preview")
 def preview(symbol: str, kind: Kind, payload: Draft, request: Request):
-    return invoke(lambda: service(request).preview(symbol, kind, values_for(kind, payload), payload.previous_id))
+    return invoke(lambda: service(request).preview(symbol, kind, values_for(kind, payload, request), payload.previous_id))
 
 
 @router.post("/{symbol}/{kind}/draft")
 def draft(symbol: str, kind: Kind, payload: Draft, request: Request,
           idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=8, max_length=128)):
     return invoke(lambda: service(request).execute(symbol, kind, "draft", values_for(kind, payload),
-                  idempotency_key, previous_id=payload.previous_id))
+                  idempotency_key, previous_id=payload.previous_id, candidate_id=payload.candidate_id))
 
 
 @router.post("/{symbol}/{kind}/{resource_id}/{action}")

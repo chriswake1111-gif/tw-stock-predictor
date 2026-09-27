@@ -1,5 +1,5 @@
 import type { ResearchSummaryResponse } from "../api/types";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 function rows(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter((row): row is Record<string, unknown> =>
@@ -12,6 +12,10 @@ function number(value: unknown): string {
 
 export function ResearchModelResults({ summary }: { summary: ResearchSummaryResponse }) {
   const [selection, setSelection] = useState("");
+  const selectorId = useId();
+  if (!summary.valuation_context || !summary.technical_context || !summary.audit_reference) {
+    return <section aria-label="模型研究結果"><h2>模型研究結果</h2><p>程式尚未取得足夠資料，這次沒有可保存的模型情境；仍可保留缺項與研究筆記。</p></section>;
+  }
   const valuation = summary.valuation_context.status === "available" ? rows(summary.valuation_context.target_matrix)
     .filter(row => (!row.status || row.status === "available") && typeof row.target_price === "number" && Number.isFinite(row.target_price)) : [];
   const technical = summary.technical_context.status === "available" ? rows(summary.technical_context.targets?.scenarios)
@@ -29,8 +33,8 @@ export function ResearchModelResults({ summary }: { summary: ResearchSummaryResp
       {!!summary.valuation_context.year_pairing.unbound_pe_ids.length && <p>有舊 PE 尚未註明適用年度。請補上年度並核准新版本；已保存研究保留不變。</p>}
       <a href="#local-assumptions">設定 PE 適用年度</a>
     </div>}
-    {groups.length > 1 && <div className="research-model-filter"><label htmlFor="valuation-display">想先看哪一組 EPS？</label>
-      <select id="valuation-display" value={activeSelection} onChange={event => setSelection(event.target.value)}>
+    {groups.length > 1 && <div className="research-model-filter"><label htmlFor={selectorId}>想先看哪一組 EPS？</label>
+      <select id={selectorId} value={activeSelection} onChange={event => setSelection(event.target.value)}>
         <option value="">查看全部已計算情境（{groups.length} 組 EPS）</option>
         {groups.map(([key, cell]) => <option key={key} value={key}>{String(cell.fiscal_year ?? "年度未提供")} 年 · EPS {number(cell.eps_value)} 元 · {String(cell.source_name || "來源未提供")} · v{String(cell.observation_revision_number ?? "未提供")}</option>)}
       </select><p>各年度、來源與 EPS 情境分開看；篩選只改變顯示，保存研究仍包含全部情境。</p></div>}

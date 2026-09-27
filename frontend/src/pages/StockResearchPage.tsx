@@ -13,6 +13,7 @@ import { cancelOperation, getOperationDetails } from "../api/dataOperationsClien
 import type { ResearchSummaryResponse } from "../api/types";
 import { ResearchSummaryCard } from "../components/ResearchSummaryCard";
 import { ResearchOverview } from "../components/ResearchOverview";
+import { GuidedResearchWorkspace } from "../components/GuidedResearchWorkspace";
 import { ResearchModelResults } from "../components/ResearchModelResults";
 import { DailyPublicDataPanel } from "../components/DailyPublicDataPanel";
 import { LocalAssumptionEditor } from "../components/LocalAssumptionEditor";
@@ -372,7 +373,7 @@ export function StockResearchPage() {
       {!loading && error && summary && <p role="status">更新未完成，以下保留本機資料；請留意行情日期。</p>}
       {/* Loaded summary */}
       {summary && summary.canonical_symbol === canonicalSymbol && (
-        <>
+        <GuidedResearchWorkspace key={`${canonicalSymbol}-${asOf || 'latest'}`} summary={summary} historical={!!asOf} onUpdate={() => { void loadData(); }}>
           <ResearchSummaryCard
             summary={summary}
             onOpenAuditDrawer={() => setAuditDrawerOpen(true)}
@@ -411,7 +412,7 @@ export function StockResearchPage() {
             audit={summary.audit_reference}
             canonicalSymbol={summary.canonical_symbol}
           />
-        </>
+        </GuidedResearchWorkspace>
       )}
     </div>
   );

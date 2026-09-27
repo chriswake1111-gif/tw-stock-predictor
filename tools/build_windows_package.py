@@ -23,6 +23,8 @@ WINDOWS_DIR = ROOT / "packaging" / "windows"
 RESEARCH_SKILL = ROOT / "skills" / "tw-stock-research" / "SKILL.md"
 RESEARCH_SKILL_FILES = (
     "tw-stock-research/SKILL.md",
+    "tw-stock-research/references/research-guidance-v1.md",
+    "tw-stock-research/references/research-guidance-v1.md",
     "du-jinlong-research-method/SKILL.md",
     "du-jinlong-research-method/references/evidence-cards.md",
     "du-jinlong-research-method/references/candidate-workflow.md",
@@ -179,7 +181,7 @@ def main() -> int:
         default=str(ROOT / "dist" / "windows-productization"),
         help="rebuildable output directory (must be absent unless --clean is supplied)",
     )
-    parser.add_argument("--app-version", default="1.0.0")
+    parser.add_argument("--app-version", default="1.1.0")
     parser.add_argument("--build-sha", default=None)
     parser.add_argument("--skip-frontend", action="store_true")
     parser.add_argument("--skip-installer", action="store_true")

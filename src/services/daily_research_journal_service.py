@@ -12,6 +12,8 @@ from src.domain.valuation import normalize_utc_timestamp, utc_now_timestamp
 from src.repositories.analysis_snapshot_repository import AnalysisSnapshotRepository, SnapshotIntegrityError
 from src.services.current_research_service import CurrentResearchService
 from src.services.local_assumption_service import LocalAssumptionService
+from src.services.research_evidence_service import ResearchEvidenceService, guidance_enabled
+from src.services.research_guidance_service import build_guidance
 
 ASSISTANT_CONTRACT = "tw_stock_research_assistant_v1"
 
@@ -93,7 +95,7 @@ class DailyResearchJournalService:
                 "assumption_fingerprint": sha256_json(_current_content(assumptions)),
                 "historical_eligibility": "not_asserted", "status": "partial"}
 
-    def _review(self, symbol, cutoff, payload):
+    def _review(self, symbol, cutoff, payload, research_year=None):
         previous = self.history(symbol, 1)["entries"]
         previous = previous[0] if previous else None
         latest = self._payload(symbol, utc_now_timestamp(), "")
@@ -101,21 +103,42 @@ class DailyResearchJournalService:
         guard = {"contract": ASSISTANT_CONTRACT, "reviewed": {**payload, "note": ""},
                  "latest": _current_content(latest["summary"]), "assumptions": assumptions,
                  "previous_entry_id": previous["entry_id"] if previous else None}
+        extra = {}
+        if guidance_enabled():
+            basis = sha256_json({"latest": _current_content(latest["summary"]),
+                                 "assumptions": assumptions, "previous_entry_id": guard["previous_entry_id"]})
+            evidence = ResearchEvidenceService(self.db_path).guidance_evidence(symbol, cutoff=cutoff)
+            guidance = build_guidance(payload["summary"], assumptions, evidence, research_year)
+            # An active assumption can intentionally retain an older source.
+            # Freeze that exact version too; do not silently replace its basis.
+            guidance["assumption_evidence"] = [
+                {"assumption_id": a["id"], "approval": a.get("approval"),
+                 "evidence": ResearchEvidenceService(self.db_path).get(symbol, a["candidate_id"])}
+                for a in assumptions if a.get("candidate_id") and not a.get("superseded")]
+            brief = next((i for i in evidence["all_items"] if i["kind"] == "brief" and i["fiscal_year"] in {None, guidance["selected_year"]}), None)
+            guidance["note_draft"] = brief["note_draft"] if brief and brief["base_review_fingerprint"] == basis else ""
+            guidance["note_draft_stale"] = bool(brief and brief["base_review_fingerprint"] != basis)
+            latest_evidence = ResearchEvidenceService(self.db_path).guidance_evidence(symbol)
+            guard["research_context"] = guidance
+            guard["latest_evidence"] = [(i["record_id"], i["content_sha256"]) for i in latest_evidence["all_items"]]
+            extra = {"guidance": guidance, "financial_content_fingerprint": basis}
         return {"contract_version": ASSISTANT_CONTRACT, "symbol": symbol,
                 "knowledge_cutoff_at": cutoff, "current": {**payload, "note": ""},
                 "previous": previous, "comparison": compare_entries(previous, payload),
-                "assumptions": assumptions, "content_fingerprint": sha256_json(guard)}
+                "assumptions": assumptions, "content_fingerprint": sha256_json(guard),
+                "review_revision_fingerprint": sha256_json(_current_content(guard)), **extra}
 
-    def preview(self, symbol):
+    def preview(self, symbol, research_year=None):
         parse_canonical_symbol(symbol)
         # Readers below use their own connections. Reserve the writer while
         # composing the review so they all observe the same committed state.
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute("BEGIN IMMEDIATE")
             cutoff = normalize_utc_timestamp(utc_now_timestamp(), "knowledge_cutoff_at")
-            return self._review(symbol, cutoff, self._payload(symbol, cutoff, ""))
+            return self._review(symbol, cutoff, self._payload(symbol, cutoff, ""), research_year)
 
-    def save(self, symbol, cutoff, note, key, expected_content_fingerprint=None):
+    def save(self, symbol, cutoff, note, key, expected_content_fingerprint=None,
+             research_year=None, include_research_context=False):
         parse_canonical_symbol(symbol)
         cutoff = normalize_utc_timestamp(cutoff, "knowledge_cutoff_at")
         if cutoff > utc_now_timestamp():
@@ -123,6 +146,10 @@ class DailyResearchJournalService:
         if len(note) > 4000 or not 8 <= len(key) <= 128:
             raise ValueError("invalid_journal_request")
         request = dict(symbol=symbol, cutoff=cutoff, note=note)
+        if include_research_context:
+            if expected_content_fingerprint is None:
+                raise ValueError("guided_save_requires_preview")
+            request.update(research_year=research_year, include_research_context=True)
         if expected_content_fingerprint is not None:
             request["expected_content_fingerprint"] = expected_content_fingerprint
         fingerprint = sha256_json(request)
@@ -136,9 +163,13 @@ class DailyResearchJournalService:
                 return self._decode(existing)
             payload = self._payload(symbol, cutoff, note)
             if expected_content_fingerprint is not None:
-                reviewed = self._review(symbol, cutoff, payload)
+                reviewed = self._review(symbol, cutoff, payload, research_year)
                 if reviewed["content_fingerprint"] != expected_content_fingerprint:
                     raise ValueError("research_content_changed_review_again")
+                if include_research_context:
+                    if "guidance" not in reviewed:
+                        raise ValueError("research_guidance_disabled")
+                    payload["research_context"] = reviewed["guidance"]
             # Link only an exact existing analysis. A partial observation never
             # enters the historical-analysis snapshot population by implication.
             row = conn.execute("SELECT snapshot_id FROM analysis_snapshots WHERE symbol=? AND knowledge_cutoff_at=? ORDER BY created_at DESC LIMIT 1", (symbol, cutoff)).fetchone()

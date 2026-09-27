@@ -18,8 +18,9 @@ from tests.test_forward_pe_valuation import add_eps
 def test_legacy_upgrade_retry_revision_and_backup_restore(tmp_path, monkeypatch):
     db = str(tmp_path / "legacy.db")
     with monkeypatch.context() as old:
-        old.setattr(migration_runner, "ADDITIONAL_MIGRATION_IDS", migration_runner.ADDITIONAL_MIGRATION_IDS[:-1])
-        old.setattr(migration_runner, "ADDITIONAL_MIGRATION_FILES", migration_runner.ADDITIONAL_MIGRATION_FILES[:-1])
+        cutoff = migration_runner.ADDITIONAL_MIGRATION_IDS.index("20260926_26_pe_fiscal_year")
+        old.setattr(migration_runner, "ADDITIONAL_MIGRATION_IDS", migration_runner.ADDITIONAL_MIGRATION_IDS[:cutoff])
+        old.setattr(migration_runner, "ADDITIONAL_MIGRATION_FILES", migration_runner.ADDITIONAL_MIGRATION_FILES[:cutoff])
         migration_runner.apply_valuation_migration(db)
     repo = ForwardEPSRepository(db, auto_migrate=False)
     add_eps(repo, series="source", source="Source", eps=10)

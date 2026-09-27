@@ -8,7 +8,7 @@
   #error TW_STOCK_OUTPUT_DIR is required
 #endif
 #ifndef TW_STOCK_APP_VERSION
-  #define TW_STOCK_APP_VERSION "1.0.0"
+  #define TW_STOCK_APP_VERSION "1.1.0"
 #endif
 
 [Setup]
@@ -35,6 +35,8 @@ Source: "{#TW_STOCK_BUILD_ROOT}\tw-stock-predictor\*"; DestDir: "{app}\tw-stock-
 Source: "{#TW_STOCK_BUILD_ROOT}\tw-stock-predictor-server\*"; DestDir: "{app}\tw-stock-predictor-server"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#TW_STOCK_BUILD_ROOT}\tw-stock-research\*"; DestDir: "{app}\research"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#TW_STOCK_BUILD_ROOT}\skills\tw-stock-research\SKILL.md"; DestDir: "{app}\skills\tw-stock-research"; Flags: ignoreversion
+Source: "{#TW_STOCK_BUILD_ROOT}\skills\tw-stock-research\references\*.md"; DestDir: "{app}\skills\tw-stock-research\references"; Flags: ignoreversion
+Source: "{#TW_STOCK_BUILD_ROOT}\skills\tw-stock-research\references\*.md"; DestDir: "{app}\skills\tw-stock-research\references"; Flags: ignoreversion
 Source: "{#TW_STOCK_BUILD_ROOT}\skills\du-jinlong-research-method\SKILL.md"; DestDir: "{app}\skills\du-jinlong-research-method"; Flags: ignoreversion
 Source: "{#TW_STOCK_BUILD_ROOT}\skills\du-jinlong-research-method\references\*.md"; DestDir: "{app}\skills\du-jinlong-research-method\references"; Flags: ignoreversion
 

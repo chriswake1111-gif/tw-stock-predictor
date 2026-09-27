@@ -205,7 +205,8 @@ class ResearchBoundaryMiddleware:
             self.installed_local_writes and isinstance(handshake, dict) and bool(handshake.get("launch_id"))
             and method == "POST"
             and (path == "/api/v2/research/queue" or path.startswith("/api/v2/research/assumptions/")
-                 or path.startswith("/api/v2/research/journal/"))
+                 or path.startswith("/api/v2/research/journal/")
+                 or path.startswith("/api/v2/research/evidence/"))
         )
         if path.startswith(RESEARCH_PREFIX) and path != "/api/v2/research/bootstrap" and not installed_command and os.getenv("RESEARCH_WORKFLOW_WRITES_ENABLED", "false").strip().lower() != "true":
             await self._reject(send, 503, "research_workflow_writes_disabled")

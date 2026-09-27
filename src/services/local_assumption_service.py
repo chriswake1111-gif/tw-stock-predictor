@@ -54,6 +54,15 @@ class LocalAssumptionService:
                     else:
                         decision = conn.execute("SELECT decision,approval_id,available_at FROM valuation_approvals WHERE resource_type=? AND resource_id=? ORDER BY available_at DESC,ingested_at DESC,approval_event_id DESC LIMIT 1", ("forward_eps" if kind == "eps" else "pe_scenario", item["id"])).fetchone()
                     item.update(kind=kind, superseded=bool(newer), approval=dict(decision) if decision else None)
+                    # Candidate attribution is work provenance, never an approval
+                    # or replacement of the immutable financial resource.
+                    operation_key = item.get("idempotency_key", "")
+                    if operation_key.startswith("local:"):
+                        command = conn.execute("SELECT request_json FROM local_research_commands WHERE command_key=?", (operation_key[6:],)).fetchone()
+                        if command:
+                            request = json.loads(command[0])
+                            if request.get("candidate_id"):
+                                item["candidate_id"] = request["candidate_id"]
                     for private in ("idempotency_key", "payload_fingerprint"):
                         item.pop(private, None)
                     result.append(item)
@@ -98,14 +107,17 @@ class LocalAssumptionService:
         return {"status": "preview_only", "inputs": payload, "calculation": calculation,
                 "approval_required": True, "official_affiliation": False}
 
-    def execute(self, symbol, kind, action, values, key, previous_id=None, resource_id=None):
+    def execute(self, symbol, kind, action, values, key, previous_id=None, resource_id=None, candidate_id=None):
         parse_canonical_symbol(symbol)
         if kind not in _TABLES or action not in {"draft", "approve", "revoke"}:
             raise ValueError("unsupported_assumption_command")
         if not key or not 8 <= len(key) <= 128:
             raise ValueError("idempotency_key_required")
-        request = canonical_json(dict(symbol=symbol, kind=kind, action=action, values=values,
-                                      previous_id=previous_id, resource_id=resource_id))
+        identity = dict(symbol=symbol, kind=kind, action=action, values=values,
+                        previous_id=previous_id, resource_id=resource_id)
+        if candidate_id:
+            identity["candidate_id"] = candidate_id
+        request = canonical_json(identity)
         # The installed product has one writer process. Persist the first accepted
         # timestamp before calling existing repositories so interrupted retries use
         # their original identity rather than creating a backdated/new approval.
@@ -120,6 +132,11 @@ class LocalAssumptionService:
                         return json.loads(row[2])
                     timestamp = row[1]
                 else:
+                    if candidate_id:
+                        from src.services.research_evidence_service import ResearchEvidenceService
+                        candidate_kind, candidate_values = ResearchEvidenceService(self.db_path).candidate_values(symbol, candidate_id)
+                        if action != "draft" or candidate_kind != kind or candidate_values != values:
+                            raise ValueError("candidate_values_mismatch")
                     timestamp = utc_now_timestamp()
                     conn.execute("INSERT INTO local_research_commands VALUES (?,?,?,NULL)", (key, request, timestamp))
             operation_key = "local:" + key
