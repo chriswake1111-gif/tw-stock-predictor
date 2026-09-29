@@ -1,9 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 import axe from 'axe-core';
-import { earningsReview } from '../src/test/earningsResearchFixture';
+import { earningsReview, earningsCoverageGap } from '../src/test/earningsResearchFixture';
 
-async function setup(page: Page, partial: boolean) {
+async function setup(page: Page, partial: boolean, coverageGap = false) {
   const review = earningsReview(partial);
+  if (coverageGap) review.current.summary.public_data!.VerifiedQuarterlyEarnings = earningsCoverageGap();
   const writes: { path: string; body: Record<string, unknown> }[] = [];
   const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -26,6 +27,24 @@ async function setup(page: Page, partial: boolean) {
 }
 
 for (const width of [360, 768, 1024, 1440]) {
+  test(`source coverage gap remains readable with keyboard ${width}`, async ({ page }, info) => {
+    await page.setViewportSize({ width, height: 900 });
+    const { writes, errors } = await setup(page, true, true);
+    await page.goto('/stocks/2330.TW');
+    await page.getByRole('button', { name: '完整證據', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    const section = page.getByRole('region', { name: '最近四季基本每股盈餘合計' });
+    await expect(section.getByText(/2025 年第四季仍缺直接單季來源/)).toBeVisible();
+    await section.getByText('查看來源版本、核對範圍與限制').focus();
+    await page.keyboard.press('Enter');
+    await expect(section.getByRole('link', { name: '原始來源查核範圍' })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await section.screenshot({ path: info.outputPath(`source-gap-${width}.png`) });
+    await page.addScriptTag({ content: axe.source });
+    expect(await page.evaluate(async () => (await window.axe.run('.guided-research', { runOnly: ['wcag2a', 'wcag2aa', 'wcag21aa'] })).violations.map(v => v.id))).toEqual([]);
+    expect(writes.filter(w => w.path.includes('/journal/') || w.path.includes('/assumptions/'))).toEqual([]);
+    expect(errors).toEqual([]);
+  });
   for (const partial of [false, true]) {
     test(`four-quarter reading and partial save ${width} ${partial ? 'missing' : 'available'}`, async ({ page }, info) => {
       await page.setViewportSize({ width, height: 900 });

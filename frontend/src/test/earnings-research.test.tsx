@@ -4,12 +4,35 @@ import { EarningsResearchPanel } from '../components/EarningsResearchPanel';
 import { GuidedResearchWorkspace } from '../components/GuidedResearchWorkspace';
 import { readReview } from '../api/guidanceClient';
 import { researchMutation } from '../api/researchClient';
-import { earningsFixture, earningsReview } from './earningsResearchFixture';
+import { earningsFixture, earningsReview, earningsCoverageGap } from './earningsResearchFixture';
 import { renderWithProviders } from './render';
 
 vi.mock('../api/guidanceClient', async original => ({ ...await original<typeof import('../api/guidanceClient')>(), readReview: vi.fn() }));
 vi.mock('../api/researchClient', async original => ({ ...await original<typeof import('../api/researchClient')>(), researchMutation: vi.fn() }));
 beforeEach(() => vi.resetAllMocks());
+
+it('shows an investigated source gap without promoting the review to financial data', () => {
+  renderWithProviders(<EarningsResearchPanel data={earningsCoverageGap()} />);
+  expect(screen.getByRole('heading', { name: '已查到什麼、還缺什麼' })).toBeInTheDocument();
+  expect(screen.getByText(/2025 年第四季仍缺直接單季來源/)).toBeInTheDocument();
+  expect(screen.getByText(/由助理查找原始明細/)).toBeInTheDocument();
+  expect(screen.getByText(/2026\/09\/29 22:51/)).toBeInTheDocument();
+  expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  expect(researchMutation).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['earnings_source_access_denied', '暫時拒絕程式讀取'],
+  ['earnings_source_rate_limited', '暫時限制請求次數'],
+  ['earnings_source_not_found', '原始文件連結目前不存在'],
+  ['earnings_source_parse_failed', '程式未能完成格式核對'],
+])('explains %s without claiming successful refresh', (reason, message) => {
+  renderWithProviders(<EarningsResearchPanel data={{ ...earningsFixture(), status: 'quality_warning', value: null, reason }} />);
+  expect(screen.getByText(new RegExp(message))).toBeInTheDocument();
+  expect(screen.getAllByText(/保留的原季度資料/)).toHaveLength(4);
+  expect(screen.queryByText('2.75 元／股')).not.toBeInTheDocument();
+});
 
 it('shows the server sum, period, negative and zero quarters without calculating or approving', () => {
   renderWithProviders(<EarningsResearchPanel data={earningsFixture()} />);

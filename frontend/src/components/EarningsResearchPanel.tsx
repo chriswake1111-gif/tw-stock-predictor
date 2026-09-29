@@ -12,6 +12,11 @@ export type EarningsResearchData = {
   sources?: { key: string; url: string; role: string; year: number; quarter: number; sha256: string; observed_at: string }[];
   unreviewed_source_versions?: { key: string; url: string; sha256: string; observed_at: string }[];
   basis?: { ledgers?: { page: number; period_start: string; period_end: string }[] };
+  source_coverage?: {
+    status: string; reviewed_at: string; window_start: string; window_end: string;
+    blockers?: string[]; next_action?: string; review_scope?: string;
+    references?: { title: string; url: string }[];
+  };
 };
 
 const reasons: Record<string, string> = {
@@ -21,6 +26,13 @@ const reasons: Record<string, string> = {
   earnings_parser_requires_refresh: "核對方式已更新，請更新資料後再閱讀合計。",
   earnings_period_requires_refresh: "這組財報涵蓋的期間較舊，需要補查後續季度；不再顯示為目前可用合計。",
   earnings_source_fetch_or_parse_failed: "本次下載或核對未完成。程式保留已取得的資料，稍後可再更新。",
+  earnings_source_fetch_failed: "本次來源下載未完成。已取得的資料與日期保留，稍後可再更新。",
+  earnings_source_access_denied: "來源網站暫時拒絕程式讀取。已取得的資料與日期保留；稍後可再更新，持續失敗時由助理查找其他原始來源。",
+  earnings_source_rate_limited: "來源網站暫時限制請求次數。程式會保留資料並限制重試頻率，請稍後再更新。",
+  earnings_source_not_found: "原始文件連結目前不存在。由開發端核對來源位置，不需要填入數字。",
+  earnings_source_timeout: "本次資料更新已達等待期限。已取得的資料與日期保留，可稍後再更新。",
+  earnings_source_parse_failed: "文件已下載，但程式未能完成格式核對。由開發端處理，不需要反覆更新或猜值。",
+  quarter_source_evidence_incomplete: "已找到部分原始資料，仍缺合計所需的完整證據，詳見下方查核結果。",
   earnings_storage_limit: "本機獲利資料區已達保存上限，暫停新增，既有紀錄仍可閱讀。",
   quarter_missing: "還缺少連續季度，請研究助理查找公司原始財報。",
   quarter_revision_conflict: "同一季度出現不同版本，需要查明修訂原因。",
@@ -37,6 +49,7 @@ const localTime = (value: string) => {
 
 export function EarningsResearchPanel({ data }: { data: EarningsResearchData }) {
   const headingId = useId();
+  const coverage = data.source_coverage;
   const available = data.status === "available" && data.value != null && !data.is_stale && data.last_update_status !== "failed";
   return <section aria-labelledby={headingId} style={{ marginTop: 20, padding: 16, border: "1px solid #d6dee7", borderRadius: 10, overflowWrap: "anywhere" }}>
     <h3 id={headingId} style={{ marginTop: 0 }}>最近四季基本每股盈餘合計</h3>
@@ -45,11 +58,25 @@ export function EarningsResearchPanel({ data }: { data: EarningsResearchData }) 
     {data.period_start && <p>涵蓋期間：{data.period_start} 至 {data.period_end}。僅供這四季研究，後續季度需另行核對。</p>}
     <p>來源：公司原始財報及季度發布資料。方法：四季已公布的基本每股盈餘相加。</p>
     <p style={{ color: "#475569" }}>這不是未來一年的獲利預估，也不一定等於公司公布的全年每股盈餘。</p>
+    {coverage?.status === "evidence_incomplete" && <div>
+      <h4>已查到什麼、還缺什麼</h4>
+      <p>查核目標期間：{coverage.window_start} 至 {coverage.window_end}。</p>
+      <ul>{coverage.blockers?.map(item => <li key={item}>{item}</li>)}</ul>
+      <p>{coverage.next_action}</p>
+    </div>}
     {data.observed_at && <p>本機首次取得：{localTime(data.observed_at)}。{data.last_checked_at && <>最近檢查：{localTime(data.last_checked_at)}。</>}（台灣時間）</p>}
     {!!data.rows?.length && <ul>{data.rows.map(row => <li key={row.period_end}>{row.period_start} 至 {row.period_end}：{row.value} 元／股{!available && "（保留的原季度資料）"}</li>)}</ul>}
     <details>
       <summary>查看來源版本、核對範圍與限制</summary>
       <p>核對包含報表期間、幣別、基本每股盈餘、對應股數、重複揭露及股本變動。已閱讀不等於保證資料沒有錯誤。</p>
+      {coverage && <>
+        <p>來源涵蓋說明查核時間：{localTime(coverage.reviewed_at)}（台灣時間）。這是核對範圍，不代表今天已更新財報。</p>
+        <p>核對窗口：{coverage.window_start} 至 {coverage.window_end}。新季度需取得原始文件並核對後才能納入，程式不會自動搜尋新報告。</p>
+        {coverage.review_scope && <p>{coverage.review_scope}</p>}
+        <ul>{coverage.references?.map(source => <li key={source.url}>
+          {source.url.startsWith('https://') ? <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a> : source.title}
+        </li>)}</ul>
+      </>}
       <ul>{data.limitations?.map(item => <li key={item}>{item}</li>)}</ul>
       {data.basis?.ledgers?.map(row => <p key={row.period_end}>股數／股本變動表：{row.period_start} 至 {row.period_end}，原始文件第 {row.page} 頁。</p>)}
       <ul>{data.sources?.map(source => <li key={source.key} style={{ marginBottom: 8 }}>

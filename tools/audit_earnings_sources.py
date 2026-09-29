@@ -20,6 +20,7 @@ from src.collectors.earnings_four_quarter import (  # noqa: E402
     MAX_DOCUMENT_BYTES as MAX_REVIEWED_PDF_BYTES, normalize_bundle,
 )
 from src.collectors.earnings_sources_v2 import sources_for  # noqa: E402
+from src.collectors.earnings_coverage import plan_coverage  # noqa: E402
 from src.domain.valuation import normalize_utc_timestamp  # noqa: E402
 
 
@@ -51,6 +52,9 @@ def _source_bytes(root, item, limit):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="唯讀稽核本機財報來源；不啟用四季合計或寫入研究")
+    parser.add_argument("--coverage-plan", action="store_true", help="只列出指定四季窗口的來源核對工作，不抓網站或啟用計算")
+    parser.add_argument("--symbol", help="來源規劃的公司代碼，例如 3491.TWO")
+    parser.add_argument("--window-end", help="來源規劃的季度末日，例如 2026-09-30")
     parser.add_argument("--manifest", type=Path,
                         help="最多 12 份公開財報的取得紀錄，文件須位於清單同目錄")
     parser.add_argument("--output", type=Path, help="另存稽核結果；拒絕覆寫既有檔案")
@@ -61,6 +65,24 @@ def main(argv=None):
     parser.add_argument("--four-quarter-manifest", type=Path,
                         help="可選：一家公司已登錄版本的公開文件，重跑四季樣本計算；不匯入金融資料")
     args = parser.parse_args(argv)
+    if args.coverage_plan:
+        if (not args.symbol or not args.window_end or args.manifest or args.notes_manifest
+                or args.quarter_releases_manifest or args.four_quarter_manifest):
+            parser.error("--coverage-plan 需 --symbol 與 --window-end，且不能混用文件稽核參數")
+        try:
+            report = plan_coverage(args.symbol, args.window_end)
+            output = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+            if args.output:
+                with args.output.open("x", encoding="utf-8") as handle:
+                    handle.write(output)
+            else:
+                print(output)
+            return 0
+        except (ValueError, OSError) as exc:
+            print(json.dumps(dict(status="invalid_input", reason=type(exc).__name__)))
+            return 2
+    if args.symbol or args.window_end:
+        parser.error("--symbol 與 --window-end 僅供 --coverage-plan 使用")
     if not args.manifest and not args.quarter_releases_manifest and not args.four_quarter_manifest:
         parser.error("需要 --manifest、--quarter-releases-manifest 或 --four-quarter-manifest")
     if args.notes_manifest and not args.manifest:

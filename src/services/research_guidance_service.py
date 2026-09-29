@@ -49,11 +49,18 @@ def build_guidance(summary, assumptions, evidence, fiscal_year=None):
         reason = earnings.get("reason")
         if earnings.get("status") != "available":
             engineering = reason in {"source_format_not_supported", "earnings_storage_limit", "source_revision_requires_review",
-                                     "earnings_period_requires_refresh", "capital_schedule_format_or_unknown_movement"}
+                                     "earnings_period_requires_refresh", "capital_schedule_format_or_unknown_movement",
+                                     "earnings_source_parse_failed", "earnings_source_not_found"}
+            engineering = engineering or bool(reason and reason.startswith(("capital_", "note_", "quarter_", "earnings_document_"))
+                                               and reason not in {"quarter_missing", "quarter_revision_conflict", "quarter_source_evidence_incomplete"})
             owner = "engineering" if engineering else "program" if (earnings.get("last_update_status") == "failed"
                     or reason in {"not_collected", "earnings_parser_requires_refresh"}) else "assistant"
-            add("ttm", "最近四季獲利合計仍有缺項", owner,
-                "保留逐季數字與日期；不需要填值或核准資料正確性。",
+            coverage = earnings.get("source_coverage") or {}
+            impact = "保留逐季數字與日期；不需要填值或核准資料正確性。"
+            if reason == "quarter_source_evidence_incomplete":
+                owner = "assistant"
+                impact = " ".join(coverage.get("blockers", [])) or impact
+            add("ttm", "最近四季獲利合計仍有缺項", owner, impact,
                 "先閱讀已公布財報" if engineering else "更新資料" if owner == "program" else "交給助理查證", reason)
     elif financial.get("reason") == "share_basis_not_verified":
         add("ttm", "過去一年獲利尚不能可靠合計", "engineering", "財報使用的股數口徑尚未核對，不能由核准代替資料驗證。", "先閱讀已公布財報", financial.get("reason"))
@@ -95,6 +102,10 @@ def build_guidance(summary, assumptions, evidence, fiscal_year=None):
               f'研究年度：{selected_year or "尚未選定，需要年度選擇時再詢問"}。先讀本機查證紀錄與有效假設，'
               '依缺項分工查證，保留來源與限制；可自動保留本機查證紀錄，但不要代選數值、核准或保存正式研究。'
               '目前缺項：' + '、'.join(g["title"] for g in gaps))
+    if earnings and earnings.get("source_coverage", {}).get("status") == "evidence_incomplete":
+        coverage = earnings["source_coverage"]
+        prompt += (f'。四季獲利來源上次查核：{coverage["reviewed_at"]}；'
+                   + " ".join(coverage["blockers"]) + " " + coverage["next_action"])
     return dict(contract_version=GUIDANCE_CONTRACT, selected_year=selected_year,
                 available_years=sorted(set(years + candidate_years + ([selected_year] if selected_year else []))), gaps=gaps, next_step=main,
                 data_readiness="partial" if any(g["id"] not in {"eps", "pe", "anchor", "valuation_unavailable"} for g in gaps) else "available_with_limits",

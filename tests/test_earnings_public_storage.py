@@ -69,7 +69,7 @@ def test_feature_off_no_network_no_write_and_unsupported_no_network(setup, monke
     assert refresh(service, client) == [] and client.calls == [] and counts(path) == (0, 0, 0, 0, 0)
     monkeypatch.setenv("RESEARCH_EARNINGS_V2_ENABLED", "true")
     assert service.refresh("3491.TWO", "op", client, lambda r: None, 1e12) == []
-    assert service.view("3491.TWO", mod.utc_now_timestamp())[DATASET]["reason"] == "source_format_not_supported"
+    assert service.view("1101.TW", mod.utc_now_timestamp())[DATASET]["reason"] == "source_format_not_supported"
     assert not client.calls
 
 

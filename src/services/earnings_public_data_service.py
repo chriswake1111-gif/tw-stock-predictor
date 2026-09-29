@@ -14,6 +14,8 @@ from src.collectors.earnings_four_quarter import (
     CONTRACT, DATASET, MAX_BUNDLE_BYTES, MAX_DOCUMENT_BYTES, normalize_bundle,
 )
 from src.collectors.earnings_source_audit import EarningsSourceAuditError
+from src.collectors.earnings_coverage import coverage_for
+from src.collectors.installed_egress_client import EgressHttpError, DeadlineExhaustedError
 from src.collectors.earnings_sources_v2 import CATALOG_VERSION, allowed_source_url, sources_for
 from src.domain.analysis_snapshot import canonical_json
 from src.domain.valuation import utc_now_timestamp
@@ -23,6 +25,15 @@ RESOURCE = "issuer.verified-quarterly-earnings"
 PARSER_VERSION = CONTRACT + ":" + CATALOG_VERSION
 MAX_STORAGE_BYTES = 128 * 1024 * 1024
 MAX_ATTEMPTS = 4096
+
+
+def download_failure_reason(exc):
+    # Never parse or disclose remote exception text, URLs, headers or credentials.
+    response = getattr(exc.__cause__, "response", None)
+    status = getattr(response, "status_code", None)
+    return {401: "earnings_source_access_denied", 403: "earnings_source_access_denied",
+            404: "earnings_source_not_found", 410: "earnings_source_not_found",
+            429: "earnings_source_rate_limited"}.get(status, "earnings_source_fetch_failed")
 
 
 def earnings_enabled():
@@ -90,6 +101,11 @@ class EarningsPublicDataService(DailyPublicDataService):
                 item.update(status="stale", value=None, reason="earnings_period_requires_refresh")
         if item.get("last_update_status") == "failed":
             item.update(status="quality_warning", value=None, reason=item.get("last_update_reason") or "earnings_update_failed")
+        coverage = coverage_for(symbol, cutoff)
+        if coverage:
+            item["source_coverage"] = coverage
+            if not sources_for(symbol) and coverage["status"] == "evidence_incomplete":
+                item.update(status="insufficient_data", value=None, reason="quarter_source_evidence_incomplete")
         return {DATASET: item}
 
     def refresh(self, symbol, operation_id, client, authorize, deadline):
@@ -108,6 +124,7 @@ class EarningsPublicDataService(DailyPublicDataService):
         source_times = {}
         reason = None
         normalized = None
+        collecting = True
         try:
             for source in sources_for(symbol):
                 documents[source["key"]] = fetch_document(client, source, deadline, authorize)
@@ -117,14 +134,19 @@ class EarningsPublicDataService(DailyPublicDataService):
                 if hashlib.sha256(documents[source["key"]]).hexdigest() != source["sha256"]:
                     raise EarningsSourceAuditError("source_revision_requires_review")
             observed = utc_now_timestamp()
+            collecting = False
             normalized = normalize_bundle(symbol, documents, observed)
             for source in normalized.get("sources", []):
                 source["observed_at"] = source_times[source["key"]]
         except EarningsSourceAuditError as exc:
             reason = str(exc)
+        except EgressHttpError as exc:
+            reason = download_failure_reason(exc)
+        except DeadlineExhaustedError:
+            reason = "earnings_source_timeout"
         except Exception:
             # No raw remote text, URLs supplied by a page, or network credentials in reports.
-            reason = "earnings_source_fetch_or_parse_failed"
+            reason = "earnings_source_fetch_failed" if collecting else "earnings_source_parse_failed"
         if reason == "source_revision_requires_review":
             # Preserve the newly observed bytes as an explicitly unqualified
             # immutable version. Never parse them or promote old rows to a new sum.

@@ -26,3 +26,13 @@ export function earningsReview(partial = false) {
   if (!partial) review.guidance!.gaps = review.guidance!.gaps.filter(g => g.id !== 'ttm');
   return review;
 }
+
+export function earningsCoverageGap(): EarningsResearchData {
+  return { status: 'insufficient_data', value: null, rows: [], reason: 'quarter_source_evidence_incomplete',
+    source_coverage: { status: 'evidence_incomplete', reviewed_at: '2026-09-29T14:51:51Z',
+      window_start: '2025-07-01', window_end: '2026-06-30',
+      blockers: ['2025 年第四季仍缺直接單季來源及期間加權平均股數。'],
+      next_action: '由助理查找原始明細，開發端核對格式；可先保存部分研究，不需猜值。',
+      review_scope: '固定、去識別測試案例；已閱讀不等於資料已可採用。',
+      references: [{ title: '原始來源查核範圍', url: 'https://example.org/quarterly-report' }] } };
+}
