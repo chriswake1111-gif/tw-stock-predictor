@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
+import { EarningsResearchPanel, type EarningsResearchData, type EarningsQuarter } from "./EarningsResearchPanel";
 
 type PriceRow = { date?: string; open?: number | null; high?: number | null; low?: number | null; close?: number | null; volume?: number | null; value?: number | null; change?: number | null; zero_volume?: boolean };
 type PerRow = { date?: string; pe?: number | null; pb?: number | null; yield_ratio?: number | null };
 type EpsRow = { period_end?: string; quarterly_eps?: number | null; available_at?: string | null };
-type Dataset = { status?: string; source?: string; official_exchange_source?: boolean; observed_at?: string | null; last_checked_at?: string | null; last_update_status?: string | null; last_update_reason?: string | null; excluded_rows?: { date: string; reason: string }[]; rows?: PriceRow[] | PerRow[] | EpsRow[] };
+type Dataset = Omit<EarningsResearchData, "rows" | "observed_at" | "last_checked_at" | "last_update_status"> & { status?: string; source?: string; official_exchange_source?: boolean; observed_at?: string | null; last_checked_at?: string | null; last_update_status?: string | null; last_update_reason?: string | null; excluded_rows?: { date: string; reason: string }[]; rows?: PriceRow[] | PerRow[] | EpsRow[] | EarningsQuarter[] };
 export type DailyPublicData = Record<"TaiwanStockPrice" | "TaiwanStockPER" | "TaiwanStockFinancialStatements", Dataset>;
 
 interface Props { data: DailyPublicData | Record<string, Dataset>; onSelectPrice?: (date: string, price: number) => void }
@@ -18,6 +19,7 @@ export function DailyPublicDataPanel({ data, onSelectPrice }: Props) {
     .sort((a, b) => (a.date || "").localeCompare(b.date || "")), [data.TaiwanStockPrice?.rows]);
   const pers = [...(data.TaiwanStockPER?.rows || []) as PerRow[]].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   const eps = (data.TaiwanStockFinancialStatements?.rows || []) as EpsRow[];
+  const earnings = (data as Record<string, Dataset>).VerifiedQuarterlyEarnings as EarningsResearchData | undefined;
   const visiblePrices = useMemo(() => {
     const anchor = new Date(taipeiDate(data.TaiwanStockPrice?.observed_at) || taipeiDate(new Date().toISOString()));
     anchor.setMonth(anchor.getMonth() - (range === "3m" ? 3 : 12));
@@ -64,6 +66,7 @@ export function DailyPublicDataPanel({ data, onSelectPrice }: Props) {
       {prices.length === 0 && <p>目前沒有行情資料可顯示。</p>}
     </>)}
     {section("TaiwanStockPER", "本益比／股價淨值比／殖利率", <div style={{ overflowX: "auto" }}><table><thead><tr><th>日期</th><th>PE</th><th>PB</th><th>殖利率</th></tr></thead><tbody>{pers.slice(-1).map((r, i) => <tr key={`${r.date}-${i}`}><td>{fmt(r.date)}</td><td>{displayNumber(r.pe)}</td><td>{displayNumber(r.pb)}</td><td>{r.yield_ratio == null ? "缺值" : `${displayNumber(Number(r.yield_ratio) * 100)}%`}</td></tr>)}</tbody></table>{pers.length > 1 && <details><summary>查看歷史估值（{pers.length - 1} 筆）</summary><ul>{pers.slice(0, -1).map((r, i) => <li key={`${r.date}-${i}`}>{fmt(r.date)}：PE {displayNumber(r.pe)}、PB {displayNumber(r.pb)}、殖利率 {r.yield_ratio == null ? "缺值" : `${displayNumber(Number(r.yield_ratio) * 100)}%`}</li>)}</ul></details>}{pers.length === 0 && <p>目前沒有估值資料可顯示。</p>}</div>)}
-    {section("TaiwanStockFinancialStatements", "EPS（逐季）", <div><p style={{ color: "#92400e" }}>股數基準尚未核對，TTM暫不計算</p>{eps.length === 0 ? <p>目前沒有 EPS 資料可顯示。</p> : <ul>{eps.map((r, i) => <li key={`${r.period_end}-${i}`}>{fmt(r.period_end)}：{fmt(r.quarterly_eps)}；本機首次可用時間：{fmt(r.available_at)}</li>)}</ul>}</div>)}
+    {earnings && <EarningsResearchPanel data={earnings} />}
+    {section("TaiwanStockFinancialStatements", "EPS（逐季）", <div><p style={{ color: "#92400e" }}>{earnings ? "以下為 FinMind 逐季資料，與上方公司原始財報分開保留。" : "股數基準尚未核對，TTM暫不計算"}</p>{eps.length === 0 ? <p>目前沒有 EPS 資料可顯示。</p> : <ul>{eps.map((r, i) => <li key={`${r.period_end}-${i}`}>{fmt(r.period_end)}：{fmt(r.quarterly_eps)}；本機首次可用時間：{fmt(r.available_at)}</li>)}</ul>}</div>)}
   </section>;
 }

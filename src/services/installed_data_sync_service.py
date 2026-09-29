@@ -2065,6 +2065,10 @@ class InstalledDataSyncService:
         errors.extend(DailyMarketDataService(self.db_path).refresh(
             "MARKET", operation_id, self.egress_client, authorize_public, deadline,
         ))
+        from src.services.earnings_public_data_service import EarningsPublicDataService
+        errors.extend(EarningsPublicDataService(self.db_path).refresh(
+            symbol, operation_id, self.egress_client, authorize_public, deadline,
+        ))
         return errors
 
     def run_symbol_enablement_pipeline(

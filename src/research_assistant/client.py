@@ -186,7 +186,8 @@ class LocalClient:
         return {"contract_version": CONTRACT, "status": "ready", "origin": self.origin,
                 "build_sha": expected_build,
                 "valuation_pairing_policy": ready.get("valuation_pairing_policy"),
-                "research_guidance_contract": ready.get("research_guidance_contract")}
+                "research_guidance_contract": ready.get("research_guidance_contract"),
+                "earnings_research_contract": ready.get("earnings_research_contract")}
 
     def evidence(self, symbol, payload=None, key=None, *, history=False, before=None):
         if self._http("/api/ready").get("research_guidance_contract") != "research_guidance_v1":

@@ -148,3 +148,27 @@ def test_offline_payload_check_detects_missing_method_reference(tmp_path, monkey
     files[-1].unlink()
     with pytest.raises(RuntimeError, match="resource missing or changed"):
         validate._validate_research_payload(tmp_path, records)
+
+
+@pytest.mark.parametrize("configured,expected", [(None, True), ("false", False)])
+def test_packaged_server_enables_reviewed_earnings_with_explicit_fallback(monkeypatch, configured, expected):
+    import runpy
+    from src.services.earnings_public_data_service import earnings_enabled
+
+    main = runpy.run_path(str(WINDOWS / "server_entry.py"))["main"]
+    settings = object()
+    monkeypatch.setenv("RESEARCH_EARNINGS_V2_ENABLED", configured or "false")
+    if configured is None:
+        monkeypatch.delenv("RESEARCH_EARNINGS_V2_ENABLED")
+    monkeypatch.setattr("sys.argv", ["packaged-server"])
+    monkeypatch.setitem(main.__globals__, "_packaged_settings", lambda user_root: settings)
+    calls = []
+
+    def start(actual):
+        assert actual is settings
+        calls.append(earnings_enabled())
+        return 0
+
+    monkeypatch.setitem(main.__globals__, "run_server", start)
+    assert main() == 0
+    assert calls == [expected]

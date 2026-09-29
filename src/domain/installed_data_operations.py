@@ -28,6 +28,7 @@ INSTALLED_OPERATIONS_ALLOWED_RESOURCES = frozenset({
     "finmind.TaiwanStockPrice",
     "finmind.TaiwanStockPER",
     "finmind.TaiwanStockFinancialStatements",
+    "issuer.verified-quarterly-earnings",
 })
 
 

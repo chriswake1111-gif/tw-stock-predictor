@@ -5,6 +5,7 @@ import { researchMutation, researchErrorMessage } from '../api/researchClient';
 import type { ResearchSummaryResponse } from '../api/types';
 import { LocalAssumptionEditor, type Assumption } from './LocalAssumptionEditor';
 import { DailyPublicDataPanel } from './DailyPublicDataPanel';
+import { EarningsResearchPanel, type EarningsResearchData } from './EarningsResearchPanel';
 import { ResearchModelResults } from './ResearchModelResults';
 import './GuidedResearchWorkspace.css';
 
@@ -111,13 +112,18 @@ function GuidedSave({ review, reload, readFailed }: { review: Review; reload: ()
       <p>缺項：{review.guidance?.gaps.map(g => g.title).join('、')} → {changed.guidance?.gaps.map(g => g.title).join('、')}</p>
       <p>下一步：{review.guidance?.next_step.title} → {changed.guidance?.next_step.title}</p>
       <p>核准紀錄：{review.guidance?.approved_assumptions.length} → {changed.guidance?.approved_assumptions.length}；來源版本與數值請展開檢查。</p>
-      <details><summary>比較原預覽與最新依據</summary><h4>原預覽</h4><ResearchModelResults summary={review.current.summary} />{review.guidance?.evidence.map(i => <EvidenceCard key={i.record_id} item={i} />)}<h4>最新內容</h4><ResearchModelResults summary={changed.current.summary} />{changed.guidance?.evidence.map(i => <EvidenceCard key={i.record_id} item={i} />)}</details>
+      <details><summary>比較原預覽與最新依據</summary><h4>原預覽</h4><ResearchModelResults summary={review.current.summary} />
+        {review.current.summary.public_data?.VerifiedQuarterlyEarnings && <EarningsResearchPanel data={review.current.summary.public_data.VerifiedQuarterlyEarnings as EarningsResearchData} />}
+        {review.guidance?.evidence.map(i => <EvidenceCard key={i.record_id} item={i} />)}<h4>最新內容</h4><ResearchModelResults summary={changed.current.summary} />
+        {changed.current.summary.public_data?.VerifiedQuarterlyEarnings && <EarningsResearchPanel data={changed.current.summary.public_data.VerifiedQuarterlyEarnings as EarningsResearchData} />}
+        {changed.guidance?.evidence.map(i => <EvidenceCard key={i.record_id} item={i} />)}</details>
       <button onClick={() => { setChanged(null); setAiNote(null); reload(); }}>閱讀後載入最新內容</button>
     </div>}
     {preview && <div className="guidance-preview"><h3>請確認這份部分研究</h3>
       <p>{preview.review.symbol} · 行情 {preview.review.current.summary.market_context?.settled_trade_date || '日期尚缺'} · 資訊截止 {when(preview.review.knowledge_cutoff_at)}</p>
       <p>{preview.review.guidance?.finding}</p><ul>{preview.review.guidance?.gaps.map(g => <li key={g.id}>{g.title}：{g.impact}</li>)}</ul>
       <details><summary>將保存的程式情境與依據</summary><ResearchModelResults summary={preview.review.current.summary} /></details>
+      {preview.review.current.summary.public_data?.VerifiedQuarterlyEarnings && <EarningsResearchPanel data={preview.review.current.summary.public_data.VerifiedQuarterlyEarnings as EarningsResearchData} />}
       <p>附帶本次查證版本 {preview.review.guidance?.evidence.length || 0} 份；之後的來源修訂不會改寫這份研究。</p>
       <h4>完整研究筆記</h4><p className="guidance-note">{preview.note || '未填寫筆記'}</p>
       <button disabled={busy || readFailed || preview.note !== note} onClick={async () => {
@@ -166,7 +172,9 @@ export function GuidedResearchWorkspace({ summary, historical, children, onUpdat
     <nav className="guidance-tabs" aria-label="研究閱讀層次">{([['summary', '快速摘要'], ['candidates', '候選與選擇'], ['evidence', '完整證據']] as const).map(([id, name]) => <button key={id} aria-pressed={tab === id} onClick={() => chooseTab(id)}>{name}</button>)}</nav>
     <div hidden={tab !== 'summary'}>
       <div className="guidance-columns"><section><h2>資料是否足夠</h2><p>{guide.data_readiness === 'partial' ? '部分可用，缺項仍保留' : '已有資料，仍需閱讀適用限制'}</p><span className="guidance-muted">已取得的官方收盤價</span><p className="guidance-price">{amount(current.market_context?.official_close)} {current.market_context?.official_close != null && '元'}</p></section>
-      <section><h2>目前研究發現</h2><p>{guide.finding}</p><p>資料已取得、假設已核准與結果可計算，是不同狀態。</p><button onClick={() => chooseTab('evidence')}>查看程式結果與依據</button></section></div>
+      <section><h2>目前研究發現</h2><p>{guide.finding}</p>
+        {current.public_data?.VerifiedQuarterlyEarnings && <p>最近四季獲利：{current.public_data.VerifiedQuarterlyEarnings.status === 'available' && current.public_data.VerifiedQuarterlyEarnings.value != null ? `${current.public_data.VerifiedQuarterlyEarnings.value} 元／股（合計至 ${current.public_data.VerifiedQuarterlyEarnings.period_end}）` : '尚不能合計，已取得的逐季資料仍可閱讀'}。</p>}
+        <p>資料已取得、假設已核准與結果可計算，是不同狀態。</p><button onClick={() => chooseTab('evidence')}>查看程式結果與依據</button></section></div>
       <section className="guidance-next"><h2>{guide.next_step.title}</h2><p>{guide.next_step.impact}</p><p>下一步由：{ownerNames[guide.next_step.owner]}</p>
         <button onClick={() => guide.next_step.id === 'read' ? document.getElementById('guided-save')?.scrollIntoView({ block: 'start' }) : chooseTab('candidates')}>{guide.next_step.id === 'read' ? '往下預覽與保存' : guide.next_step.action}</button></section>
       <details><summary>缺項分工（{guide.gaps.length}）</summary>{guide.gaps.map(g => <article className="guidance-gap" key={g.id}><h3>{g.title}</h3><p>{g.impact}</p><p>由{ownerNames[g.owner]}處理 · {g.action}</p></article>)}</details>

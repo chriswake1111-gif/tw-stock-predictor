@@ -44,7 +44,18 @@ def build_guidance(summary, assumptions, evidence, fiscal_year=None):
                 or data.get("quality_status") == "quality_warning" or data.get("is_stale")):
             add(dataset, title + "待更新", "program", "保留各自資料日期與品質限制。", "更新資料", data.get("last_update_reason"))
     financial = public.get("TaiwanStockFinancialStatements", {})
-    if financial.get("reason") == "share_basis_not_verified":
+    earnings = public.get("VerifiedQuarterlyEarnings")
+    if earnings is not None:
+        reason = earnings.get("reason")
+        if earnings.get("status") != "available":
+            engineering = reason in {"source_format_not_supported", "earnings_storage_limit", "source_revision_requires_review",
+                                     "earnings_period_requires_refresh", "capital_schedule_format_or_unknown_movement"}
+            owner = "engineering" if engineering else "program" if (earnings.get("last_update_status") == "failed"
+                    or reason in {"not_collected", "earnings_parser_requires_refresh"}) else "assistant"
+            add("ttm", "最近四季獲利合計仍有缺項", owner,
+                "保留逐季數字與日期；不需要填值或核准資料正確性。",
+                "先閱讀已公布財報" if engineering else "更新資料" if owner == "program" else "交給助理查證", reason)
+    elif financial.get("reason") == "share_basis_not_verified":
         add("ttm", "過去一年獲利尚不能可靠合計", "engineering", "財報使用的股數口徑尚未核對，不能由核准代替資料驗證。", "先閱讀已公布財報", financial.get("reason"))
     elif financial.get("status") != "available":
         add("financial", "財報資料待核對", "assistant", "尚不能完整判讀過去獲利；不需要填數字。", "交給助理查證", financial.get("reason"))

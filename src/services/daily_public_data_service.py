@@ -93,6 +93,12 @@ class DailyPublicDataService:
                 ))
         return errors
 
+    def select_snapshot(self, conn, symbol, dataset, cutoff):
+        return conn.execute(
+            "SELECT * FROM daily_public_snapshots WHERE symbol=? AND dataset=? AND observed_at<=? ORDER BY observed_at DESC, snapshot_id DESC LIMIT 1",
+            (symbol, dataset, cutoff),
+        ).fetchone()
+
     def view(self, symbol, cutoff):
         result = {}
         conn = sqlite3.connect(self.db_path)
@@ -107,10 +113,7 @@ class DailyPublicDataService:
                     "SELECT * FROM daily_public_attempts WHERE symbol=? AND dataset=? AND checked_at<=? ORDER BY checked_at DESC, attempt_id DESC LIMIT 1",
                     (symbol, dataset, cutoff),
                 ).fetchone()
-                row = conn.execute(
-                    "SELECT * FROM daily_public_snapshots WHERE symbol=? AND dataset=? AND observed_at<=? ORDER BY observed_at DESC, snapshot_id DESC LIMIT 1",
-                    (symbol, dataset, cutoff),
-                ).fetchone()
+                row = self.select_snapshot(conn, symbol, dataset, cutoff)
                 item = {"status": "insufficient_data", "rows": [], "reason": "not_collected",
                         **self.source_metadata(dataset), "dataset": dataset}
                 if row:

@@ -112,7 +112,8 @@ def execute(args, client):
         return {"status":"ready", "origin":client.origin, "build_sha":client.descriptor["build_sha"],
                 "active_operation":client.active_operation(),
                 "valuation_pairing_policy":connection.get("valuation_pairing_policy"),
-                "research_guidance_contract":connection.get("research_guidance_contract")}
+                "research_guidance_contract":connection.get("research_guidance_contract"),
+                "earnings_research_contract":connection.get("earnings_research_contract")}
     if cmd == "search":
         return client.search(args.query)
     if cmd.startswith("evidence-"):

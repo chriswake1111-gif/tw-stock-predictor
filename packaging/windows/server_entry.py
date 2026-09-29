@@ -25,6 +25,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Internal packaged server")
     parser.add_argument("--user-root", default=None)
     args = parser.parse_args()
+    # Enable the reviewed source pilot in the released product. An explicit
+    # false remains the reversible fallback; startup itself never fetches data.
+    os.environ.setdefault("RESEARCH_EARNINGS_V2_ENABLED", "true")
     try:
         return run_server(_packaged_settings(args.user_root))
     except (RuntimeConfigurationError, RuntimePathError, ServerStartupError) as exc:

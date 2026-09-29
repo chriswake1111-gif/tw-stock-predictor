@@ -81,6 +81,10 @@ def validate_egress_url(url: str) -> str:
     if cleaned == CBC_M1B_EXACT_URL:
         return cleaned
 
+    from src.collectors.earnings_sources_v2 import allowed_source_url
+    if allowed_source_url(cleaned):
+        return cleaned
+
     if parsed.netloc == "api.finmindtrade.com" and parsed.path == "/api/v4/data" and not parsed.fragment:
         from datetime import date
         params = parse_qs(parsed.query, keep_blank_values=True)

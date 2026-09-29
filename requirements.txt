@@ -12,3 +12,5 @@ pytest>=8.0.0
 apscheduler>=3.10.0
 fastapi>=0.110.0
 uvicorn>=0.28.0
+# Bounded parsing of content-pinned public financial PDFs (optional feature off by default).
+pypdf[crypto]==6.7.5

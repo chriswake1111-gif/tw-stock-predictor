@@ -519,6 +519,7 @@ try {
     $doctor = $doctorJson | ConvertFrom-Json
     Assert-True ($doctor.contract_version -eq "tw_stock_research_assistant_v1") "research assistant doctor contract mismatch"
     Assert-True ($doctor.research_guidance_contract -eq "research_guidance_v1") "research assistant guidance contract mismatch"
+    Assert-True ($doctor.earnings_research_contract -eq "earnings-four-quarter-v1") "research assistant earnings contract mismatch"
 
     $assistantSearchJson = (& $researchAssistant "--user-root" $user "search" "2330" | Out-String).Trim()
     Assert-True ($LASTEXITCODE -eq 0) "research assistant search failed: $assistantSearchJson"

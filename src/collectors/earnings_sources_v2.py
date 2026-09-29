@@ -1,0 +1,137 @@
+"""Finite, content-pinned source coverage for the first earnings collection batch.
+
+Adding a new period/revision requires a source review and regression evidence.
+Hashes identify reviewed disclosures, not financial values or user approvals.
+See DOCS/EARNINGS_FOUR_QUARTER_V2A.md for covered pages and limitations.
+"""
+import re
+from urllib.parse import urlsplit
+
+CATALOG_VERSION = "earnings-sources-2026q2-v1"
+CATALOG_REVIEW_DATE = "2026-09-28"
+SOURCES = ({'key': 'umc_2025q3_report',
+  'symbol': '2303.TW',
+  'year': 2025,
+  'quarter': 3,
+  'role': 'report',
+  'url': 'https://www.umc.com/upload/media/08_Investors/Financials/Quarterly_Results/Quarterly_2020-2029_English_pdf/2025/Q3_2025/UMC25Q3_report.pdf',
+  'sha256': '5cb06045497ae489be09ba136b3dc25b7a90a5241b4c7d337b6cf133fbd8298e'},
+ {'key': 'umc_2025q3_statements',
+  'symbol': '2303.TW',
+  'year': 2025,
+  'quarter': 3,
+  'role': 'statements',
+  'url': 'https://www.umc.com/upload/media/08_Investors/Financials/Quarterly_Results/Quarterly_2020-2029_English_pdf/2025/Q3_2025/UMC25Q3_financial_statements-E.pdf',
+  'sha256': '50aefc966bfffbf0a3011e8046ffe9a4ac5344bdb8bc705ad55057e113a932fe'},
+ {'key': 'umc_2025q4_report',
+  'symbol': '2303.TW',
+  'year': 2025,
+  'quarter': 4,
+  'role': 'report',
+  'url': 'https://www.umc.com/upload/media/08_Investors/Financials/Quarterly_Results/Quarterly_2020-2029_English_pdf/2025/Q4_2025/UMC25Q4_report.pdf',
+  'sha256': 'f073538f637e15a287a5403efcf6f5651be099b7ba97c86ebdb54fe42e46f6eb'},
+ {'key': 'umc_2025q4_statements',
+  'symbol': '2303.TW',
+  'year': 2025,
+  'quarter': 4,
+  'role': 'statements',
+  'url': 'https://www.umc.com/upload/media/08_Investors/Financials/Quarterly_Results/Quarterly_2020-2029_English_pdf/2025/Q4_2025/UMC25Q4_financial_statements-E.pdf',
+  'sha256': 'b49eadeb2db578de74466a69c8620f78dc2992a537d4a918224d43ba3989f024'},
+ {'key': 'umc_2026q1_report',
+  'symbol': '2303.TW',
+  'year': 2026,
+  'quarter': 1,
+  'role': 'report',
+  'url': 'https://www.umc.com/upload/media/08_Investors/Financials/Quarterly_Results/Quarterly_2020-2029_English_pdf/2026/Q1_2026/UMC26Q1_report.pdf',
+  'sha256': '581067d6e0d732b508687cd3510beef0403391e25298c992cb1c960de1f5407a'},
+ {'key': 'umc_2026q1_statements',
+  'symbol': '2303.TW',
+  'year': 2026,
+  'quarter': 1,
+  'role': 'statements',
+  'url': 'https://www.umc.com/upload/media/08_Investors/Financials/Quarterly_Results/Quarterly_2020-2029_English_pdf/2026/Q1_2026/UMC26Q1_financial_statements-E.pdf',
+  'sha256': 'a62397c589e2b6980a7f0541739ad51cdeb57e1e5d38814762bf75cf03cbe8dd'},
+ {'key': 'umc_2026q2_report',
+  'symbol': '2303.TW',
+  'year': 2026,
+  'quarter': 2,
+  'role': 'report',
+  'url': 'https://www.umc.com/upload/media/08_Investors/Financials/Quarterly_Results/Quarterly_2020-2029_English_pdf/2026/Q2_2026/UMC26Q2_report.pdf',
+  'sha256': 'ef386e01fa185bc2c4ae506442250bb2aecae7bf4663b1d73ae34cd1e2625f46'},
+ {'key': 'umc_2026q2_statements',
+  'symbol': '2303.TW',
+  'year': 2026,
+  'quarter': 2,
+  'role': 'statements',
+  'url': 'https://www.umc.com/upload/media/08_Investors/Financials/Quarterly_Results/Quarterly_2020-2029_English_pdf/2026/Q2_2026/UMC26Q2_financial_statements-E.pdf',
+  'sha256': '85eb963b10dc5dbd903b69786487d92bd9af6b4cc94b69e958625a085dca4cf9'},
+ {'key': 'parade_2025q3_statements',
+  'symbol': '4966.TWO',
+  'year': 2025,
+  'quarter': 3,
+  'role': 'statements',
+  'url': 'https://www.paradetech.com/wp-content/uploads/2025/10/Q3-25-ER-Table-Eng.pdf',
+  'sha256': 'aef649d053c446b52e4503999f116bcc33d1ba5916f83dbd92ac600a5dae7eac'},
+ {'key': 'parade_2025q4_statements',
+  'symbol': '4966.TWO',
+  'year': 2025,
+  'quarter': 4,
+  'role': 'statements',
+  'url': 'https://www.paradetech.com/wp-content/uploads/2026/02/Q4-25-ER-Tables-Eng.pdf',
+  'sha256': '21a3a1e61eb9dc2e311106e4a602ef17ccc4e302ec2091c5cdc7775f47fc1b44'},
+ {'key': 'parade_2026q1_statements',
+  'symbol': '4966.TWO',
+  'year': 2026,
+  'quarter': 1,
+  'role': 'statements',
+  'url': 'https://www.paradetech.com/wp-content/uploads/2026/04/Q1-26-ER-Table-Eng.pdf',
+  'sha256': '36c3e9aefcf78b9bcf46e0cb9737f5b2e6e1298f79b2d94536c05558fc035986'},
+ {'key': 'parade_2026q2_statements',
+  'symbol': '4966.TWO',
+  'year': 2026,
+  'quarter': 2,
+  'role': 'statements',
+  'url': 'https://www.paradetech.com/wp-content/uploads/2026/08/Q2-26-ER-Table-Eng.pdf',
+  'sha256': '9c6624c1470cddda275299a1cf91f864c7f25ea0afcb18118c7f9095c7a7bf97'},
+ {'key': 'umc_2025q4_basis',
+  'symbol': '2303.TW',
+  'year': 2025,
+  'quarter': 4,
+  'role': 'basis',
+  'url': 'https://doc.twse.com.tw/server-java/t57sb01?step=9&kind=A&co_id=2303&filename=202504_2303_AIA.pdf',
+  'sha256': '7466add82ba6bd30f4c0e54fa9a074f2c249fd6375c744b8d5cb7633094ef61f'},
+ {'key': 'umc_2026q2_basis',
+  'symbol': '2303.TW',
+  'year': 2026,
+  'quarter': 2,
+  'role': 'basis',
+  'url': 'https://doc.twse.com.tw/server-java/t57sb01?step=9&kind=A&co_id=2303&filename=202602_2303_AIA.pdf',
+  'sha256': '1f79c610430b6ddf8b44df43d5540bf4836b529d56c3459637944a1789e0a902'},
+ {'key': 'parade_2025q4_basis',
+  'symbol': '4966.TWO',
+  'year': 2025,
+  'quarter': 4,
+  'role': 'basis',
+  'url': 'https://www.paradetech.com/wp-content/uploads/2026/03/2025Q4-FR_Eng.pdf',
+  'sha256': 'cde87713834abe47724c053743548a01dbcb6a70fca99ff7d48e1c29e411e5a3'},
+ {'key': 'parade_2026q2_basis',
+  'symbol': '4966.TWO',
+  'year': 2026,
+  'quarter': 2,
+  'role': 'basis',
+  'url': 'https://www.paradetech.com/wp-content/uploads/2026/08/2026Q2-FR_English.pdf',
+  'sha256': 'bd93e9ae5360c0db54519cd55a064c82e474558eb9b395c0dd358f535c919d8f'})
+
+
+def sources_for(symbol):
+    return tuple(dict(source) for source in SOURCES if source["symbol"] == symbol)
+
+
+def allowed_source_url(url):
+    if url in {source["url"] for source in SOURCES}:
+        return True
+    parts = urlsplit(url)
+    # Only the two publicly requested documents, with a server-generated timestamp.
+    return (parts.scheme == "https" and parts.netloc == "doc.twse.com.tw"
+            and not parts.query and not parts.fragment
+            and re.fullmatch(r"/pdf/(202504|202602)_2303_AIA_[0-9]{8}_[0-9]{6}\.pdf", parts.path) is not None)

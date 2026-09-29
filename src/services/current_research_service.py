@@ -22,6 +22,7 @@ from src.services.forward_eps_service import ForwardEPSService
 from src.services.technical_scenario_service import TechnicalScenarioService
 from src.services.daily_public_data_service import DailyPublicDataService
 from src.services.daily_market_data_service import DailyMarketDataService
+from src.services.earnings_public_data_service import EarningsPublicDataService, earnings_enabled
 
 
 class CurrentResearchService:
@@ -187,6 +188,8 @@ class CurrentResearchService:
                 ))
             screening_ctx = ScreeningContextSummary()
             public_data = DailyPublicDataService(self.db_path).view(canonical_symbol, cutoff)
+            if earnings_enabled():
+                public_data.update(EarningsPublicDataService(self.db_path).view(canonical_symbol, cutoff))
             market_data = DailyMarketDataService(self.db_path).view("MARKET", cutoff)
             per_rows = public_data.get("TaiwanStockPER", {}).get("rows", [])
             if per_rows:

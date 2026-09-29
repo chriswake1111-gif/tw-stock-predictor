@@ -30,3 +30,9 @@ reports/backtest/**/zero_volume_reconciliation.csv
 # Local research-refresh verification artifacts (rebuildable; may contain copied user data).
 /.tmp_refresh*
 /reports/diagnostics/research-refresh-local/
+
+# Local public earnings source samples, rendered pages and validation artifacts.
+/.tmp_earnings_v2_20260928/
+
+# Local release backups, verification records and private data copies.
+/.tmp_earnings_release_20260929/
