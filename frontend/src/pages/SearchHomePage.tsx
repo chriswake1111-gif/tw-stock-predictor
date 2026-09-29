@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { Search, ArrowRight, Clock, Sparkles, Building2 } from "lucide-react";
+import { Search, ArrowRight, Clock, Building2 } from "lucide-react";
 import { searchUniverse, getUniverseCoverage } from "../api/phase20Client";
 import type { UniverseCoverage, UniverseSearchResultItem } from "../api/types";
 import { FirstRunPrepCard } from "../components/FirstRunPrepCard";
 import { ShortNameUpgradeBanner } from "../components/ShortNameUpgradeBanner";
+import { MyStocks } from "../components/MyStocks";
 
 interface RecentSearchItem {
   code: string;
@@ -132,33 +133,13 @@ export function SearchHomePage() {
           )}
 
           <div style={{ textAlign: "left", marginTop: "1rem", marginBottom: "1.5rem" }}>
-            <div
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "0.4rem",
-                padding: "0.25rem 0.75rem",
-                borderRadius: 9999,
-                background: "var(--color-primary-subtle, #e0f2fe)",
-                color: "var(--color-primary, #0369a1)",
-                fontSize: "0.85rem",
-                fontWeight: 600,
-                marginBottom: "1rem",
-              }}
-            >
-              <Sparkles size={14} />
-              <span>本地優先 杜金龍理論研究工作區</span>
-            </div>
             <h1 style={{ fontSize: "1.75rem", fontWeight: 800, margin: 0, letterSpacing: "-0.02em" }}>
-              搜尋標的以開啟研究
+              接續你的股票研究
             </h1>
-            <p style={{ color: "var(--color-muted, #64748b)", marginTop: "0.75rem", fontSize: "1.05rem" }}>
-              支援股票代號（例如 <code>2330</code>）與中文簡稱（例如 <code>台積電</code>）即時本地檢索
-            </p>
-            <p style={{ lineHeight: 1.7 }}>搜尋後先看行情與資料缺項，需要估值時再設定假設；可以先保存觀察，隔日再比較。</p>
-            <Link to="/research/daily">查看自選與每日複核</Link>
+            <p style={{ lineHeight: 1.7 }}>點選清單直接閱讀，或搜尋其他股票。資料有缺項也能保存觀察。</p>
           </div>
-
+          <MyStocks />
+          <h2>尋找其他股票</h2>
           <div style={{ position: "relative", marginBottom: "2rem" }}>
             <div
               style={{
@@ -173,13 +154,13 @@ export function SearchHomePage() {
             >
               <Search size={24} color="var(--color-primary, #0284c7)" style={{ marginRight: "0.75rem" }} />
               <input
+                id="stock-search"
                 ref={inputRef}
                 type="text"
                 aria-label="搜尋股票代號或中文名稱"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="請輸入股票代號（如 2330）或中文簡稱（如 台積電）..."
-                autoFocus
                 style={{
                   width: "100%",
                   border: "none",
@@ -293,6 +274,7 @@ export function SearchHomePage() {
             )}
           </div>
 
+          <Link to="/research/daily">查看自選與每日複核</Link>
           {/* Recent Searches Section */}
           {recentSearches.length > 0 && (
             <div style={{ marginTop: "3rem" }}>

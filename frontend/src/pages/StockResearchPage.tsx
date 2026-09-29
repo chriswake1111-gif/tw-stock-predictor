@@ -14,6 +14,7 @@ import type { ResearchSummaryResponse } from "../api/types";
 import { ResearchSummaryCard } from "../components/ResearchSummaryCard";
 import { ResearchOverview } from "../components/ResearchOverview";
 import { GuidedResearchWorkspace } from "../components/GuidedResearchWorkspace";
+import { StockLabels } from "../components/MyStocks";
 import { ResearchModelResults } from "../components/ResearchModelResults";
 import { DailyPublicDataPanel } from "../components/DailyPublicDataPanel";
 import { LocalAssumptionEditor } from "../components/LocalAssumptionEditor";
@@ -372,6 +373,7 @@ export function StockResearchPage() {
       {!loading && updateNotice && <p role="status">{updateNotice}</p>}
       {!loading && error && summary && <p role="status">更新未完成，以下保留本機資料；請留意行情日期。</p>}
       {/* Loaded summary */}
+      {!asOf && summary && summary.canonical_symbol === canonicalSymbol && <StockLabels key={canonicalSymbol} symbol={canonicalSymbol} />}
       {summary && summary.canonical_symbol === canonicalSymbol && (
         <GuidedResearchWorkspace key={`${canonicalSymbol}-${asOf || 'latest'}`} summary={summary} historical={!!asOf} onUpdate={() => { void loadData(); }}>
           <ResearchSummaryCard

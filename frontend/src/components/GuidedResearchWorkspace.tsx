@@ -1,12 +1,13 @@
 import { useState, useRef, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { readReview, guidanceRead, evidenceLabels, topicLabels, type Evidence, type Review, type Guidance } from '../api/guidanceClient';
+import { readReview, guidanceRead, evidenceLabels, topicLabels, type Evidence, type Review, type Guidance, type AnchorPoint } from '../api/guidanceClient';
 import { researchMutation, researchErrorMessage } from '../api/researchClient';
 import type { ResearchSummaryResponse } from '../api/types';
 import { LocalAssumptionEditor, type Assumption } from './LocalAssumptionEditor';
 import { DailyPublicDataPanel } from './DailyPublicDataPanel';
 import { EarningsResearchPanel, type EarningsResearchData } from './EarningsResearchPanel';
 import { ResearchModelResults } from './ResearchModelResults';
+import { AnchorDiagram, WaveQualification } from './WaveAnchorAssist';
 import './GuidedResearchWorkspace.css';
 
 const ownerNames = { program: '程式更新', assistant: '研究助理查證', user: '您閱讀後選擇', engineering: '資料能力待補強' };
@@ -32,7 +33,7 @@ function EvidenceCard({ item, children }: { item: Evidence; children?: ReactNode
   </article>;
 }
 
-function CandidateChoice({ item, symbol, onChanged }: { item: Evidence; symbol: string; onChanged: () => void }) {
+function CandidateChoice({ item, symbol, onChanged, waveEnabled }: { item: Evidence; symbol: string; onChanged: () => void; waveEnabled: boolean }) {
   const [prepared, setPrepared] = useState<{ kind: string; values: Record<string, unknown>; candidate_id: string } | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
   const [busy, setBusy] = useState(false); const [message, setMessage] = useState('');
@@ -55,14 +56,18 @@ function CandidateChoice({ item, symbol, onChanged }: { item: Evidence; symbol: 
     try {
       const result = await researchMutation<{ record: { id: string } }>(`/api/v2/research/assumptions/${encodeURIComponent(symbol)}/${prepared.kind}/draft`, { values: prepared.values, candidate_id: prepared.candidate_id }, key.current);
       setDraft(result.record.id); setMessage('已建立待核准草稿；尚未採用。'); onChanged();
-    } catch (e) { setMessage(researchErrorMessage(e, '草稿未完成')); }
+    } catch (e) {
+      setMessage(researchErrorMessage(e, '草稿未完成'));
+      if (e instanceof Error && e.message === 'research_evidence_changed_review_again') { setPrepared(null); onChanged(); }
+    }
     finally { setBusy(false); }
   }
   return <EvidenceCard item={item}>
+    {waveEnabled && !prepared && item.topic === 'anchor' && item.anchors && <AnchorDiagram anchors={item.anchors} ruleId={item.rule_id} />}
     {!prepared && <button disabled={busy} onClick={() => void preview()}>預覽這份假設</button>}
     {prepared && <div className="guidance-preview"><h4>預覽具體假設</h4>
       <p>上方來源、年度、數值與限制將一併帶入，不會取代其他系列或繼承核准。</p>
-      <dl>{Object.entries(prepared.values).map(([label, value]) => <div key={label}><dt>{{ fiscal_year: '獲利年度', eps_base: '全年預估每股盈餘', pe_value: '本益比倍數', label: '情境名稱', source: '來源', source_date: '發布日期', rationale: '採用前提與限制', rule_id: '計算規則', anchors: '波段日期與價格' }[label] || label}</dt><dd>{typeof value === 'object' ? JSON.stringify(value) : String(value)}</dd></div>)}</dl>
+      <dl>{Object.entries(prepared.values).map(([label, value]) => <div key={label}><dt>{{ fiscal_year: '獲利年度', eps_base: '全年預估每股盈餘', pe_value: '本益比倍數', label: '情境名稱', source: '來源', source_date: '發布日期', rationale: '採用前提與限制', rule_id: '計算規則', anchors: '波段日期與價格' }[label] || label}</dt><dd>{waveEnabled && label === 'anchors' && Array.isArray(value) ? <AnchorDiagram anchors={value as AnchorPoint[]} ruleId={String(prepared.values.rule_id)} /> : typeof value === 'object' ? JSON.stringify(value) : String(value)}</dd></div>)}</dl>
       {!draft && <button disabled={busy} onClick={() => void createDraft()}>建立待核准草稿</button>}
       <button disabled={busy} onClick={() => setPrepared(null)}>返回閱讀</button>
     </div>}{message && <p role="status">{message}</p>}
@@ -184,13 +189,14 @@ export function GuidedResearchWorkspace({ summary, historical, children, onUpdat
     </div>
     {tab === 'candidates' && <>
       <h2>先看依據，再決定是否採用</h2><p>列入比較不代表選用、核准或保存研究。</p>
+      {guide.wave_support && <WaveQualification data={guide.wave_support} />}
       <label>研究年度<select value={guide.selected_year ?? ''} onChange={e => { setYear(e.target.value ? Number(e.target.value) : undefined); setCompared([]); setDeferred(false); setExtraHistory([]); setCursor(undefined); }}><option value="">需要年度選擇時再決定</option>{guide.available_years.map(y => <option key={y} value={y}>{y} 年</option>)}</select></label>
       <div className="guidance-actions"><button onClick={async () => { try { await navigator.clipboard.writeText(guide.assistant_request); setCopyMessage('已複製，請貼到 Codex；尚未啟動查證。'); } catch { setCopyMessage('無法自動複製，請展開下方完整需求自行複製。'); } }}>複製需求，交給助理查證</button><button onClick={() => setDeferred(true)}>稍後處理，先看資料</button></div>
       {copyMessage && <p role="status">{copyMessage}</p>}<details><summary>完整查證需求</summary><p className="guidance-note">{guide.assistant_request}</p><p>程式不會在背景持續搜尋。</p></details>
       {deferred ? <p role="status">已收起本次選擇，缺項與紀錄仍保留。<button onClick={() => chooseTab('summary')}>返回快速摘要</button><button onClick={() => setDeferred(false)}>繼續閱讀候選</button></p> : <>
         {!guide.candidates.length && <p>目前沒有適用且可直接審閱的候選。可以先閱讀或保存部分研究，不需要填數字。</p>}
-        {guide.candidates.map(item => <div key={item.record_id}><label className="guidance-check"><input type="checkbox" checked={compared.includes(item.record_id)} onChange={e => setCompared(v => e.target.checked ? [...v, item.record_id] : v.filter(id => id !== item.record_id))} />比較：{item.title}</label><CandidateChoice item={item} symbol={review.symbol} onChanged={refresh} /></div>)}
-        {selected.length > 0 && <div className="guidance-table" aria-live="polite"><h3>已列入 {selected.length} 份資料</h3><table><thead><tr><th>來源</th><th>年度與數值</th><th>限制</th></tr></thead><tbody>{selected.map(i => <tr key={i.record_id}><th>{i.title}</th><td>{i.fiscal_year || '不適用'} · {amount(i.value)} {i.unit === 'multiple' ? '倍' : '元'}</td><td>{i.limitations}</td></tr>)}</tbody></table></div>}
+        {guide.candidates.map(item => <div key={item.record_id}><label className="guidance-check"><input type="checkbox" checked={compared.includes(item.record_id)} onChange={e => setCompared(v => e.target.checked ? [...v, item.record_id] : v.filter(id => id !== item.record_id))} />比較：{item.title}</label><CandidateChoice item={item} symbol={review.symbol} onChanged={refresh} waveEnabled={!!guide.wave_support} /></div>)}
+        {selected.length > 0 && <div className="guidance-table" aria-live="polite"><h3>已列入 {selected.length} 份資料</h3><table><thead><tr><th>來源</th><th>年度與數值</th><th>限制</th></tr></thead><tbody>{selected.map(i => <tr key={i.record_id}><th>{i.title}</th><td>{i.topic === 'anchor' ? i.anchors?.map(a => `${a.market_date} · ${amount(a.price)} 元`).join(' → ') || '錨點待整理' : `${i.fiscal_year || '不適用'} · ${amount(i.value)} ${i.unit === 'multiple' ? '倍' : '元'}`}</td><td>{i.limitations}</td></tr>)}</tbody></table></div>}
       </>}
       {pending.length > 0 && <section><h2>已選用，待你核准的草稿</h2>{pending.map(a => <PendingAssumption key={a.id} item={a} symbol={review.symbol} onChanged={refresh} />)}</section>}
       <details><summary>已有核准紀錄（{guide.approved_assumptions.length}）</summary><p>實際適用與採用組合仍以程式結果為準，不必每天重建。</p>{guide.approved_assumptions.map(a => <p key={a.id}>{topicLabels[a.kind]} · {a.fiscal_year || '年度未提供'} · {a.kind === 'eps' ? `${a.eps_base} 元／股` : a.kind === 'pe' ? `${a.pe_value} 倍` : a.source_note}</p>)}</details>

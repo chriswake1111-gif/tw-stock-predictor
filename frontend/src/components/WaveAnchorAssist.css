@@ -1,0 +1,10 @@
+.wave-qualification { padding: 1rem; border-left: 4px solid #b45309; background: #fffbeb; color: #422006; margin: 1rem 0; }
+.wave-qualification summary { cursor: pointer; min-height: 44px; padding-top: .6rem; }
+.wave-qualification li { margin: .5rem 0; }
+.wave-reference { overflow-wrap: anywhere; font-size: .875rem; }
+.wave-anchor-diagram { margin: 1rem 0; padding: .85rem; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #1e293b; }
+.wave-anchor-diagram svg { width: 100%; max-width: 480px; display: block; }
+.wave-anchor-diagram figcaption { font-weight: 600; }
+.wave-anchor-diagram ol { list-style: none; padding: 0; margin: 0; }
+.wave-anchor-diagram li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .25rem .75rem; padding: .6rem 0; border-top: 1px solid #e2e8f0; }
+.wave-anchor-diagram p { color: #475569; font-size: .9rem; }

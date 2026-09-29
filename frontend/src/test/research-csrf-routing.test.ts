@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 describe("research CSRF routing", () => {
   beforeEach(() => { vi.restoreAllMocks(); vi.resetModules(); });
 
-  it.each(["assumptions/2330.TW/eps/draft", "assumptions/2330.TW/eps/draft-id/approve", "journal/2330.TW"])(
+  it.each(["assumptions/2330.TW/eps/draft", "assumptions/2330.TW/eps/draft-id/approve", "journal/2330.TW", "library/2330.TW"])(
     "uses the installed session for %s while legacy writes stay disabled", async path => {
       const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
         if (String(input) === "/api/v2/research/csrf-token") return new Response("", { status: 503 });

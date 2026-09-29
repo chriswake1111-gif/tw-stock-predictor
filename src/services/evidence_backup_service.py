@@ -39,6 +39,8 @@ IRREPLACEABLE_TABLES = (
     "eod_close_observations",
     "eod_ingestion_idempotency",
     "eod_ingestion_command_reservations",
+    "research_holding_labels",
+    "research_library_commands",
 )
 
 

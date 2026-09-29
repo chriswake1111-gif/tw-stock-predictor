@@ -180,7 +180,7 @@ def main() -> int:
         default=str(ROOT / "dist" / "windows-productization"),
         help="rebuildable output directory (must be absent unless --clean is supplied)",
     )
-    parser.add_argument("--app-version", default="1.2.1")
+    parser.add_argument("--app-version", default="1.3.0")
     parser.add_argument("--build-sha", default=None)
     parser.add_argument("--skip-frontend", action="store_true")
     parser.add_argument("--skip-installer", action="store_true")

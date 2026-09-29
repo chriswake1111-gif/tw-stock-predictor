@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, timezone
 from src.domain.research_evidence import GUIDANCE_CONTRACT
 from src.services.research_evidence_service import ResearchEvidenceService
+from src.services.wave_anchor_guidance import wave_support
 
 
 def build_guidance(summary, assumptions, evidence, fiscal_year=None):
@@ -35,6 +36,11 @@ def build_guidance(summary, assumptions, evidence, fiscal_year=None):
 
     market = summary.get("market_context", {})
     public = summary.get("public_data", {})
+    wave = wave_support(summary)
+    if wave:
+        add("wave_prices", "自動波段的價格證據尚未完整", wave["owner"],
+            "不能從目前行情自動選用錨點；有來源的人工假設另行審閱。",
+            "更新資料" if wave["owner"] == "program" else "查看波段資料資格", wave["status"])
     if market.get("close_status") != "available":
         add("official_price", "官方行情待更新", "program", "先閱讀已取得資料，不能宣稱最新行情。", "更新資料", market.get("close_reason"))
     for dataset, title in (("TaiwanStockPrice", "歷史價量"), ("TaiwanStockPER", "市場估值指標")):
@@ -106,6 +112,10 @@ def build_guidance(summary, assumptions, evidence, fiscal_year=None):
         coverage = earnings["source_coverage"]
         prompt += (f'。四季獲利來源上次查核：{coverage["reviewed_at"]}；'
                    + " ".join(coverage["blockers"]) + " " + coverage["next_action"])
+    if wave:
+        prompt += ('。波段錨點請分清人工來源候選與自動確認轉折；每份候選保留日期、價格口徑、'
+                   '角色、來源、採用理由及失效條件。確認時點未提供就明示缺少，不以轉折日期或發布日期代替。'
+                   '未還原行情與交易日缺口不能透過使用者核准變成已驗證資料；查無適用來源時保留缺項。')
     return dict(contract_version=GUIDANCE_CONTRACT, selected_year=selected_year,
                 available_years=sorted(set(years + candidate_years + ([selected_year] if selected_year else []))), gaps=gaps, next_step=main,
                 data_readiness="partial" if any(g["id"] not in {"eps", "pe", "anchor", "valuation_unavailable"} for g in gaps) else "available_with_limits",
@@ -113,4 +123,4 @@ def build_guidance(summary, assumptions, evidence, fiscal_year=None):
                 candidates=candidates, evidence=evidence.get("items", []), evidence_next_cursor=evidence.get("next_cursor"),
                 evidence_versions=[dict(record_id=i["record_id"], content_sha256=i["content_sha256"]) for i in items],
                 approved_assumptions=approved, assistant_request=prompt,
-                automated_research_running=False)
+                automated_research_running=False, wave_support=wave)

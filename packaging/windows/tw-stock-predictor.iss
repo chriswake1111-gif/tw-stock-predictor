@@ -8,7 +8,7 @@
   #error TW_STOCK_OUTPUT_DIR is required
 #endif
 #ifndef TW_STOCK_APP_VERSION
-  #define TW_STOCK_APP_VERSION "1.2.1"
+  #define TW_STOCK_APP_VERSION "1.3.0"
 #endif
 
 [Setup]

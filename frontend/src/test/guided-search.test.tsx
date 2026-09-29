@@ -17,7 +17,7 @@ describe("guided search reliability", () => {
     vi.mocked(searchUniverse).mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce(response("2330", "台積電"));
     renderWithProviders(<SearchHomePage />);
     fireEvent.change(screen.getByRole("textbox", { name: "搜尋股票代號或中文名稱" }), { target: { value: "台積電" } });
-    expect(await screen.findByRole("alert")).toHaveTextContent("尚不能判定有沒有這檔股票");
+    expect(await screen.findByText(/尚不能判定有沒有這檔股票/)).toHaveAttribute('role', 'alert');
     expect(screen.queryByText(/查無符合/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "重試搜尋" }));
     expect(await screen.findByRole("button", { name: /2330 台積電/ })).toBeInTheDocument();

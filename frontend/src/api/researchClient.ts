@@ -9,7 +9,7 @@ import { getLocalCsrfToken, invalidateLocalCsrfToken, isCsrfRejection } from "./
 function csrfEndpoint(path: string): "/api/v2/data-operations/csrf-token" | "/api/v2/research/csrf-token" {
   // Installed local research is independent of the older workflow write gate.
   // Both endpoints issue sessions consumed by the existing security middleware.
-  return /^\/api\/v2\/research\/(assumptions|journal|evidence)(\/|$)/.test(path)
+  return /^\/api\/v2\/research\/(assumptions|journal|evidence|library)(\/|$)/.test(path)
     ? "/api/v2/data-operations/csrf-token"
     : "/api/v2/research/csrf-token";
 }
@@ -51,6 +51,10 @@ export async function researchMutation<T>(path: string, payload: unknown, idempo
 export function researchErrorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback;
   const guidanceErrors: Record<string, string> = {
+    research_library_state_conflict: '標記已在其他頁面變更，請重新讀取並確認目前狀態後再操作。',
+    research_library_storage_full: '本機清單紀錄已達上限；既有股票與研究仍可閱讀。',
+    research_library_disabled: '我的股票功能目前已關閉。',
+    research_library_unknown_symbol: '請先在本機股票名錄找到這檔股票，再設定標記。',
     research_content_changed_review_again: '資料或核准內容已更新，請重新預覽差異，再確認保存；原筆記仍保留。',
     research_evidence_changed_review_again: '這份來源已有新版本，請重新閱讀候選與限制。',
     candidate_values_mismatch: '候選內容與預覽不一致，請重新取得來源版本。',

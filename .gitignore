@@ -36,3 +36,8 @@ reports/backtest/**/zero_volume_reconciliation.csv
 
 # Local release backups, verification records and private data copies.
 /.tmp_earnings_release_20260929/
+
+# Isolated My Stocks / wave-assist validation and copied private migration data.
+/.tmp_library_wave*/
+/.tmp_library_wave*.log
+/frontend/.library-wave-visual*/
