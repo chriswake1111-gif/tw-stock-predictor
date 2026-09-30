@@ -265,7 +265,7 @@ class Launcher:
                             raise LaunchError("descriptor_launch_identity_mismatch")
                         if int(descriptor.get("launcher_pid", 0)) != self.context.launcher_pid:
                             raise LaunchError("descriptor_launcher_identity_mismatch")
-                        self.browser_opener(f"{runtime_settings.application_origin}/research/daily")
+                        self.browser_opener(f"{runtime_settings.application_origin}/")
                         return LaunchResult(
                             "started",
                             origin=runtime_settings.application_origin,

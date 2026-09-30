@@ -28,6 +28,7 @@ export function StockResearchPage() {
   const navigate = useNavigate();
 
   const asOf = searchParams.get("as_of") || undefined;
+  const localOnly = searchParams.get("view") === "local";
   const canonicalSymbol = (symbol || "2330.TW").toUpperCase();
 
   const [summary, setSummary] = useState<ResearchSummaryResponse | null>(null);
@@ -96,7 +97,7 @@ export function StockResearchPage() {
       setLoading(true);
       setError(null);
       setUpdateNotice(null);
-      if (!asOf) {
+      if (!asOf && (!localOnly || forceRefresh)) {
         // Preserve readable local data when a user-requested update fails.
         const local = await getResearchSummary(canonicalSymbol, undefined, signal).catch(() => null);
         checkCurrent();
@@ -161,7 +162,7 @@ export function StockResearchPage() {
         setBootstrapStatus(null);
       }
     }
-  }, [canonicalSymbol, asOf]);
+  }, [canonicalSymbol, asOf, localOnly]);
 
   useEffect(() => {
     const timer = setTimeout(() => { void loadData(); }, 0);
@@ -375,7 +376,7 @@ export function StockResearchPage() {
       {/* Loaded summary */}
       {!asOf && summary && summary.canonical_symbol === canonicalSymbol && <StockLabels key={canonicalSymbol} symbol={canonicalSymbol} />}
       {summary && summary.canonical_symbol === canonicalSymbol && (
-        <GuidedResearchWorkspace key={`${canonicalSymbol}-${asOf || 'latest'}`} summary={summary} historical={!!asOf} onUpdate={() => { void loadData(); }}>
+        <GuidedResearchWorkspace key={`${canonicalSymbol}-${asOf || 'latest'}-${searchParams.get('research_year') || ''}`} summary={summary} historical={!!asOf} onUpdate={() => { void loadData(); }}>
           <ResearchSummaryCard
             summary={summary}
             onOpenAuditDrawer={() => setAuditDrawerOpen(true)}

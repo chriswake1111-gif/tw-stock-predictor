@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import closing
+from pathlib import Path
 from uuid import uuid4
 
 from src.domain.analysis_snapshot import canonical_json, sha256_json
@@ -95,9 +96,13 @@ class DailyResearchJournalService:
                 "assumption_fingerprint": sha256_json(_current_content(assumptions)),
                 "historical_eligibility": "not_asserted", "status": "partial"}
 
-    def _review(self, symbol, cutoff, payload, research_year=None):
+    def _review(self, symbol, cutoff, payload, research_year=None, prefer_saved_year=False):
         previous = self.history(symbol, 1)["entries"]
         previous = previous[0] if previous else None
+        if prefer_saved_year and previous:
+            saved_year = (previous.get("research_context") or {}).get("selected_year")
+            if type(saved_year) is int and 1900 <= saved_year <= 2200:
+                research_year = saved_year
         latest = self._payload(symbol, utc_now_timestamp(), "")
         assumptions = LocalAssumptionService(self.db_path).list(symbol)["items"]
         guard = {"contract": ASSISTANT_CONTRACT, "reviewed": {**payload, "note": ""},
@@ -128,14 +133,16 @@ class DailyResearchJournalService:
                 "assumptions": assumptions, "content_fingerprint": sha256_json(guard),
                 "review_revision_fingerprint": sha256_json(_current_content(guard)), **extra}
 
-    def preview(self, symbol, research_year=None):
+    def preview(self, symbol, research_year=None, *, prefer_saved_year=False):
         parse_canonical_symbol(symbol)
         # Readers below use their own connections. Reserve the writer while
         # composing the review so they all observe the same committed state.
-        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+        database = Path(self.db_path).resolve().as_uri() + "?mode=rw" if prefer_saved_year else self.db_path
+        with closing(sqlite3.connect(database, uri=prefer_saved_year)) as conn, conn:
             conn.execute("BEGIN IMMEDIATE")
             cutoff = normalize_utc_timestamp(utc_now_timestamp(), "knowledge_cutoff_at")
-            return self._review(symbol, cutoff, self._payload(symbol, cutoff, ""), research_year)
+            return self._review(symbol, cutoff, self._payload(symbol, cutoff, ""), research_year,
+                                prefer_saved_year=prefer_saved_year)
 
     def save(self, symbol, cutoff, note, key, expected_content_fingerprint=None,
              research_year=None, include_research_context=False):

@@ -13,7 +13,7 @@ beforeEach(() => vi.resetAllMocks());
 it('reads and filters saved stocks without writing or relying on localStorage', async () => {
   vi.mocked(guidanceRead).mockResolvedValue({ enabled: true, items: [stock], next_cursor: null });
   renderWithProviders(<MyStocks />);
-  expect(await screen.findByRole('link', { name: /匿名波段公司/ })).toHaveAttribute('href', '/stocks/3491.TWO');
+  expect(await screen.findByRole('link', { name: /匿名波段公司/ })).toHaveAttribute('href', '/stocks/3491.TWO?view=local');
   expect(screen.getByText(/研究資訊截止/)).toHaveTextContent('2026');
   fireEvent.click(screen.getByRole('button', { name: '已保存研究' }));
   await waitFor(() => expect(guidanceRead).toHaveBeenLastCalledWith(expect.stringContaining('category=researched'), expect.anything()));

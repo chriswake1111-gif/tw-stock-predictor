@@ -2,11 +2,13 @@ import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { guidanceRead } from '../api/guidanceClient';
+import { localResearchLink } from '../api/homeSummaryClient';
+import { StockHomeSummary } from './StockHomeSummary';
 import { researchErrorMessage, researchMutation } from '../api/researchClient';
 import './MyStocks.css';
 
 type Stock = { enabled?: boolean; symbol: string; name: string; held: boolean; favorite: boolean; version: string; last_saved_at: string | null; saved_cutoff_at: string | null };
-type Page = { enabled: boolean; items: Stock[]; next_cursor: string | null };
+type Page = { enabled: boolean; summary_enabled?: boolean; items: Stock[]; next_cursor: string | null };
 const endpoint = '/api/v2/research/library';
 const date = (value: string) => new Date(value).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false });
 
@@ -59,10 +61,12 @@ export function StockLabels({ symbol }: { symbol: string }) {
 }
 
 export function MyStocks() {
+  const cache = useQueryClient();
   const [category, setCategory] = useState('all');
   const [pages, setPages] = useState(['']);
   const after = pages[pages.length - 1] || '';
-  const query = useQuery({ queryKey: ['my-stocks', 'list', category, after], retry: false,
+  const pageKey = `${category}:${after}`;
+  const query = useQuery({ queryKey: ['my-stocks', 'list', category, after], retry: false, refetchOnMount: 'always', staleTime: 0,
     queryFn: async ({ signal }) => {
       const data = await guidanceRead<Page>(`${endpoint}?category=${category}&after=${encodeURIComponent(after)}&limit=8`, signal);
       if (data.enabled === false) return data;
@@ -75,11 +79,13 @@ export function MyStocks() {
     <div className="stock-library-actions" aria-label="股票清單分類">{([['all', '全部'], ['held', '持有'], ['favorites', '收藏'], ['researched', '已保存研究']] as const).map(([id, label]) => <button key={id} aria-pressed={category === id} onClick={() => { setCategory(id); setPages(['']); }}>{label}</button>)}</div>
     {query.isPending && <p role="status">正在讀取本機清單…</p>}
     {query.isError && <p role="alert">清單暫時無法讀取，既有紀錄仍保留。<button onClick={() => void query.refetch()}>重新讀取清單</button></p>}
+    {query.data?.summary_enabled && <button onClick={() => void cache.invalidateQueries({ queryKey: ['home-summary', pageKey] })}>重新讀取本機摘要</button>}
     {query.data && !query.data.items.length && <p>此分類尚無股票。可在下方搜尋，進入個股頁標記持有或收藏；確認保存的研究也會出現在這裡。</p>}
-    <ul className="stock-library-list">{query.data?.items.map(stock => <li key={stock.symbol}>
-      <Link to={`/stocks/${encodeURIComponent(stock.symbol)}`}><strong>{stock.name}</strong><span>{stock.symbol} · 開啟研究</span></Link>
+    <ul className="stock-library-list">{query.data?.items.map(stock => <li key={`${pageKey}:${stock.symbol}`}>
+      <Link to={localResearchLink(stock.symbol)}><strong>{stock.name}</strong><span>{stock.symbol} · 開啟研究</span></Link>
       <p>{[stock.held && '持有', stock.favorite && '收藏', stock.last_saved_at && '已保存研究'].filter(Boolean).join(' · ')}</p>
       {stock.last_saved_at ? <p className="stock-library-muted">上次保存：{date(stock.last_saved_at)}<br />研究資訊截止：{stock.saved_cutoff_at ? date(stock.saved_cutoff_at) : '未提供'}；請開啟研究查看目前資料。</p> : <p className="stock-library-muted">尚無保存研究</p>}
+      {query.data?.summary_enabled && <StockHomeSummary symbol={stock.symbol} pageKey={pageKey} />}
     </li>)}</ul>
     <div className="stock-library-actions">{pages.length > 1 && <button onClick={() => setPages(p => p.slice(0, -1))}>上一頁股票</button>}{query.data?.next_cursor && <button onClick={() => setPages(p => [...p, query.data!.next_cursor!])}>下一頁股票</button>}</div>
   </section>;

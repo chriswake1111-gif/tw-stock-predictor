@@ -1,4 +1,5 @@
-import { useState, useRef, type ReactNode } from 'react';
+import { useState, useRef, useEffect, type ReactNode } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { readReview, guidanceRead, evidenceLabels, topicLabels, type Evidence, type Review, type Guidance, type AnchorPoint } from '../api/guidanceClient';
 import { researchMutation, researchErrorMessage } from '../api/researchClient';
@@ -149,8 +150,17 @@ function GuidedSave({ review, reload, readFailed }: { review: Review; reload: ()
 }
 
 export function GuidedResearchWorkspace({ summary, historical, children, onUpdate }: { summary: ResearchSummaryResponse; historical: boolean; children: ReactNode; onUpdate: () => void }) {
-  const [year, setYear] = useState<number | undefined>();
-  const [tab, setTab] = useState(() => window.location.hash === '#local-assumptions' ? 'candidates' : window.location.hash === '#research-models' ? 'evidence' : 'summary');
+  const location = useLocation();
+  const [year, setYear] = useState<number | undefined>(() => {
+    const value = new URLSearchParams(location.search).get('research_year');
+    return value && /^\d{4}$/.test(value) && Number(value) >= 1900 && Number(value) <= 2200 ? Number(value) : undefined;
+  });
+  const navigation = `${location.key}:${location.hash}`;
+  const [tabChoice, setTabChoice] = useState({ navigation: '', tab: 'summary' });
+  const requestedTab = ['#research-candidates', '#local-assumptions'].includes(location.hash) ? 'candidates'
+    : ['#research-data', '#research-models'].includes(location.hash) ? 'evidence' : 'summary';
+  const tab = tabChoice.navigation === navigation ? tabChoice.tab : requestedTab;
+  const positioned = useRef('');
   const [deferred, setDeferred] = useState(false); const [legacy, setLegacy] = useState(false);
   const [copyMessage, setCopyMessage] = useState(''); const [compared, setCompared] = useState<string[]>([]);
   const [extraHistory, setExtraHistory] = useState<Evidence[]>([]); const [cursor, setCursor] = useState<string | null | undefined>();
@@ -158,6 +168,20 @@ export function GuidedResearchWorkspace({ summary, historical, children, onUpdat
   const query = useQuery({ queryKey: ['research-guidance', summary.canonical_symbol, summary.knowledge_cutoff_at, year],
     enabled: !historical && !legacy, retry: false,
     queryFn: ({ signal }) => readReview(summary.canonical_symbol, year, signal) });
+  useEffect(() => {
+    if (historical || !query.data || positioned.current === navigation) return;
+    const target = location.hash.slice(1);
+    if (!['research-changes', 'research-candidates', 'research-data'].includes(target)) return;
+    const fallback: Record<string, string> = { 'research-changes': 'daily-journal', 'research-candidates': 'local-assumptions', 'research-data': 'daily-public-data' };
+    const element = document.getElementById(target) || ((!query.data.guidance || legacy) ? document.getElementById(fallback[target]!) : null);
+    if (!element) return;
+    positioned.current = navigation;
+    if (element instanceof HTMLDetailsElement) element.open = true;
+    if (target === 'research-changes') element.querySelectorAll('details').forEach(d => { d.open = true; });
+    element.scrollIntoView({ block: 'start' });
+    const heading = element.matches('h2') ? element : element.querySelector<HTMLElement>('h2, summary');
+    if (heading instanceof HTMLElement) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
+  }, [historical, query.data, navigation, location.hash, tab, legacy]);
   if (historical || legacy || (query.data && !query.data.guidance)) return <>{children}</>;
   if (!query.data) return <section className="guided-research"><h1>{summary.short_name || summary.company_name || summary.canonical_symbol}</h1>
     <p>本機行情日期：{summary.market_context?.settled_trade_date || '尚缺'}</p>
@@ -166,7 +190,7 @@ export function GuidedResearchWorkspace({ summary, historical, children, onUpdat
     {query.isError && <><button onClick={() => void query.refetch()}>重試</button><button onClick={() => setLegacy(true)}>使用原研究入口</button></>}</section>;
   const review = query.data; const guide = review.guidance as Guidance; const current = review.current.summary;
   const refresh = () => { void query.refetch(); };
-  const chooseTab = (next: string) => { setTab(next); setDeferred(false); };
+  const chooseTab = (next: string) => { setTabChoice({ navigation, tab: next }); setDeferred(false); };
   const selected = guide.candidates.filter(c => compared.includes(c.record_id));
   const currentCursor = cursor === undefined ? guide.evidence_next_cursor : cursor;
   const pending = review.assumptions.filter(a => !a.superseded && !a.approval && (a.kind === 'anchor' || a.fiscal_year === guide.selected_year));
@@ -183,12 +207,12 @@ export function GuidedResearchWorkspace({ summary, historical, children, onUpdat
       <section className="guidance-next"><h2>{guide.next_step.title}</h2><p>{guide.next_step.impact}</p><p>下一步由：{ownerNames[guide.next_step.owner]}</p>
         <button onClick={() => guide.next_step.id === 'read' ? document.getElementById('guided-save')?.scrollIntoView({ block: 'start' }) : chooseTab('candidates')}>{guide.next_step.id === 'read' ? '往下預覽與保存' : guide.next_step.action}</button></section>
       <details><summary>缺項分工（{guide.gaps.length}）</summary>{guide.gaps.map(g => <article className="guidance-gap" key={g.id}><h3>{g.title}</h3><p>{g.impact}</p><p>由{ownerNames[g.owner]}處理 · {g.action}</p></article>)}</details>
-      <section><h2>與前次研究相比</h2>{review.previous ? <><p>前次保存 {when(review.previous.created_at)}</p><p>{review.comparison.assumptions_changed ? '程式情境內容有差異，需要閱讀變更；不能直接解讀為你修改了假設。' : '程式情境內容與前次相同，仍請留意資料日期。'}</p>
+      <section id="research-changes"><h2>與前次研究相比</h2>{review.previous ? <><p>前次保存 {when(review.previous.created_at)}</p><p>{review.comparison.assumptions_changed ? '程式情境內容有差異，需要閱讀變更；不能直接解讀為你修改了假設。' : '程式情境內容與前次相同，仍請留意資料日期。'}</p>
         <details><summary>比較資料與前次完整筆記</summary><div className="guidance-table"><table><thead><tr><th>項目</th><th>前次／日期</th><th>目前／日期</th></tr></thead><tbody>{review.comparison.facts.map(f => <tr key={f.field}><th>{factNames[f.field] || f.field}</th><td>{factValue(f.field, f.before.value)}／{f.before.date || '尚缺'}</td><td>{factValue(f.field, f.after.value)}／{f.after.date || '尚缺'}{f.status !== 'comparable' && '（不可直接比較）'}</td></tr>)}</tbody></table></div><p>相同資料日不能代表下一個交易日沒有變化。</p><p className="guidance-note">{review.previous.note || '未填筆記'}</p></details></> : <p>尚無前次保存研究，可先完成這次部分研究。</p>}</section>
       <GuidedSave review={review} reload={refresh} readFailed={query.isError} />
     </div>
     {tab === 'candidates' && <>
-      <h2>先看依據，再決定是否採用</h2><p>列入比較不代表選用、核准或保存研究。</p>
+      <h2 id="research-candidates">先看依據，再決定是否採用</h2><p>列入比較不代表選用、核准或保存研究。</p>
       {guide.wave_support && <WaveQualification data={guide.wave_support} />}
       <label>研究年度<select value={guide.selected_year ?? ''} onChange={e => { setYear(e.target.value ? Number(e.target.value) : undefined); setCompared([]); setDeferred(false); setExtraHistory([]); setCursor(undefined); }}><option value="">需要年度選擇時再決定</option>{guide.available_years.map(y => <option key={y} value={y}>{y} 年</option>)}</select></label>
       <div className="guidance-actions"><button onClick={async () => { try { await navigator.clipboard.writeText(guide.assistant_request); setCopyMessage('已複製，請貼到 Codex；尚未啟動查證。'); } catch { setCopyMessage('無法自動複製，請展開下方完整需求自行複製。'); } }}>複製需求，交給助理查證</button><button onClick={() => setDeferred(true)}>稍後處理，先看資料</button></div>
@@ -205,7 +229,7 @@ export function GuidedResearchWorkspace({ summary, historical, children, onUpdat
         {!fullHistory && <button onClick={async () => { try { const p = await guidanceRead<{ items: Evidence[]; next_cursor: string | null }>(`/api/v2/research/evidence/${review.symbol}?history=true`); setExtraHistory(p.items); setCursor(p.next_cursor); setFullHistory(true); } catch { setCopyMessage('版本歷程讀取失敗，請重試。'); } }}>讀取包含舊版本的完整歷程</button>}
         {currentCursor && <button onClick={async () => { try { const p = await guidanceRead<{ items: Evidence[]; next_cursor: string | null }>(`/api/v2/research/evidence/${review.symbol}?history=${fullHistory}&before=${currentCursor}`); setExtraHistory(v => [...v, ...p.items]); setCursor(p.next_cursor); } catch { setCopyMessage('更多查證紀錄讀取失敗，請重試。'); } }}>載入更多查證紀錄</button>}</details>
     </>}
-    {tab === 'evidence' && <><h2>每個判斷，都能回到依據</h2><p>程式資料、計算情境與外部查證分開呈現。</p><DailyPublicDataPanel data={current.public_data || {}} /><ResearchModelResults summary={current} />
+    {tab === 'evidence' && <><h2 id="research-data">每個判斷，都能回到依據</h2><p>程式資料、計算情境與外部查證分開呈現。</p><DailyPublicDataPanel data={current.public_data || {}} /><ResearchModelResults summary={current} />
       <details><summary>完整程式資料、日期與模型追溯</summary><pre className="guidance-note">{JSON.stringify(current, null, 2)}</pre></details>
       <details><summary>缺項原始原因與資料責任</summary>{guide.gaps.map(g => <p key={g.id}>{g.title} · {ownerNames[g.owner]} · {g.reason || '請依來源與模型狀態查證'}</p>)}</details>
       <details><summary>進階：手動設定、修改或撤銷假設</summary><LocalAssumptionEditor symbol={review.symbol} onChanged={() => { refresh(); onUpdate(); }} /></details>

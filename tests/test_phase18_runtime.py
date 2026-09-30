@@ -590,6 +590,34 @@ def test_phase18_stop_during_readiness_does_not_retry_child(tmp_path):
         monkeypatch.undo()
 
 
+def test_launcher_opens_home_on_first_start_and_restart(tmp_path, monkeypatch):
+    """Isolated startup boundary; never starts the installed server or browser."""
+    import hashlib
+    from src.runtime.instance import InstanceGuard
+    settings, _ = _packaged_settings(tmp_path)
+    name = "Local\\TWStockPredictor.HomeTest." + hashlib.sha256(str(tmp_path).encode()).hexdigest()[:20]
+    monkeypatch.setattr("src.runtime.launcher.InstanceGuard", lambda runtime: InstanceGuard(runtime, name=name))
+    monkeypatch.setattr("src.runtime.launcher.ProcessTreeOwner.create", lambda: SimpleNamespace(handle=None, close=lambda: None))
+    monkeypatch.setattr("src.runtime.launcher.validate_process_ownership", lambda *a, **kw: (True, None))
+    opened = []
+    launcher = Launcher(settings, server_command=["unused"], browser_opener=opened.append,
+        port_picker=lambda _: 43127, coordinator=SimpleNamespace(prepare=lambda: SimpleNamespace(ready=True)),
+        ready_fetcher=lambda *a, **kw: dict(contract_version="tw_stock_ready_v1", ready=True))
+    monkeypatch.setattr(launcher, "_spawn", lambda *a: SimpleNamespace(pid=424242, poll=lambda: None))
+    def stop_child(*args, **kwargs):
+        launcher.process = None
+        launcher._close_control()
+    monkeypatch.setattr(launcher, "_shutdown_child", stop_child)
+    monkeypatch.setattr("src.runtime.launcher.read_descriptor", lambda path: dict(origin="http://127.0.0.1:43127",
+        launch_id=launcher.context.launch_id, launcher_pid=launcher.context.launcher_pid, server_pid=424242))
+    for _ in range(2):
+        try:
+            assert launcher.start().status == "started"
+        finally:
+            launcher.stop()
+    assert opened == ["http://127.0.0.1:43127/"] * 2
+
+
 @pytest.mark.skipif(os.name != "nt", reason="requires native Win32 APIs")
 def test_phase18_win32_interop_declares_pointer_sized_handle_signatures():
     import ctypes

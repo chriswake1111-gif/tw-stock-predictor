@@ -37,6 +37,15 @@ describe("installed research refresh", () => {
   });
   afterEach(() => vi.useRealTimers());
 
+  it("home navigation reads local content until the user explicitly updates", async () => {
+    vi.mocked(bootstrapSymbol).mockResolvedValue({ status: "ready", canonical_symbol: "2330.TW", operation_id: null });
+    renderWithProviders(<Harness />, "/stocks/2330.TW?view=local");
+    await screen.findByText(/980.00 元/);
+    expect(bootstrapSymbol).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "更新資料" }));
+    await waitFor(() => expect(bootstrapSymbol).toHaveBeenCalledWith("2330.TW", true, expect.any(AbortSignal)));
+  });
+
   it("shows cached quotes while the update is still pending", async () => {
     vi.mocked(getOperationDetails).mockImplementation(() => new Promise(() => {}));
     renderWithProviders(<Harness />, "/stocks/2330.TW");
