@@ -1,13 +1,23 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { guidanceRead } from '../api/guidanceClient';
-import type { WaveQualification } from '../api/waveQualificationClient';
+import type { WaveQualification, WaveSessionCoverage } from '../api/waveQualificationClient';
 import { WaveQualificationPanel } from '../components/WaveQualificationPanel';
 import { waveFixture } from './waveAssistFixture';
 
 vi.mock('../api/guidanceClient', async original => ({ ...await original<typeof import('../api/guidanceClient')>(), guidanceRead: vi.fn() }));
 
 const symbol = '2330.TW';
+const sessionCoverage: WaveSessionCoverage = {
+  contract_version: 'wave_session_coverage_v1', mode: 'retrospective_local', status: 'partial',
+  requested_range: { start: '2026-01-01', end: '2026-01-10' }, checked_at: '2026-09-30T01:30:00Z', known_at: '2026-09-30T01:00:00Z',
+  historical_availability: 'not_asserted',
+  counts: { interval_days: 10, market_open: 6, market_closed: 4, stock_traded: 5, suspended: 1, outside_listing: 0, intraday: 0, missing: 1, unknown: 2, conflicts: 1 },
+  samples: [{ date: '2026-01-05', kind: 'missing', reason: '行情來源缺一筆' }],
+  sources: [{ source_id: 'fixture-session', label: '測試交易日曆', status: 'partial', start: '2026-01-01', end: '2026-01-10', fetched_at: '2026-09-30T01:00:00Z', reference: 'fixture:session', url: 'https://example.invalid/calendar', limitations: ['沒有歷史發布時間證據'] }],
+  next_step: { owner: 'assistant', action: '核對停復牌公告及行情缺口。' },
+  assistant_request: '請只查證此固定日期區間的交易日與停復牌證據。',
+};
 const qualification = (overrides: Partial<WaveQualification> = {}): WaveQualification => ({
   contract_version: 'wave_qualification_v1', symbol, enabled: true, checked_at: '2026-09-30T01:00:00Z', knowledge_cutoff_at: '2026-09-29T16:00:00Z',
   snapshot: { snapshot_id: 'fixture-snapshot', source: 'Synthetic source', parser_version: '1.0', raw_sha256: 'a'.repeat(64), normalized_sha256: 'b'.repeat(64), observed_at: '2026-09-29T16:00:00Z', source_url: 'https://example.invalid/source' },
@@ -37,6 +47,77 @@ it('renders status labels, next step, date range, and plain text provenance with
   expect(screen.getByText('來源網址（純文字）：https://example.invalid/source')).toBeInTheDocument();
   expect(document.querySelector('a[href="https://example.invalid/source"]')).toBeNull();
   expect(screen.getByText(/不會啟用自動波段候選/)).toBeInTheDocument();
+});
+
+it('renders retrospective session counts and plain-text source limitations with a selectable copy request', async () => {
+  vi.mocked(guidanceRead).mockResolvedValue(qualification({ session_coverage: sessionCoverage }));
+  render(<WaveQualificationPanel symbol={symbol} data={waveFixture} />);
+  expect(await screen.findByRole('heading', { name: '交易日與停復牌：目前確認到哪裡' })).toBeInTheDocument();
+  expect(screen.getByText('現在回頭查證，不代表歷史當時已知。')).toBeInTheDocument();
+  expect(screen.getByText(/部分取得日期佐證/)).toBeInTheDocument();
+  expect(screen.getByText('官方有成交')).toBeInTheDocument();
+  expect(screen.getByText('缺行情')).toBeInTheDocument();
+  expect(screen.getByText('缺證據')).toBeInTheDocument();
+  expect(screen.getByText('資料衝突')).toBeInTheDocument();
+  expect(screen.getByText('各項可能重疊，不宜直接相加。')).toBeInTheDocument();
+  expect(document.querySelector('.wave-qualification-panel__coverage-details')).not.toHaveAttribute('open');
+  expect(document.querySelector('.wave-qualification-panel__request-details')).not.toHaveAttribute('open');
+  expect(screen.getByText(/此按鈕只複製文字/)).toBeInTheDocument();
+  fireEvent.click(screen.getByText('日期與來源限制（1 個來源）'));
+  expect(screen.getByRole('rowheader', { name: '要求區間日數' })).toBeInTheDocument();
+  expect(screen.getByText('最近一份證據取得時間：2026-09-30T01:00:00Z')).toBeInTheDocument();
+  expect(screen.getByText('歷史當時可用性：尚未證明。')).toBeInTheDocument();
+  expect(screen.getByText('日期例子')).toBeInTheDocument();
+  expect(screen.getByText(/缺少行情：行情來源缺一筆/)).toBeInTheDocument();
+  expect(screen.getByText(/部分核對/)).toBeInTheDocument();
+  expect(screen.getByText(/沒有歷史發布時間證據/)).toBeInTheDocument();
+  expect(screen.getByText('來源網址（純文字）：https://example.invalid/calendar')).toBeInTheDocument();
+  expect(screen.getByText('來源類別（純文字）：fixture-session')).toBeInTheDocument();
+  expect(document.querySelector('a[href="https://example.invalid/calendar"]')).toBeNull();
+});
+
+it('uses unique accessible ids when multiple coverage panels are rendered', async () => {
+  vi.mocked(guidanceRead).mockResolvedValueOnce(qualification({ session_coverage: sessionCoverage }))
+    .mockResolvedValueOnce(qualification({ symbol: '2317.TW', session_coverage: sessionCoverage }));
+  const { container } = render(<>
+    <WaveQualificationPanel symbol={symbol} data={waveFixture} />
+    <WaveQualificationPanel symbol="2317.TW" data={waveFixture} />
+  </>);
+  await screen.findAllByRole('heading', { name: '交易日與停復牌：目前確認到哪裡' });
+  const sections = Array.from(container.querySelectorAll('.wave-qualification-panel__coverage'));
+  const headingIds = sections.map(section => section.getAttribute('aria-labelledby'));
+  const requestIds = Array.from(container.querySelectorAll('.wave-qualification-panel__request-details textarea')).map(textarea => textarea.id);
+  expect(new Set(headingIds).size).toBe(2);
+  expect(new Set(requestIds).size).toBe(2);
+});
+
+it('keeps adversarial source text inert and offers manual selection when clipboard copying fails', async () => {
+  const hostile = '<img src=x onerror=alert(1)> javascript:alert(1)';
+  vi.mocked(guidanceRead).mockResolvedValue(qualification({ session_coverage: {
+    ...sessionCoverage, assistant_request: hostile, sources: [{ ...sessionCoverage.sources[0]!, label: hostile, reference: hostile, url: hostile, limitations: [hostile] }],
+  } }));
+  render(<WaveQualificationPanel symbol={symbol} data={waveFixture} />);
+  expect(await screen.findByRole('heading', { name: '交易日與停復牌：目前確認到哪裡' })).toBeInTheDocument();
+  fireEvent.click(screen.getByText('日期與來源限制（1 個來源）'));
+  expect(screen.getByText(`來源網址（純文字）：${hostile}`)).toBeInTheDocument();
+  expect(document.querySelector('img,a')).toBeNull();
+  expect(navigator.clipboard).toBeUndefined();
+  fireEvent.click(screen.getByRole('button', { name: '複製查證需求' }));
+  expect(await screen.findByRole('status')).toHaveTextContent('無法自動複製');
+  const request = screen.getByRole('textbox', { name: '查證需求（唯讀，可手動選取複製）' });
+  expect(request).toHaveValue(hostile);
+  expect(request).toHaveAttribute('readonly');
+  expect(request).toHaveFocus();
+  expect(request.closest('details')).toHaveAttribute('open');
+});
+
+it('rejects malformed optional session coverage instead of ignoring it', async () => {
+  vi.mocked(guidanceRead).mockResolvedValue(qualification({ session_coverage: {
+    ...sessionCoverage, counts: { ...sessionCoverage.counts, missing: -1 },
+  } as WaveSessionCoverage }));
+  render(<WaveQualificationPanel symbol={symbol} data={waveFixture} />);
+  expect(await screen.findByRole('alert')).toHaveTextContent('不能視為通過');
+  expect(screen.queryByRole('heading', { name: '交易日與停復牌：目前確認到哪裡' })).not.toBeInTheDocument();
 });
 
 it('shows loading and fail-closed error with manual retry', async () => {
@@ -108,6 +189,13 @@ it('uses old guidance without a request when historical or the server feature fl
   await waitFor(() => expect(guidanceRead).toHaveBeenCalledTimes(1));
   await expect(vi.mocked(guidanceRead).mock.results[0]?.value).resolves.toMatchObject({ enabled: false });
   expect(await screen.findByRole('heading', { name: '波段資料：現在能讀什麼' })).toBeInTheDocument();
+});
+
+it('preserves the existing display when the optional session coverage is absent', async () => {
+  vi.mocked(guidanceRead).mockResolvedValue(qualification());
+  render(<WaveQualificationPanel symbol={symbol} data={waveFixture} />);
+  expect(await screen.findByText('資料仍有待查項目。')).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: '交易日與停復牌：目前確認到哪裡' })).not.toBeInTheDocument();
 });
 
 it('does not write, poll, or fetch on window focus', async () => {

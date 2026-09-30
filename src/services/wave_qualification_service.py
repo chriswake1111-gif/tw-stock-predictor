@@ -15,6 +15,7 @@ from src.domain.universe import parse_canonical_symbol
 from src.domain.valuation import normalize_utc_timestamp, utc_now_timestamp
 from src.repositories.universe_repository import UniverseRepository
 from src.services.daily_public_data_service import DailyPublicDataService, PRICE_PARSER_VERSION
+from src.services.wave_session_coverage import enabled as session_evidence_enabled, project_coverage
 
 CONTRACT = "wave_qualification_v1"
 DATASET = "TaiwanStockPrice"
@@ -161,6 +162,7 @@ class WaveQualificationService:
                 conn.execute("BEGIN")
                 return self._read(conn, symbol, cutoff, result)
         except (sqlite3.Error, ValueError, KeyError, TypeError, OverflowError):
+            result.pop("session_coverage", None)
             result.update(status="unavailable", headline="暫時無法檢查：本機讀取或快照完整性檢查未完成。",
                           snapshot=None, requested_range=None, actual_range=None, checks=[], notices=[],
                           next_step=dict(owner="program", action="重新檢查本機資料；沒有改用較舊快照。"))
@@ -232,6 +234,23 @@ class WaveQualificationService:
             for table, target in (("universe_lifecycle_events", lifecycle), ("universe_operational_state_events", operational)):
                 target.extend(dict(r) for r in conn.execute(f"SELECT * FROM {table} WHERE instrument_id=? AND available_at<=? AND ingested_at<=?", (instrument, cutoff, cutoff)))
         sessions = calendar_quality(rows, bounds, calendars, lifecycle, operational, cutoff)
+        if bounds and session_evidence_enabled():
+            coverage = project_coverage(conn, symbol, bounds, rows, cutoff, calendars, lifecycle)
+            result["session_coverage"] = coverage
+            # New retrospective facts cannot erase an existing failed calendar
+            # or lifecycle/operational-state check (including its references).
+            if coverage["status"] != "missing" and sessions["status"] != "failed":
+                counts = coverage["counts"]
+                # Positive activity does not establish all operational-state causes.
+                state = "failed" if counts["missing"] or counts["conflicts"] else "unknown"
+                sessions = check("sessions", "交易日與交易狀態", state, "retrospective_session_evidence",
+                    "目前回頭查證已有結果；請分開閱讀缺行情、缺證據及盤中變動。",
+                    "確定曾有成交不代表全日正常交易；仍缺所有停牌原因的完整覆蓋，不宣稱歷史當時已知，也不授權自動候選。",
+                    owner=coverage["next_step"]["owner"], counts=counts,
+                    evidence=[dict(kind="project_rule", reference="SESSION-EVIDENCE-01:1.0.0 (C; project_operationalization)")]
+                             + ([dict(kind="lifecycle_event_id", reference=e["lifecycle_event_id"]) for e in lifecycle] if counts["outside_listing"] else [])
+                             + [dict(kind="session_coverage_revision", reference=s["reference"]) for s in coverage["sources"]],
+                    samples=[s["date"] for s in coverage["samples"]])
         basis = check("basis", "價格比較基礎", "unknown", "corporate_action_coverage_unverified",
             "目前是未還原價格，尚無完整公司行動與還原依據。", "不能把除權息、減資或分割造成的跳動當成波段；未查到事件不等於沒有事件。", evidence=refs)
         if data.get("adjusted") or data.get("price_basis") not in (None, "unadjusted"):

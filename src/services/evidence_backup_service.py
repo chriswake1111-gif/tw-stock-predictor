@@ -41,6 +41,7 @@ IRREPLACEABLE_TABLES = (
     "eod_ingestion_command_reservations",
     "research_holding_labels",
     "research_library_commands",
+    "wave_session_evidence",
 )
 
 

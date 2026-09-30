@@ -32,10 +32,33 @@
 .wave-qualification-panel .is-unknown { color: #72521c; }
 .wave-qualification-panel__provenance { margin-top: .75rem; padding-top: .75rem; border-top: 1px solid var(--wave-border); }
 .wave-qualification-panel__provenance h4 { margin: 0 0 .5rem; font-size: 1rem; }
+.wave-qualification-panel__coverage { margin-top: 1rem; padding: 1rem; border: 1px solid var(--wave-border); border-radius: 8px; background: #f5f8f5; }
+.wave-qualification-panel__coverage h3 { margin-top: .25rem; }
+.wave-qualification-panel__coverage-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr)); gap: .5rem 1rem; margin: .75rem 0; }
+.wave-qualification-panel__coverage-summary > div { padding: .5rem 0; border-bottom: 1px solid #dce3de; }
+.wave-qualification-panel__coverage-summary dt { color: var(--wave-muted); }
+.wave-qualification-panel__coverage-summary dd { margin: .15rem 0 0; font-size: 1.1rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.wave-qualification-panel__coverage-table-wrap { max-width: 100%; overflow-x: auto; }
+.wave-qualification-panel__coverage-table { width: 100%; border-collapse: collapse; text-align: left; }
+.wave-qualification-panel__coverage-table caption { padding: .5rem 0; text-align: left; font-weight: 650; }
+.wave-qualification-panel__coverage-table th, .wave-qualification-panel__coverage-table td { padding: .4rem .5rem; border-top: 1px solid #dce3de; }
+.wave-qualification-panel__coverage-table th { font-weight: 550; }
+.wave-qualification-panel__coverage-table td { width: 1%; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.wave-qualification-panel__copy-request { margin-top: .75rem; }
+.wave-qualification-panel__copy-request p { font-size: .9rem; }
+.wave-qualification-panel__coverage-details { margin-top: .75rem; border-top: 1px solid var(--wave-border); }
+.wave-qualification-panel__request-details { margin-top: .5rem; border-top: 1px solid var(--wave-border); }
+.wave-qualification-panel__coverage-sources { margin: 0; padding: 0; list-style: none; }
+.wave-qualification-panel__coverage-sources > li { padding: .75rem 0; border-top: 1px solid #dce3de; }
+.wave-qualification-panel__coverage-sources > li:first-child { border-top: 0; }
+.wave-qualification-panel__coverage-details h4 { margin-bottom: .35rem; }
+.wave-qualification-panel__request-details label { display: block; margin: .5rem 0 .25rem; font-weight: 600; }
+.wave-qualification-panel__request-details textarea { display: block; box-sizing: border-box; width: 100%; min-height: 6rem; padding: .625rem; border: 1px solid #8b9c92; border-radius: 6px; background: #fff; color: var(--wave-text); font: inherit; resize: vertical; }
 .wave-qualification-panel__eligibility { margin-top: .875rem !important; font-weight: 600; }
 .wave-qualification-panel button { min-height: 44px; margin-top: .5rem; padding: .5rem .875rem; border: 1px solid #315b4a; border-radius: 7px; background: #315b4a; color: #fff; font: inherit; cursor: pointer; }
 .wave-qualification-panel button:hover { background: #244738; }
 .wave-qualification-panel button:focus-visible, .wave-qualification-panel summary:focus-visible { outline: 3px solid #1d4ed8; outline-offset: 2px; }
+.wave-qualification-panel textarea:focus-visible { outline: 3px solid #1d4ed8; outline-offset: 2px; }
 .wave-qualification-panel--unavailable { border-left-color: #963d32; background: #fff9f7; }
 .wave-qualification-panel--unavailable [role="alert"] { color: #702d26; }
 .wave-qualification-panel--unavailable button { border-color: #7b332b; background: #7b332b; }

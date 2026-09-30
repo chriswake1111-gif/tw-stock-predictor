@@ -81,6 +81,10 @@ def validate_egress_url(url: str) -> str:
     if cleaned == CBC_M1B_EXACT_URL:
         return cleaned
 
+    from src.collectors.wave_session_sources import allowed_source_url as allowed_wave_source
+    if allowed_wave_source(cleaned):
+        return cleaned
+
     from src.collectors.earnings_sources_v2 import allowed_source_url
     if allowed_source_url(cleaned):
         return cleaned
