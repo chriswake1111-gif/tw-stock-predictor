@@ -99,6 +99,20 @@ class DailyPublicDataService:
             (symbol, dataset, cutoff),
         ).fetchone()
 
+    @staticmethod
+    def decode_snapshot(row):
+        """Shared integrity boundary; callers may supply their own read transaction."""
+        text = row["normalized_json"]
+        if (hashlib.sha256(text.encode()).hexdigest() != row["normalized_sha256"] or
+                hashlib.sha256(row["raw_json"].encode()).hexdigest() != row["raw_sha256"]):
+            raise ValueError("snapshot_integrity_error")
+        item = json.loads(text)
+        if not isinstance(item, dict):
+            raise ValueError("snapshot_object_required")
+        item.update(snapshot_id=row["snapshot_id"], raw_sha256=row["raw_sha256"],
+                    parser_version=row["parser_version"], source_url=row["source_url"])
+        return item
+
     def view(self, symbol, cutoff):
         result = {}
         conn = sqlite3.connect(self.db_path)
@@ -117,14 +131,10 @@ class DailyPublicDataService:
                 item = {"status": "insufficient_data", "rows": [], "reason": "not_collected",
                         **self.source_metadata(dataset), "dataset": dataset}
                 if row:
-                    text = row["normalized_json"]
-                    if (hashlib.sha256(text.encode()).hexdigest() != row["normalized_sha256"] or
-                            hashlib.sha256(row["raw_json"].encode()).hexdigest() != row["raw_sha256"]):
+                    try:
+                        item = self.decode_snapshot(row)
+                    except ValueError:
                         item["reason"] = "snapshot_integrity_error"
-                    else:
-                        item = json.loads(text)
-                        item.update(snapshot_id=row["snapshot_id"], raw_sha256=row["raw_sha256"],
-                                    parser_version=row["parser_version"], source_url=row["source_url"])
                 item.update(last_checked_at=attempt["checked_at"] if attempt else None,
                             last_update_status=attempt["status"] if attempt else "not_started",
                             last_update_reason=attempt["reason"] if attempt else None)

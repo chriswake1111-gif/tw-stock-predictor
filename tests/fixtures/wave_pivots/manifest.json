@@ -1,0 +1,9 @@
+{
+  "contract_version": "wave_pivot_manifest_v1",
+  "fixtures": [
+    {
+      "path": "synthetic.json",
+      "sha256": "6a4419e6a4784d5ed098b764d1ff337f7430cd948c7782a6b7487318eec469db"
+    }
+  ]
+}

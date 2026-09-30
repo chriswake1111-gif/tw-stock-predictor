@@ -8,7 +8,8 @@ import { LocalAssumptionEditor, type Assumption } from './LocalAssumptionEditor'
 import { DailyPublicDataPanel } from './DailyPublicDataPanel';
 import { EarningsResearchPanel, type EarningsResearchData } from './EarningsResearchPanel';
 import { ResearchModelResults } from './ResearchModelResults';
-import { AnchorDiagram, WaveQualification } from './WaveAnchorAssist';
+import { AnchorDiagram } from './WaveAnchorAssist';
+import { WaveQualificationPanel } from './WaveQualificationPanel';
 import './GuidedResearchWorkspace.css';
 
 const ownerNames = { program: '程式更新', assistant: '研究助理查證', user: '您閱讀後選擇', engineering: '資料能力待補強' };
@@ -213,7 +214,7 @@ export function GuidedResearchWorkspace({ summary, historical, children, onUpdat
     </div>
     {tab === 'candidates' && <>
       <h2 id="research-candidates">先看依據，再決定是否採用</h2><p>列入比較不代表選用、核准或保存研究。</p>
-      {guide.wave_support && <WaveQualification data={guide.wave_support} />}
+      {guide.wave_support && <p>自動候選的資料資格可在「完整證據」閱讀。<button onClick={() => chooseTab('evidence')}>查看波段資料資格</button></p>}
       <label>研究年度<select value={guide.selected_year ?? ''} onChange={e => { setYear(e.target.value ? Number(e.target.value) : undefined); setCompared([]); setDeferred(false); setExtraHistory([]); setCursor(undefined); }}><option value="">需要年度選擇時再決定</option>{guide.available_years.map(y => <option key={y} value={y}>{y} 年</option>)}</select></label>
       <div className="guidance-actions"><button onClick={async () => { try { await navigator.clipboard.writeText(guide.assistant_request); setCopyMessage('已複製，請貼到 Codex；尚未啟動查證。'); } catch { setCopyMessage('無法自動複製，請展開下方完整需求自行複製。'); } }}>複製需求，交給助理查證</button><button onClick={() => setDeferred(true)}>稍後處理，先看資料</button></div>
       {copyMessage && <p role="status">{copyMessage}</p>}<details><summary>完整查證需求</summary><p className="guidance-note">{guide.assistant_request}</p><p>程式不會在背景持續搜尋。</p></details>
@@ -229,7 +230,10 @@ export function GuidedResearchWorkspace({ summary, historical, children, onUpdat
         {!fullHistory && <button onClick={async () => { try { const p = await guidanceRead<{ items: Evidence[]; next_cursor: string | null }>(`/api/v2/research/evidence/${review.symbol}?history=true`); setExtraHistory(p.items); setCursor(p.next_cursor); setFullHistory(true); } catch { setCopyMessage('版本歷程讀取失敗，請重試。'); } }}>讀取包含舊版本的完整歷程</button>}
         {currentCursor && <button onClick={async () => { try { const p = await guidanceRead<{ items: Evidence[]; next_cursor: string | null }>(`/api/v2/research/evidence/${review.symbol}?history=${fullHistory}&before=${currentCursor}`); setExtraHistory(v => [...v, ...p.items]); setCursor(p.next_cursor); } catch { setCopyMessage('更多查證紀錄讀取失敗，請重試。'); } }}>載入更多查證紀錄</button>}</details>
     </>}
-    {tab === 'evidence' && <><h2 id="research-data">每個判斷，都能回到依據</h2><p>程式資料、計算情境與外部查證分開呈現。</p><DailyPublicDataPanel data={current.public_data || {}} /><ResearchModelResults summary={current} />
+    {tab === 'evidence' && <><h2 id="research-data">每個判斷，都能回到依據</h2><p>程式資料、計算情境與外部查證分開呈現。</p></>}
+    {guide.wave_support && <div hidden={tab !== 'evidence'}><WaveQualificationPanel symbol={review.symbol} data={guide.wave_support} historical={historical} /></div>}
+    {tab === 'evidence' && <>
+      <DailyPublicDataPanel data={current.public_data || {}} /><ResearchModelResults summary={current} />
       <details><summary>完整程式資料、日期與模型追溯</summary><pre className="guidance-note">{JSON.stringify(current, null, 2)}</pre></details>
       <details><summary>缺項原始原因與資料責任</summary>{guide.gaps.map(g => <p key={g.id}>{g.title} · {ownerNames[g.owner]} · {g.reason || '請依來源與模型狀態查證'}</p>)}</details>
       <details><summary>進階：手動設定、修改或撤銷假設</summary><LocalAssumptionEditor symbol={review.symbol} onChanged={() => { refresh(); onUpdate(); }} /></details>

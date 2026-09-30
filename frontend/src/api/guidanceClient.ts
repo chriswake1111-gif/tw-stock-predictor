@@ -33,8 +33,8 @@ export type Review = {
   previous: { entry_id: string; created_at: string; note: string; summary: ResearchSummaryResponse } | null;
   comparison: { assumptions_changed: boolean; status: string; facts: { field: string; before: { value: number | null; date: string }; after: { value: number | null; date: string }; delta: number | null; status: string }[] };
 };
-export async function guidanceRead<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(path, { signal, credentials: 'same-origin' });
+export async function guidanceRead<T>(path: string, signal?: AbortSignal, cache?: RequestCache): Promise<T> {
+  const response = await fetch(path, { signal, credentials: 'same-origin', ...(cache ? { cache } : {}) });
   if (!response.ok) {
     const error = await response.json().catch(() => ({})) as { detail?: unknown };
     const known = ['research_evidence_changed_review_again', 'evidence_not_selectable', 'candidate_requires_concise_evidence_revision'];

@@ -33,6 +33,7 @@ async function fixture(page: Page) {
     else if (path.includes('/summary/')) body = review.current.summary;
     else if (path.endsWith('/bootstrap')) body = { status: 'ready', canonical_symbol: review.symbol };
     else if (path.endsWith('/coverage')) body = { universe_status: 'ready', coverage_ratio: 1, total_instruments: 1, phase20_materialized_count: 1 };
+    else if (path.includes('/wave-qualification/')) body = { contract_version: 'wave_qualification_v1', enabled: false, symbol: review.symbol };
     else if (path.endsWith('/candidate')) body = { kind: 'anchor', candidate_id: anchorFixture.record_id, values: { rule_id: anchorFixture.rule_id, anchors: anchorFixture.anchors, source: '人工來源第三頁', rationale: '未還原價格，人工假設及其限制。' } };
     else if (path.includes('/assumptions/') && path.endsWith('/draft')) {
       review.assumptions = [{ id: 'anchor-draft', kind: 'anchor', anchors: anchorFixture.anchors, source: '人工來源第三頁', source_note: '未還原價格，人工假設及其限制。', revision_number: 1, approval: null, superseded: false }];
@@ -76,9 +77,11 @@ for (const width of [360, 768, 1024, 1440]) {
     await page.reload();
     await expect(page.getByRole('button', { name: '已標記持有', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await page.getByRole('button', { name: '候選與選擇' }).focus(); await page.keyboard.press('Enter');
+    await page.getByRole('button', { name: '查看波段資料資格' }).click();
     await expect(page.getByRole('region', { name: '波段資料資格' })).toBeVisible();
     await page.getByText('為什麼還不能自動選出波段', { exact: true }).click();
     await expect(page.getByText(/核准只接受人工假設/)).toBeVisible();
+    await page.getByRole('button', { name: '候選與選擇' }).click();
     await page.getByRole('checkbox', { name: /比較：匿名來源波段候選/ }).focus(); await page.keyboard.press('Space');
     await expect(page.getByRole('table')).toContainText('100 元');
     await page.getByRole('button', { name: '預覽這份假設' }).click();
