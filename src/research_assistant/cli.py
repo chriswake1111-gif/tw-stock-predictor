@@ -44,6 +44,9 @@ def parser():
     sub.add_parser("connect")
     search = sub.add_parser("search")
     search.add_argument("query")
+    wave = sub.add_parser("wave-candidates", help="唯讀本機自動波段候選，不更新、核准或保存")
+    wave.add_argument("symbol")
+    wave.add_argument("--id", help="取得指定候選可預覽的具體假設")
     for cmd in ("evidence-list", "evidence-record", "evidence-reuse", "evidence-candidate"):
         q = sub.add_parser(cmd)
         q.add_argument("symbol")
@@ -113,9 +116,13 @@ def execute(args, client):
                 "active_operation":client.active_operation(),
                 "valuation_pairing_policy":connection.get("valuation_pairing_policy"),
                 "research_guidance_contract":connection.get("research_guidance_contract"),
+                "wave_candidates_contract":connection.get("wave_candidates_contract"),
                 "earnings_research_contract":connection.get("earnings_research_contract")}
     if cmd == "search":
         return client.search(args.query)
+    if cmd == "wave-candidates":
+        symbol, selection = client.resolve(args.symbol)
+        return selection if symbol is None else client.wave_candidates(symbol, args.id)
     if cmd.startswith("evidence-"):
         symbol, selection = client.resolve(args.symbol)
         if symbol is None:

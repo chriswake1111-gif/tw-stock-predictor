@@ -212,6 +212,14 @@ class LocalClient:
             raise AssistantError("research_guidance_upgrade_required")
         return self._http(f"/api/v2/research/evidence/{symbol_path(symbol)}/{identifier(record_id)}/candidate")
 
+    def wave_candidates(self, symbol, candidate_id=None):
+        if self._http("/api/ready").get("wave_candidates_contract") != "wave_candidates_v1":
+            raise AssistantError("wave_candidates_upgrade_required")
+        path = f"/api/v2/research/wave-candidates/{symbol_path(symbol)}"
+        if candidate_id is not None:
+            path += "/"+identifier(candidate_id)
+        return self._http(path)
+
     def mutate(self, path, body, key=None):
         self.token = self._http("/api/v2/data-operations/csrf-token")["csrf_token"]
         return self._http(path, body=body, key=key)

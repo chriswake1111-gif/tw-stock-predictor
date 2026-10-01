@@ -42,6 +42,7 @@ IRREPLACEABLE_TABLES = (
     "research_holding_labels",
     "research_library_commands",
     "wave_session_evidence",
+    "wave_candidate_packages",
 )
 
 

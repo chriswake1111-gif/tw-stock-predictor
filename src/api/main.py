@@ -34,6 +34,7 @@ from src.api.routes.installed_data_operations import router as data_operations_r
 from src.api.routes.v2_research import router as v2_research_router
 from src.api.routes.runtime import router as runtime_router
 from src.api.routes.wave_qualification import router as wave_qualification_router
+from src.api.routes.wave_candidates import router as wave_candidates_router
 from src.api.workflow_security import ResearchBoundaryMiddleware
 from src.api.workflow_security import ResearchSecurityConfig, parse_research_origin
 from src.domain.model_status import LEGACY_V1_MODEL_METADATA
@@ -205,6 +206,7 @@ def create_app(
     app.include_router(research_evidence_router)
     app.include_router(research_library_router)
     app.include_router(wave_qualification_router)
+    app.include_router(wave_candidates_router)
     app.include_router(v2_universe_router)
     app.include_router(v2_universe_search_router)
     app.include_router(v2_eod_close_router)

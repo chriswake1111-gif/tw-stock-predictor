@@ -109,6 +109,11 @@ class ResearchEvidenceService:
 
     def get(self, symbol, record_id, *, require_current=False):
         parse_canonical_symbol(symbol)
+        if record_id.startswith("wc_"):
+            from src.services.wave_candidate_service import WaveCandidateService
+            if require_current:
+                WaveCandidateService(self.db_path).candidate_values(symbol, record_id)
+            return WaveCandidateService(self.db_path).saved_reference(symbol, record_id)
         with closing(sqlite3.connect(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute("SELECT * FROM research_evidence_records WHERE record_id=? AND symbol=?", (record_id, symbol)).fetchone()
@@ -119,6 +124,9 @@ class ResearchEvidenceService:
             return self.decode(row)
 
     def candidate_values(self, symbol, record_id):
+        if record_id.startswith("wc_"):
+            from src.services.wave_candidate_service import WaveCandidateService
+            return WaveCandidateService(self.db_path).candidate_values(symbol, record_id)
         item = self.get(symbol, record_id, require_current=True)
         return self.prepare_candidate(item)
 

@@ -69,6 +69,7 @@ def test_additive_remediation_migration_is_versioned_and_rerunnable(tmp_path):
         "20260928_27_research_evidence",
         "20260930_28_research_library",
         "20260930_29_wave_session_evidence",
+        "20261001_30_wave_candidate_packages",
     ]
     assert second["additive_migration_ids"] == first["additive_migration_ids"]
     with sqlite3.connect(db) as conn:

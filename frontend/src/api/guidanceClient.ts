@@ -12,6 +12,12 @@ export type Evidence = {
   lookup_scope: string; lookup_outcome: string | null;
 };
 export type AnchorPoint = { role: string; market_date: string; price: number };
+export type WaveCandidateReference = {
+  contract_version: 'wave_candidate_reference_v1'; record_id: string; symbol: string;
+  package_ref: string; content_sha256: string; requested_range: { start: string; end: string };
+  known_at: string; basis_date: string; rule_id: string; algorithm_version: string; title: string;
+  limitations: string[]; sources: { source_id: string; url: string; fetched_at: string; raw_sha256: string }[];
+};
 export type WaveSupport = {
   contract_version: 'wave_anchor_guidance_v1'; status: string; price_basis: string; source: string;
   first_date: string | null; last_date: string | null; observed_at: string | null; checked_at: string | null;
@@ -25,7 +31,7 @@ export type Guidance = {
   gaps: Gap[]; next_step: Gap; data_readiness: string; finding: string; candidates: Evidence[];
   evidence: Evidence[]; evidence_next_cursor: string | null; approved_assumptions: Assumption[];
   assistant_request: string; note_draft: string; note_draft_stale: boolean;
-  assumption_evidence?: { assumption_id: string; approval: { decision?: string } | null; evidence: Evidence }[];
+  assumption_evidence?: { assumption_id: string; approval: { decision?: string } | null; evidence: Evidence | WaveCandidateReference }[];
 };
 export type Review = {
   symbol: string; knowledge_cutoff_at: string; content_fingerprint: string; review_revision_fingerprint: string;

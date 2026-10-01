@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from src.services.research_evidence_service import guidance_enabled
 from src.domain.research_evidence import GUIDANCE_CONTRACT
 from src.services.earnings_public_data_service import earnings_enabled
+from src.services.wave_candidate_service import enabled as wave_candidates_enabled
 
 
 READY_CONTRACT_VERSION = "tw_stock_ready_v1"
@@ -38,6 +39,7 @@ def readiness_payload(request: Request) -> dict[str, Any]:
         "valuation_pairing_policy": "same_fiscal_year_v1",
         "research_guidance_contract": GUIDANCE_CONTRACT if guidance_enabled() else None,
         "earnings_research_contract": "earnings-four-quarter-v1" if earnings_enabled() else None,
+        "wave_candidates_contract": "wave_candidates_v1" if wave_candidates_enabled() else None,
     }
 
 

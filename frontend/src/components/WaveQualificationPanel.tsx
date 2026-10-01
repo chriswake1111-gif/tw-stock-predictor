@@ -175,7 +175,7 @@ function CurrentWaveQualification({ symbol, data }: { symbol: string; data: Wave
         <p>來源網址（純文字）：{qualification.snapshot.source_url}</p>
       </div>}
     </details>
-    <p className="wave-qualification-panel__eligibility">本檢核不會啟用自動波段候選；有來源的人工假設仍可獨立閱讀。</p>
+    <p className="wave-qualification-panel__eligibility">本檢核針對原始行情快照，不會啟用自動波段候選。另行核對的官方證據及適用候選，請至「候選與選擇」閱讀；有來源的人工假設仍可獨立閱讀。</p>
     <button type="button" className="wave-qualification-panel__retry" onClick={retry}>重新檢核</button>
   </section>;
 }

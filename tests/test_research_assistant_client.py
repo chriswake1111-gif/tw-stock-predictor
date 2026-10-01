@@ -84,6 +84,19 @@ def test_evidence_commands_check_capability_and_encode_scope(client):
             command()
 
 
+def test_wave_candidate_cli_only_reads_typed_local_routes(client):
+    calls=[]
+    client._http=lambda path,**kwargs:(calls.append((path,kwargs)) or {"wave_candidates_contract":"wave_candidates_v1"})
+    client.wave_candidates("2330.TW")
+    client.wave_candidates("2330.TW","wc_fixture")
+    assert calls[-1]==("/api/v2/research/wave-candidates/2330.TW/wc_fixture",{})
+    assert all(not kw for _,kw in calls)
+    args=parser().parse_args(["wave-candidates","2330.TW","--id","wc_fixture"])
+    assert args.command=="wave-candidates" and not hasattr(args,"confirmed")
+    client._http=lambda *a,**k:{}
+    with pytest.raises(AssistantError,match="wave_candidates_upgrade_required"):client.wave_candidates("2330.TW")
+
+
 def test_guided_save_preserves_exact_review_and_separate_confirmation(client):
     from src.research_assistant.cli import parser
     args = parser().parse_args(["evidence-record", "2330.TW", "--input", "work.json", "--request-id", "01900000-0000-4000-8000-000000000001"])

@@ -85,6 +85,10 @@ def validate_egress_url(url: str) -> str:
     if allowed_wave_source(cleaned):
         return cleaned
 
+    from src.collectors.wave_candidate_sources import allowed_source_url as allowed_candidate_source
+    if allowed_candidate_source(cleaned):
+        return cleaned
+
     from src.collectors.earnings_sources_v2 import allowed_source_url
     if allowed_source_url(cleaned):
         return cleaned

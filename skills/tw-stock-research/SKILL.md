@@ -83,6 +83,10 @@ EPS values: fiscal_year, eps_base, source, source_date, rationale；PE values: f
 核准後核對程式 target_matrix 實際採用的年度、EPS、PE、來源／版本與 approval IDs。若還有其他年度或舊系列，分組呈現並說明；不能把顯示篩選當成已撤銷其他假設。核准後仍無可用情境時，回報程式原因，不由 agent 補算。
 錨點只使用既有規則允許的資料與候選；完整歷史最高／最低點不能自動當成當時已確認的轉折，亦不能把事後圖解升格為即時訊號。
 
+支援 `doctor.wave_candidates_contract=wave_candidates_v1` 時，可先唯讀 `wave-candidates SYMBOL`。首批只核對台積電 2025-09-29～2026-09-30 的完整期間；不自行縮短期間或替其他股票套用資格。原行情快照檢核與獨立官方證據包分開；現在閱讀歷史資料不等於過去當時已知，更不等於歷史回測通過。
+
+使用者明確選用後，`wave-candidates SYMBOL --id CANDIDATE_ID` 取得具體假設，把回應的 `values` 和 `candidate_id` 原樣交既有 `assumption-preview`，再依既有確認建立草稿。不得把官方原價與換算價混用；須一併閱讀完整期間、價格基準日、確認交易日、取得時間、因子及限制。來源修訂衝突時重新閱讀，不移除 `candidate_id` 繞過檢查。資料採集只由明確的有界維護工具執行，閱讀命令不自動抓取。新功能尚未安裝時不能用開發工具直接修改正式資料庫。
+
 ## 輸出給使用者
 
 以固定的四個分區承接一次研究，不重複列出全部 JSON：
