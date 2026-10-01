@@ -187,6 +187,7 @@ class LocalClient:
                 "build_sha": expected_build,
                 "valuation_pairing_policy": ready.get("valuation_pairing_policy"),
                 "research_guidance_contract": ready.get("research_guidance_contract"),
+                "wave_candidates_contract": ready.get("wave_candidates_contract"),
                 "earnings_research_contract": ready.get("earnings_research_contract")}
 
     def evidence(self, symbol, payload=None, key=None, *, history=False, before=None):

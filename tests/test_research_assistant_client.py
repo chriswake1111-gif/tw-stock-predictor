@@ -200,6 +200,14 @@ def test_connect_checks_build_and_capability_before_research(client):
     with pytest.raises(AssistantError,match="upgrade_required"):client.connect()
     client._http=lambda p:{"ready":True,"origin":"http://127.0.0.1:1234","build_sha":"abc","research_assistant_contract":CONTRACT}
     assert client.connect()["status"]=="ready"
+    assert execute(parser().parse_args(["doctor"]), client)["wave_candidates_contract"] is None
+    client.active_operation = lambda: None
+    for capability in ("wave_candidates_v1", None):
+        client._http = lambda p: {"ready": True, "origin": "http://127.0.0.1:1234",
+            "build_sha": "abc", "research_assistant_contract": CONTRACT,
+            "wave_candidates_contract": capability}
+        assert client.connect()["wave_candidates_contract"] == capability
+        assert execute(parser().parse_args(["doctor"]), client)["wave_candidates_contract"] == capability
     client.ownership=lambda *a,**k:(False,"server_parent_identity_mismatch")
     with pytest.raises(AssistantError,match="parent_identity"):client.connect()
 
